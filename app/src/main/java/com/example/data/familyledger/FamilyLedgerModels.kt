@@ -128,7 +128,6 @@ data class CloudLedgerTransactionDto(
     @SerialName("type") val type: String? = null,
     @SerialName("category") val category: String? = null,
     @SerialName("category_id") val categoryId: String? = null,
-    @SerialName("category_name") val categoryName: String? = null,
     @SerialName("payment_method") val paymentMethod: String? = "UPI",
     /** The auth user ID who owns this record. Nullable if profile record does not yet exist. */
     @SerialName("user_id") val userId: String? = null,

@@ -176,6 +176,10 @@ interface FamilyLedgerDao {
     @Query("SELECT * FROM family_vault_members WHERE syncStatus = 'PENDING_DELETE' OR isDeleted = 1")
     suspend fun getPendingDeleteMembers(): List<FamilyVaultMember>
 
+    /** Permanently deletes a member from local Room cache. */
+    @Query("DELETE FROM family_vault_members WHERE memberId = :memberId")
+    suspend fun deleteMemberPermanently(memberId: String)
+
     /** Clears all family vault members from local Room. */
     @Query("DELETE FROM family_vault_members")
     suspend fun clearAllFamilyVaultMembers()

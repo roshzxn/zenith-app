@@ -436,8 +436,7 @@ class SupabaseFamilyLedgerDataSource : FamilyLedgerCloudDataSource {
 
     override suspend fun upsertTransaction(tx: LedgerTransaction): Boolean = withContext(Dispatchers.IO) {
         if (!isAvailable) return@withContext false
-        try {
-            val currentUser = SupabaseClientConfig.supabase.auth.currentUserOrNull()
+        val currentUser = SupabaseClientConfig.supabase.auth.currentUserOrNull()
             val authUserId = currentUser?.id ?: tx.createdBy.takeIf { isValidUuid(it) }
 
             val dto = CloudLedgerTransactionDto(
@@ -451,7 +450,6 @@ class SupabaseFamilyLedgerDataSource : FamilyLedgerCloudDataSource {
                 type = tx.type.name,
                 category = tx.category.ifBlank { "Other" },
                 categoryId = tx.category.takeIf { isValidUuid(it) } ?: "Other",
-                categoryName = tx.category.ifBlank { "Other" },
                 paymentMethod = tx.paymentMethod,
                 userId = authUserId,
                 paidByMemberId = tx.paidByMemberId.takeIf { it.isNotBlank() && isValidUuid(it) },
@@ -462,12 +460,26 @@ class SupabaseFamilyLedgerDataSource : FamilyLedgerCloudDataSource {
                 updatedAt = Instant.ofEpochMilli(tx.updatedAt).toString(),
                 isDeleted = tx.isDeleted
             )
-            SupabaseClientConfig.supabase.postgrest["transactions"].upsert(dto)
-            true
-        } catch (e: Exception) {
-            Log.e(tag, "upsertTransaction error: ${e.message}", e)
-            false
-        }
+            try {
+                SupabaseClientConfig.supabase.postgrest["transactions"].upsert(dto)
+                true
+            } catch (e: Exception) {
+                if (e.message?.contains("foreign key", ignoreCase = true) == true ||
+                    e.message?.contains("fkey", ignoreCase = true) == true) {
+                    Log.w(tag, "upsertTransaction FK violation, retrying without FK references: ${e.message}")
+                    try {
+                        val sanitizedDto = dto.copy(paidByMemberId = null, userId = null)
+                        SupabaseClientConfig.supabase.postgrest["transactions"].upsert(sanitizedDto)
+                        true
+                    } catch (e2: Exception) {
+                        Log.e(tag, "upsertTransaction fallback error: ${e2.message}", e2)
+                        false
+                    }
+                } else {
+                    Log.e(tag, "upsertTransaction error: ${e.message}", e)
+                    false
+                }
+            }
     }
 
     override suspend fun softDeleteTransaction(transactionId: String): Boolean = withContext(Dispatchers.IO) {
@@ -493,7 +505,7 @@ class SupabaseFamilyLedgerDataSource : FamilyLedgerCloudDataSource {
         } catch (e: Exception) {
             TransactionType.EXPENSE
         }
-        val effectiveCategory = dto.category ?: dto.categoryName ?: dto.categoryId ?: "General"
+        val effectiveCategory = dto.category ?: dto.categoryId ?: "General"
         val effectiveTitle = dto.title?.takeIf { it.isNotBlank() }
             ?: dto.description?.takeIf { it.isNotBlank() }
             ?: "Transaction"

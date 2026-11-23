@@ -8,6 +8,9 @@ import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.auth.MemorySessionManager
 import io.github.jan.supabase.auth.MemoryCodeVerifierCache
+import io.github.jan.supabase.serializer.KotlinXSerializer
+import io.ktor.client.engine.okhttp.OkHttp
+import kotlinx.serialization.json.Json
 
 import android.content.Context
 
@@ -37,6 +40,12 @@ object SupabaseClientConfig {
             supabaseUrl = safeUrl,
             supabaseKey = safeKey
         ) {
+            httpEngine = OkHttp.create()
+            defaultSerializer = KotlinXSerializer(Json {
+                encodeDefaults = true
+                ignoreUnknownKeys = true
+                isLenient = true
+            })
             install(Auth) {
                 val ctx = appContext
                 sessionManager = if (ctx != null) {

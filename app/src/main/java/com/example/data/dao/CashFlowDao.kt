@@ -31,6 +31,9 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE familyId = :familyId AND isDeleted = 0 ORDER BY dateMillis DESC")
     fun getFamilyTransactions(familyId: String): Flow<List<TransactionEntity>>
 
+    @Query("SELECT * FROM transactions WHERE familyId = :familyId AND isDeleted = 0 ORDER BY dateMillis DESC")
+    suspend fun getFamilyTransactionsOnce(familyId: String): List<TransactionEntity>
+
     @Query("SELECT * FROM transactions WHERE familyId = :familyId AND createdByUserId = :userId AND isDeleted = 0 ORDER BY dateMillis DESC")
     fun getFamilyTransactionsByMember(familyId: String, userId: String): Flow<List<TransactionEntity>>
 

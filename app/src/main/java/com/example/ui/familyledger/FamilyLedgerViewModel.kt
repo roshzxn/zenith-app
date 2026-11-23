@@ -137,6 +137,23 @@ class FamilyLedgerViewModel(application: Application) : AndroidViewModel(applica
                 }
             }
         }
+
+        // Listen to Auth State to restore families whenever user authenticates or session restores
+        viewModelScope.launch {
+            authService.currentUser.collect { user ->
+                if (user != null && isValidUuid(user.id)) {
+                    val restored = repository.restoreAllFamiliesForUser(user.id)
+                    if (restored.isNotEmpty()) {
+                        val currentPref = prefs.getString("active_family_id", null)
+                        if (currentPref.isNullOrBlank() || !restored.any { it.familyId == currentPref }) {
+                            setActiveFamily(restored.first().familyId)
+                        } else {
+                            repository.startSync(currentPref, user.id)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // =========================================================================
@@ -439,17 +456,22 @@ class FamilyLedgerViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    /** Triggers an immediate full reconciliation sync for the active family or restores families if unlinked. */
+    /** Triggers an immediate full reconciliation sync for the active family and restores all vaults. */
     fun syncNow() {
         viewModelScope.launch(Dispatchers.IO) {
+            val uid = authService.currentUser.value?.id ?: currentUserId
+            if (uid.isNotBlank() && isValidUuid(uid)) {
+                val restored = repository.restoreAllFamiliesForUser(uid)
+                if (restored.isNotEmpty()) {
+                    val currentFam = _activeFamilyId.value
+                    if (!restored.any { it.familyId == currentFam }) {
+                        setActiveFamily(restored.first().familyId)
+                    }
+                }
+            }
             val currentFam = _activeFamilyId.value
             if (currentFam.isNotBlank() && isValidUuid(currentFam)) {
-                repository.syncWithCloud(currentFam, currentUserId)
-            } else if (isValidUuid(currentUserId)) {
-                val restored = repository.restoreAllFamiliesForUser(currentUserId)
-                if (restored.isNotEmpty()) {
-                    setActiveFamily(restored.first().familyId)
-                }
+                repository.syncWithCloud(currentFam, uid)
             }
         }
     }

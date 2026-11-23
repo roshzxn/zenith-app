@@ -51,6 +51,7 @@ class CashFlowRepository(
     fun getTransactionsByScope(scope: FinanceScope): Flow<List<TransactionEntity>> = transactionDao.getTransactionsByScope(scope)
     fun getTransactionsByScopeAndType(scope: FinanceScope, type: TransactionType): Flow<List<TransactionEntity>> = transactionDao.getTransactionsByScopeAndType(scope, type)
     fun getFamilyTransactions(familyId: String): Flow<List<TransactionEntity>> = transactionDao.getFamilyTransactions(familyId)
+    suspend fun getFamilyTransactionsOnce(familyId: String): List<TransactionEntity> = transactionDao.getFamilyTransactionsOnce(familyId)
     fun getFamilyTransactionsByMember(familyId: String, userId: String): Flow<List<TransactionEntity>> = transactionDao.getFamilyTransactionsByMember(familyId, userId)
     fun getFamilyIncome(familyId: String): Flow<List<TransactionEntity>> = transactionDao.getFamilyIncome(familyId)
     fun getFamilyExpenses(familyId: String): Flow<List<TransactionEntity>> = transactionDao.getFamilyExpenses(familyId)

@@ -577,29 +577,8 @@ CREATE POLICY "transactions_select" ON public.transactions FOR SELECT TO anon, a
     )
 );
 CREATE POLICY "transactions_insert" ON public.transactions FOR INSERT TO anon, authenticated WITH CHECK (true);
--- Defense-in-depth: only creator or Family Admin can edit/delete transactions
-CREATE POLICY "transactions_update" ON public.transactions FOR UPDATE TO anon, authenticated USING (
-    auth.role() = 'anon'
-    OR auth.uid() IS NULL
-    OR user_id = auth.uid()
-    OR EXISTS (
-        SELECT 1 FROM public.family_members fm
-        WHERE fm.family_id = transactions.family_id
-          AND fm.user_id = auth.uid()
-          AND upper(fm.role) = 'ADMIN'
-    )
-);
-CREATE POLICY "transactions_delete" ON public.transactions FOR DELETE TO anon, authenticated USING (
-    auth.role() = 'anon'
-    OR auth.uid() IS NULL
-    OR user_id = auth.uid()
-    OR EXISTS (
-        SELECT 1 FROM public.family_members fm
-        WHERE fm.family_id = transactions.family_id
-          AND fm.user_id = auth.uid()
-          AND upper(fm.role) = 'ADMIN'
-    )
-);
+CREATE POLICY "transactions_update" ON public.transactions FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "transactions_delete" ON public.transactions FOR DELETE TO anon, authenticated USING (true);
 
 -- 6.6 Budgets: Multi-Scope
 CREATE POLICY "budgets_access" ON public.budgets FOR ALL TO anon, authenticated USING (

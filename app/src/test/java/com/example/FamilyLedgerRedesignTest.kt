@@ -445,4 +445,76 @@ class FamilyLedgerRedesignTest {
         val vaultsAfter = repository.observeAllFamilyVaults().first()
         assertTrue("Vaults must be empty after sign out purge", vaultsAfter.isEmpty())
     }
+
+    @Test
+    fun testDeduplicateFamilyTransactions() = runBlocking {
+        val familyId = "fam_dedup_test"
+        val now = System.currentTimeMillis()
+
+        // 1. Insert original transaction
+        val tx1 = repository.createTransaction(
+            familyId = familyId,
+            title = "Movie Night",
+            description = "Cinema tickets",
+            amount = 500.0,
+            category = "Entertainment",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "user_arun",
+            paidByName = "Arun",
+            dateMillis = now,
+            currentUserId = "user_arun"
+        )
+
+        // 2. Simulate duplicate created 2 seconds later with same details
+        val tx2 = repository.createTransaction(
+            familyId = familyId,
+            title = "Movie Night",
+            description = "Cinema tickets",
+            amount = 500.0,
+            category = "Entertainment",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "user_arun",
+            paidByName = "Arun",
+            dateMillis = now + 2000L,
+            currentUserId = "user_arun"
+        )
+
+        // 3. Insert a legitimate distinct transaction (different amount)
+        val tx3 = repository.createTransaction(
+            familyId = familyId,
+            title = "Popcorn",
+            description = "Snacks",
+            amount = 250.0,
+            category = "Food & Dining",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "user_arun",
+            paidByName = "Arun",
+            dateMillis = now,
+            currentUserId = "user_arun"
+        )
+
+        // Verify that initially there are 3 transactions in Room
+        val initialTxs = repository.observeTransactions(familyId).first()
+        assertEquals(3, initialTxs.size)
+
+        // Run deduplication
+        repository.deduplicateFamilyTransactions(familyId)
+
+        // Verify that the duplicate was removed and exactly 2 transactions remain
+        val remainingTxs = repository.observeTransactions(familyId).first()
+        assertEquals(2, remainingTxs.size)
+
+        val titles = remainingTxs.map { it.title }
+        assertTrue(titles.contains("Movie Night"))
+        assertTrue(titles.contains("Popcorn"))
+        assertEquals(1, remainingTxs.count { it.title == "Movie Night" })
+
+        // Verify Room legacy transaction table was also deduplicated
+        val legacyTxs = db.transactionDao().getFamilyTransactionsOnce(familyId)
+        assertEquals(2, legacyTxs.size)
+        assertEquals(1, legacyTxs.count { it.title == "Movie Night" })
+    }
 }

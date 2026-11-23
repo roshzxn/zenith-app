@@ -860,33 +860,33 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                     dateMillis = dateMillis,
                     currentUserId = currentUserId
                 )
-            }
-
-            // 2. Also write to Room TransactionEntity for backward compatibility
-            repository.addTransaction(
-                TransactionEntity(
-                    title = title,
-                    amount = amount,
-                    type = type,
-                    category = category,
-                    categoryIconName = iconName,
-                    paymentMethod = paymentMethod,
-                    note = note,
-                    financeScope = if (isFamily) FinanceScope.FAMILY else FinanceScope.PERSONAL,
-                    familyId = fId,
-                    createdByUserId = creator,
-                    dateMillis = dateMillis,
-                    upiId = upiId,
-                    upiTransactionId = upiTransactionId,
-                    syncStatus = "PENDING_CREATE"
+            } else {
+                // 2. Personal transaction (or fallback if family ID not yet initialized)
+                repository.addTransaction(
+                    TransactionEntity(
+                        title = title,
+                        amount = amount,
+                        type = type,
+                        category = category,
+                        categoryIconName = iconName,
+                        paymentMethod = paymentMethod,
+                        note = note,
+                        financeScope = if (isFamily) FinanceScope.FAMILY else FinanceScope.PERSONAL,
+                        familyId = fId,
+                        createdByUserId = creator,
+                        dateMillis = dateMillis,
+                        upiId = upiId,
+                        upiTransactionId = upiTransactionId,
+                        syncStatus = "PENDING_CREATE"
+                    )
                 )
-            )
 
-            viewModelScope.launch(Dispatchers.IO) {
-                try {
-                    syncEngine.syncAll(currentUserId)
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        syncEngine.syncAll(currentUserId)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
             }
         }
@@ -945,7 +945,28 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
     fun updateTransaction(transaction: TransactionEntity) {
         viewModelScope.launch {
-            repository.updateTransaction(transaction.copy(syncStatus = "PENDING_UPDATE"))
+            if (transaction.financeScope == FinanceScope.FAMILY && !transaction.serverId.isNullOrBlank()) {
+                val existing = familyLedgerRepository.getTransactionById(transaction.serverId)
+                if (existing != null) {
+                    familyLedgerRepository.updateTransaction(
+                        existing = existing,
+                        title = transaction.title,
+                        description = transaction.note,
+                        amount = transaction.amount,
+                        category = transaction.category,
+                        type = transaction.type,
+                        paymentMethod = transaction.paymentMethod,
+                        paidByMemberId = transaction.createdByUserId ?: currentUserId,
+                        paidByName = currentUserName,
+                        dateMillis = transaction.dateMillis,
+                        currentUserId = currentUserId
+                    )
+                } else {
+                    repository.updateTransaction(transaction.copy(syncStatus = "PENDING_UPDATE"))
+                }
+            } else {
+                repository.updateTransaction(transaction.copy(syncStatus = "PENDING_UPDATE"))
+            }
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     syncEngine.syncAll(currentUserId)
@@ -958,8 +979,12 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteTransaction(transaction: TransactionEntity) {
         viewModelScope.launch {
-            val toDelete = transaction.copy(syncStatus = "PENDING_DELETE", isDeleted = true)
-            repository.updateTransaction(toDelete)
+            if (transaction.financeScope == FinanceScope.FAMILY && !transaction.serverId.isNullOrBlank()) {
+                familyLedgerRepository.deleteTransaction(transaction.serverId, currentUserId)
+            } else {
+                val toDelete = transaction.copy(syncStatus = "PENDING_DELETE", isDeleted = true)
+                repository.updateTransaction(toDelete)
+            }
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     syncEngine.syncAll(currentUserId)
@@ -1263,6 +1288,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                     val famId = _activeFamilyId.value ?: getOrCreateFamilyIdSync()
                     val cloudSuccess = familyLedgerRepository.syncWithCloud(famId, currentUserId)
                     val syncAllSuccess = syncEngine.syncAll(currentUserId, famId)
+                    familyLedgerRepository.deduplicateFamilyTransactions(famId)
                     cloudSuccess || syncAllSuccess
                 }
             } catch (e: Exception) {
@@ -1482,8 +1508,8 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             }
             val receiptNote = if (items.isNotEmpty()) "${items.size} item${if (items.size > 1) "s" else ""}: " + items.take(2).joinToString { it.name } else "Receipt Scan"
 
-            if (isFamily && fId != null) {
-                familyLedgerRepository.createTransaction(
+            val txId: Long = if (isFamily && fId != null) {
+                val created = familyLedgerRepository.createTransaction(
                     familyId = fId,
                     title = merchant.ifBlank { "Receipt Purchase" },
                     description = receiptNote,
@@ -1496,23 +1522,32 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                     dateMillis = System.currentTimeMillis(),
                     currentUserId = currentUserId
                 )
+                repository.getTransactionByServerId(created.transactionId)?.id ?: 0L
+            } else {
+                val tx = TransactionEntity(
+                    title = merchant.ifBlank { "Receipt Purchase" },
+                    amount = amount,
+                    type = TransactionType.EXPENSE,
+                    category = category,
+                    categoryIconName = iconName,
+                    paymentMethod = paymentMethod,
+                    note = receiptNote,
+                    receiptImageUri = imageUri,
+                    financeScope = if (isFamily) FinanceScope.FAMILY else FinanceScope.PERSONAL,
+                    familyId = if (isFamily) fId else null,
+                    createdByUserId = if (isFamily) currentUserId else null,
+                    dateMillis = System.currentTimeMillis()
+                )
+                val newId = repository.addTransaction(tx)
+                viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        syncEngine.syncAll(currentUserId)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                newId
             }
-
-            val tx = TransactionEntity(
-                title = merchant.ifBlank { "Receipt Purchase" },
-                amount = amount,
-                type = TransactionType.EXPENSE,
-                category = category,
-                categoryIconName = iconName,
-                paymentMethod = paymentMethod,
-                note = receiptNote,
-                receiptImageUri = imageUri,
-                financeScope = if (isFamily) FinanceScope.FAMILY else FinanceScope.PERSONAL,
-                familyId = if (isFamily) fId else null,
-                createdByUserId = if (isFamily) currentUserId else null,
-                dateMillis = System.currentTimeMillis()
-            )
-            val txId = repository.addTransaction(tx)
             val receipt = ReceiptEntity(
                 transactionId = txId,
                 merchantName = merchant.ifBlank { "Receipt Purchase" },
@@ -1540,7 +1575,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         items: List<ReceiptItemEntity>
     ) {
         viewModelScope.launch {
-            repository.updateTransaction(transaction)
+            updateTransaction(transaction)
             if (receipt != null) {
                 repository.updateReceiptWithItems(receipt, items)
             }
@@ -1549,7 +1584,17 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteTransactionWithReceipt(transaction: TransactionEntity) {
         viewModelScope.launch {
+            if (transaction.financeScope == FinanceScope.FAMILY && !transaction.serverId.isNullOrBlank()) {
+                familyLedgerRepository.deleteTransaction(transaction.serverId, currentUserId)
+            }
             repository.deleteTransaction(transaction)
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    syncEngine.syncAll(currentUserId)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
         }
     }
 

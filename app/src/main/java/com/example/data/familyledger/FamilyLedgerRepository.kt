@@ -60,6 +60,10 @@ class FamilyLedgerRepository(
     fun observeTransactions(familyId: String): Flow<List<LedgerTransaction>> =
         ledgerDao.getTransactionsForFamily(familyId)
 
+    suspend fun getTransactionById(transactionId: String): LedgerTransaction? = withContext(Dispatchers.IO) {
+        ledgerDao.getTransactionById(transactionId)
+    }
+
     /**
      * Combines member roster with live transaction data to produce real-time
      * per-member financial stats (totalPaid, transactionCount).
@@ -117,10 +121,11 @@ class FamilyLedgerRepository(
 
         Log.d(tag, "SYNC_LIFECYCLE: Starting for family $familyId")
 
-        // 1. Initial reconciliation (full pull + pending flush)
+        // 1. Initial reconciliation (full pull + pending flush + deduplication)
         reconciliationJob = repositoryScope.launch {
             migrateLegacyFamilyData(familyId)
             syncWithCloud(familyId, currentUserId)
+            deduplicateFamilyTransactions(familyId)
         }
 
         // 2. Realtime subscription — runs for the lifetime of this family context
@@ -268,14 +273,19 @@ class FamilyLedgerRepository(
                 // C. Pull remote members (LWW merge)
                 cloudDataSource.fetchFamilyMembers(familyId).forEach { remote ->
                     val local = ledgerDao.getMemberById(remote.memberId)
-                        ?: ledgerDao.getMemberByFamilyAndUser(remote.familyId, remote.userId)
+                        ?: (if (remote.userId.isNotBlank()) ledgerDao.getMemberByFamilyAndUser(remote.familyId, remote.userId) else null)
                     when {
                         local == null -> {
                             ledgerDao.upsertMember(remote)
                             mirrorMemberToLegacy(remote)
                         }
-                        local.syncStatus == "SYNCED" && remote.updatedAt >= local.updatedAt -> {
-                            val merged = local.copy(name = remote.name, role = remote.role, updatedAt = remote.updatedAt)
+                        local.memberId != remote.memberId -> {
+                            ledgerDao.deleteMemberPermanently(local.memberId)
+                            ledgerDao.upsertMember(remote)
+                            mirrorMemberToLegacy(remote)
+                        }
+                        remote.updatedAt >= local.updatedAt || local.syncStatus == "SYNCED" -> {
+                            val merged = local.copy(name = remote.name, role = remote.role, updatedAt = remote.updatedAt, syncStatus = "SYNCED")
                             ledgerDao.upsertMember(merged)
                             mirrorMemberToLegacy(merged)
                         }
@@ -302,6 +312,9 @@ class FamilyLedgerRepository(
                         }
                     }
                 }
+
+                // E. Run automated deduplication to remove duplicate records
+                deduplicateFamilyTransactions(familyId)
 
                 _syncStatus.value = FamilySyncStatus.SYNCED
                 Log.d(tag, "FULL_SYNC completed for family $familyId")
@@ -579,6 +592,26 @@ class FamilyLedgerRepository(
                 for (member in members) {
                     ledgerDao.upsertMember(member)
                     mirrorMemberToLegacy(member)
+                }
+                // If current user is not in roster for their family, ensure they are registered as ADMIN
+                if (members.none { it.userId == userId }) {
+                    val localMember = ledgerDao.getMemberByFamilyAndUser(vault.familyId, userId)
+                    if (localMember != null) {
+                        cloudDataSource.upsertFamilyMember(localMember)
+                    } else {
+                        val ownerMember = FamilyVaultMember(
+                            memberId = UUID.randomUUID().toString(),
+                            familyId = vault.familyId,
+                            userId = userId,
+                            name = vault.familyName.substringBefore("'s").ifBlank { "You" },
+                            role = FamilyRole.ADMIN,
+                            joinedAt = vault.createdAt,
+                            updatedAt = vault.updatedAt
+                        )
+                        ledgerDao.upsertMember(ownerMember)
+                        mirrorMemberToLegacy(ownerMember)
+                        cloudDataSource.upsertFamilyMember(ownerMember)
+                    }
                 }
 
                 // C. Fetch & Upsert all family transactions
@@ -937,6 +970,72 @@ class FamilyLedgerRepository(
             }
         } catch (e: Exception) {
             Log.w(tag, "mirrorDeleteToLegacy error: ${e.message}")
+        }
+    }
+
+    /**
+     * Scans both `ledger_transactions` and legacy `transactions` tables for this family
+     * and permanently removes duplicate records created simultaneously (within 30 seconds)
+     * with identical title, amount, and transaction type.
+     * Also soft-deletes duplicates on the cloud backend (Supabase).
+     */
+    suspend fun deduplicateFamilyTransactions(familyId: String) = withContext(Dispatchers.IO) {
+        if (familyId.isBlank()) return@withContext
+        try {
+            // 1. Deduplicate ledger_transactions table
+            val ledgerTxs = ledgerDao.getTransactionsForFamilyOnce(familyId).filter { !it.isDeleted }
+            val groupedLedger = ledgerTxs.groupBy { "${it.title.trim().lowercase()}_${it.amount}_${it.type}" }
+            for ((_, group) in groupedLedger) {
+                if (group.size <= 1) continue
+                val sorted = group.sortedBy { it.createdAt }
+                val keep = sorted.first()
+                val duplicates = sorted.drop(1).filter { dup ->
+                    Math.abs(dup.dateMillis - keep.dateMillis) <= 30_000L ||
+                    Math.abs(dup.createdAt - keep.createdAt) <= 30_000L
+                }
+                for (dup in duplicates) {
+                    Log.i(tag, "Deduplicating ledger transaction: ${dup.transactionId} for '${dup.title}' ₹${dup.amount}")
+                    ledgerDao.deleteTransactionPermanently(dup.transactionId)
+                    mirrorDeleteToLegacy(dup.transactionId)
+                    if (cloudDataSource.isAvailable) {
+                        try {
+                            cloudDataSource.softDeleteTransaction(dup.transactionId)
+                        } catch (e: Exception) {
+                            Log.w(tag, "Failed to soft-delete duplicate ledger tx on cloud: ${e.message}")
+                        }
+                    }
+                }
+            }
+
+            // 2. Deduplicate legacy transactions table in Room
+            val legacyTxs = legacyTransactionDao.getFamilyTransactionsOnce(familyId).filter { !it.isDeleted }
+            val groupedLegacy = legacyTxs.groupBy { "${it.title.trim().lowercase()}_${it.amount}_${it.type}" }
+            for ((_, group) in groupedLegacy) {
+                if (group.size <= 1) continue
+                val sorted = group.sortedWith(
+                    compareBy<com.example.data.models.TransactionEntity> { it.serverId.isNullOrBlank() }
+                        .thenBy { it.syncStatus != "SYNCED" }
+                        .thenBy { it.id }
+                )
+                val keep = sorted.first()
+                val duplicates = sorted.drop(1).filter { dup ->
+                    Math.abs(dup.dateMillis - keep.dateMillis) <= 30_000L
+                }
+                for (dup in duplicates) {
+                    Log.i(tag, "Deduplicating legacy transaction id: ${dup.id} serverId: ${dup.serverId} for '${dup.title}' ₹${dup.amount}")
+                    legacyTransactionDao.deleteTransaction(dup)
+                    val sId = dup.serverId
+                    if (!sId.isNullOrBlank() && sId != keep.serverId && cloudDataSource.isAvailable) {
+                        try {
+                            cloudDataSource.softDeleteTransaction(sId)
+                        } catch (e: Exception) {
+                            Log.w(tag, "Failed to soft-delete duplicate legacy tx on cloud: ${e.message}")
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Error during family transaction deduplication: ${e.message}", e)
         }
     }
 
