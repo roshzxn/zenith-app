@@ -21,7 +21,8 @@ BEGIN
           AND tablename IN (
             'profiles', 'families', 'family_members', 'categories',
             'transactions', 'budgets', 'savings_goals',
-            'savings_contributions', 'audit_logs', 'family_invitations'
+            'savings_contributions', 'audit_logs', 'family_invitations',
+            'auto_pay_reminders'
           )
     LOOP
         EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I', pol.policyname, pol.schemaname, pol.tablename);
@@ -386,6 +387,48 @@ CREATE TABLE IF NOT EXISTS public.family_invitations (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 2.10 AUTO PAY REMINDERS TABLE
+CREATE TABLE IF NOT EXISTS public.auto_pay_reminders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    finance_scope VARCHAR(32) NOT NULL DEFAULT 'PERSONAL',
+    family_id UUID REFERENCES public.families(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    title TEXT NOT NULL DEFAULT '',
+    amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    category TEXT NOT NULL DEFAULT 'Bills & Utilities',
+    payment_method TEXT NOT NULL DEFAULT 'UPI',
+    frequency VARCHAR(32) NOT NULL DEFAULT 'MONTHLY',
+    due_day_of_month INT NOT NULL DEFAULT 1,
+    next_due_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    is_auto_debit BOOLEAN NOT NULL DEFAULT TRUE,
+    reminder_days_before INT NOT NULL DEFAULT 2,
+    is_paused BOOLEAN NOT NULL DEFAULT FALSE,
+    last_paid_date TIMESTAMPTZ,
+    notes TEXT NOT NULL DEFAULT '',
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS finance_scope VARCHAR(32) NOT NULL DEFAULT 'PERSONAL';
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS family_id UUID REFERENCES public.families(id) ON DELETE CASCADE;
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS title TEXT DEFAULT '';
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS amount NUMERIC(15, 2) DEFAULT 0.00;
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Bills & Utilities';
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'UPI';
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS frequency VARCHAR(32) DEFAULT 'MONTHLY';
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS due_day_of_month INT DEFAULT 1;
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS next_due_date TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS is_auto_debit BOOLEAN DEFAULT TRUE;
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS reminder_days_before INT DEFAULT 2;
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS is_paused BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS last_paid_date TIMESTAMPTZ;
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT '';
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.auto_pay_reminders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 -- =============================================================================
 -- 3. BIDIRECTIONAL COLUMN SYNCHRONIZATION TRIGGERS
 -- =============================================================================
@@ -530,6 +573,8 @@ CREATE INDEX IF NOT EXISTS idx_transactions_sync_version ON public.transactions 
 CREATE INDEX IF NOT EXISTS idx_family_members_family ON public.family_members (family_id);
 CREATE INDEX IF NOT EXISTS idx_family_members_user ON public.family_members (user_id);
 CREATE INDEX IF NOT EXISTS idx_families_invite_code ON public.families (invite_code);
+CREATE INDEX IF NOT EXISTS idx_auto_pay_user ON public.auto_pay_reminders (user_id, next_due_date ASC);
+CREATE INDEX IF NOT EXISTS idx_auto_pay_family ON public.auto_pay_reminders (family_id, next_due_date ASC);
 
 -- =============================================================================
 -- 6. NON-RECURSIVE, ZERO-LOCK ROW LEVEL SECURITY (RLS) POLICIES
@@ -545,6 +590,7 @@ ALTER TABLE public.savings_goals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.savings_contributions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.family_invitations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.auto_pay_reminders ENABLE ROW LEVEL SECURITY;
 
 -- 6.1 Profiles: Open for lookup, owner updates
 CREATE POLICY "profiles_select" ON public.profiles FOR SELECT TO anon, authenticated USING (true);
@@ -606,6 +652,16 @@ CREATE POLICY "savings_contributions_access" ON public.savings_contributions FOR
 CREATE POLICY "audit_logs_access" ON public.audit_logs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "family_invitations_access" ON public.family_invitations FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
+-- 6.9 Auto-Pay Reminders: Multi-Scope
+CREATE POLICY "auto_pay_reminders_access" ON public.auto_pay_reminders FOR ALL TO anon, authenticated USING (
+    NOT is_deleted AND (
+        finance_scope = 'FAMILY'
+        OR auth.role() = 'anon'
+        OR auth.uid() IS NULL
+        OR user_id = auth.uid()
+    )
+) WITH CHECK (true);
+
 -- =============================================================================
 -- 7. REALTIME SUBSCRIPTION CONFIGURATION (SAFE & IDEMPOTENT)
 -- =============================================================================
@@ -616,13 +672,14 @@ ALTER TABLE public.budgets REPLICA IDENTITY FULL;
 ALTER TABLE public.savings_goals REPLICA IDENTITY FULL;
 ALTER TABLE public.categories REPLICA IDENTITY FULL;
 ALTER TABLE public.profiles REPLICA IDENTITY FULL;
+ALTER TABLE public.auto_pay_reminders REPLICA IDENTITY FULL;
 
 DO $$
 DECLARE
     t text;
     target_tables text[] := ARRAY[
         'profiles', 'families', 'family_members', 'categories',
-        'transactions', 'budgets', 'savings_goals'
+        'transactions', 'budgets', 'savings_goals', 'auto_pay_reminders'
     ];
 BEGIN
     FOREACH t IN ARRAY target_tables
