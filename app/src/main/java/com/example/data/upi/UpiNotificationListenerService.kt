@@ -1,13 +1,18 @@
 package com.example.data.upi
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -122,8 +127,95 @@ class UpiNotificationListenerService : NotificationListenerService() {
         processedHashes[key] = now
         Log.i(tag, "Extracted UPI Payment: ${payment.amount} at ${payment.payeeName} via ${payment.sourceApp}")
 
-        // Broadcast to app
+        // Broadcast to in-app event bus
         UpiPaymentBus.post(payment)
+
+        // Post system notification with 1-tap quick action
+        try {
+            postExpenseNotification(this, payment)
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to post expense notification: ${e.message}")
+        }
+    }
+
+    private fun postExpenseNotification(context: Context, payment: ExtractedUpiPayment) {
+        val channelId = "zenith_upi_tracker"
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "UPI Expense Tracker",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifies when UPI expenses are detected with 1-tap logging"
+                enableVibration(true)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val notifId = (payment.amount.toInt() * 31 + payment.payeeName.hashCode()) and 0x7FFFFFFF
+
+        // Intent to open MainActivity
+        val openAppIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("extra_upi_amount", payment.amount)
+            putExtra("extra_upi_payee", payment.payeeName)
+            putExtra("extra_upi_category", payment.detectedCategory)
+            putExtra("extra_upi_utr", payment.upiTransactionId)
+            putExtra("extra_upi_vpa", payment.upiId)
+            putExtra("extra_upi_app", payment.sourceApp)
+        }
+        val openAppPendingIntent = PendingIntent.getActivity(
+            context,
+            notifId,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Action 1: 1-Tap Save
+        val saveIntent = Intent(context, NotificationExpenseActionReceiver::class.java).apply {
+            action = NotificationExpenseActionReceiver.ACTION_LOG_EXPENSE
+            putExtra(NotificationExpenseActionReceiver.EXTRA_TITLE, payment.payeeName)
+            putExtra(NotificationExpenseActionReceiver.EXTRA_AMOUNT, payment.amount)
+            putExtra(NotificationExpenseActionReceiver.EXTRA_CATEGORY, payment.detectedCategory)
+            putExtra(NotificationExpenseActionReceiver.EXTRA_PAYMENT_METHOD, payment.sourceApp)
+            putExtra(NotificationExpenseActionReceiver.EXTRA_UPI_ID, payment.upiId)
+            putExtra(NotificationExpenseActionReceiver.EXTRA_UTR, payment.upiTransactionId)
+            putExtra(NotificationExpenseActionReceiver.EXTRA_DATE_MILLIS, payment.timestamp)
+            putExtra(NotificationExpenseActionReceiver.EXTRA_NOTIFICATION_ID, notifId)
+        }
+        val savePendingIntent = PendingIntent.getBroadcast(
+            context,
+            notifId + 1,
+            saveIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Action 2: Dismiss
+        val dismissIntent = Intent(context, NotificationExpenseActionReceiver::class.java).apply {
+            action = NotificationExpenseActionReceiver.ACTION_DISMISS_EXPENSE
+            putExtra(NotificationExpenseActionReceiver.EXTRA_NOTIFICATION_ID, notifId)
+        }
+        val dismissPendingIntent = PendingIntent.getBroadcast(
+            context,
+            notifId + 2,
+            dismissIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(android.R.drawable.stat_notify_more)
+            .setContentTitle("💸 Record ₹${String.format(java.util.Locale.US, "%,.2f", payment.amount)} at ${payment.payeeName}?")
+            .setContentText("Detected via ${payment.sourceApp} • Tap to view or 1-tap save")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(openAppPendingIntent)
+            .addAction(android.R.drawable.ic_input_add, "⚡ 1-Tap Save", savePendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Dismiss", dismissPendingIntent)
+            .build()
+
+        notificationManager.notify(notifId, notification)
     }
 
     private fun cleanExpiredHashes(now: Long) {

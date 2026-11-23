@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.sp
 import com.example.data.familyledger.LedgerTransaction
 import com.example.data.models.TransactionType
 import com.example.ui.theme.*
+import java.text.SimpleDateFormat
+import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -253,6 +255,22 @@ fun FamilyLedgerTransactionsList(
                 }
             }
         } else {
+            val groupedTransactions = remember(filteredTransactions) {
+                filteredTransactions.groupBy { tx ->
+                    val date = Date(tx.dateMillis)
+                    val now = Calendar.getInstance()
+                    val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+                    val txCal = Calendar.getInstance().apply { time = date }
+                    when {
+                        now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
+                                now.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Today"
+                        yesterday.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
+                                yesterday.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
+                        else -> SimpleDateFormat("EEEE, dd MMMM yyyy", Locale.getDefault()).format(date)
+                    }
+                }
+            }
+
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -260,14 +278,25 @@ fun FamilyLedgerTransactionsList(
                 contentPadding = PaddingValues(bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(filteredTransactions, key = { it.transactionId }) { tx ->
-                    ModernLedgerTransactionCard(
-                        transaction = tx,
-                        currencySymbol = currencySymbol,
-                        canModify = canModifyTransaction(tx),
-                        onEdit = { onEditTransaction(tx) },
-                        onDelete = { onDeleteTransaction(tx) }
-                    )
+                groupedTransactions.forEach { (dateHeader, txsForDate) ->
+                    item(key = "header_$dateHeader") {
+                        Text(
+                            text = dateHeader,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SlateDarkTextMuted,
+                            modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+                        )
+                    }
+                    items(txsForDate, key = { it.transactionId }) { tx ->
+                        ModernLedgerTransactionCard(
+                            transaction = tx,
+                            currencySymbol = currencySymbol,
+                            canModify = canModifyTransaction(tx),
+                            onEdit = { onEditTransaction(tx) },
+                            onDelete = { onDeleteTransaction(tx) }
+                        )
+                    }
                 }
             }
         }

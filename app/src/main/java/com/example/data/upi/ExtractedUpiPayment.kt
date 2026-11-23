@@ -23,8 +23,20 @@ data class ExtractedUpiPayment(
      * received simultaneously from both the UPI app and the bank.
      */
     val deduplicationKey: String
-        get() = when {
-            !upiTransactionId.isNullOrBlank() -> "utr_$upiTransactionId"
-            else -> "tx_${amount}_${payeeName.lowercase().trim()}_${timestamp / 180000}" // 3-minute window
+        get() {
+            val normalizedPayee = payeeName.lowercase().replace(Regex("[^a-z0-9]"), "").take(10)
+            val timeBucket = timestamp / 300000 // 5-minute bucket
+            return if (!upiTransactionId.isNullOrBlank()) {
+                "utr_${upiTransactionId}"
+            } else {
+                "tx_${amount}_${normalizedPayee}_${timeBucket}"
+            }
+        }
+
+    val contentFingerprint: String
+        get() {
+            val normalizedPayee = payeeName.lowercase().replace(Regex("[^a-z0-9]"), "").take(10)
+            val timeBucket = timestamp / 300000
+            return "fingerprint_${amount}_${normalizedPayee}_${timeBucket}"
         }
 }

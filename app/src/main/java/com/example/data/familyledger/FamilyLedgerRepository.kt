@@ -856,7 +856,8 @@ class FamilyLedgerRepository(
             mirrorMemberToLegacy(member)
         }
 
-        // Immediate reconciliation pull
+        // Immediate reconciliation pull and live Realtime connection
+        startSync(targetVault.familyId, currentUserId)
         syncWithCloud(targetVault.familyId, currentUserId)
         Log.d(tag, "JOIN_VAULT: ${targetVault.familyId} (${targetVault.familyName})")
         Result.success(targetVault)
@@ -933,7 +934,24 @@ class FamilyLedgerRepository(
 
     private suspend fun mirrorTransactionToLegacy(tx: LedgerTransaction) {
         try {
-            val existing = legacyTransactionDao.getTransactionByServerId(tx.transactionId)
+            var existing = legacyTransactionDao.getTransactionByServerId(tx.transactionId)
+            val creator = tx.paidByName.takeIf { it.isNotBlank() } ?: tx.paidByMemberId.ifBlank { tx.createdBy }
+            
+            // Deduplication guard: check local transactions with matching content within 60s
+            if (existing == null && !tx.isDeleted) {
+                val dupes = legacyTransactionDao.findPotentialDuplicates(
+                    amount = tx.amount,
+                    type = tx.type,
+                    scope = com.example.data.models.FinanceScope.FAMILY,
+                    startMillis = tx.dateMillis - 60_000L,
+                    endMillis = tx.dateMillis + 60_000L
+                )
+                val match = dupes.firstOrNull { it.serverId.isNullOrBlank() || it.serverId == tx.transactionId }
+                if (match != null) {
+                    existing = match
+                }
+            }
+
             val entity = com.example.data.models.TransactionEntity(
                 id = existing?.id ?: 0L,
                 title = tx.title,
@@ -945,7 +963,7 @@ class FamilyLedgerRepository(
                 note = tx.description,
                 financeScope = com.example.data.models.FinanceScope.FAMILY,
                 familyId = tx.familyId,
-                createdByUserId = tx.paidByMemberId.ifBlank { tx.createdBy },
+                createdByUserId = creator,
                 dateMillis = tx.dateMillis,
                 serverId = tx.transactionId,
                 syncStatus = "SYNCED",

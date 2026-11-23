@@ -60,8 +60,26 @@ fun FamilyLedgerDashboard(
         if (totalIncome + totalExpense > 0) (totalExpense / (totalIncome + totalExpense)).toFloat() else 0.5f
     }
 
+    var isBalanceHidden by remember { mutableStateOf(false) }
+
     val recentTransactions = remember(state.transactions) {
         state.transactions.take(8)
+    }
+
+    val groupedRecentTransactions = remember(recentTransactions) {
+        recentTransactions.groupBy { tx ->
+            val date = Date(tx.dateMillis)
+            val now = Calendar.getInstance()
+            val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+            val txCal = Calendar.getInstance().apply { time = date }
+            when {
+                now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
+                        now.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Today"
+                yesterday.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
+                        yesterday.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
+                else -> SimpleDateFormat("EEEE, dd MMMM yyyy", Locale.getDefault()).format(date)
+            }
+        }
     }
 
     val memberAvatarGradients = listOf(
@@ -174,17 +192,33 @@ fun FamilyLedgerDashboard(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Main Balance Display
-                    Text(
-                        text = "TOTAL NET BALANCE",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextMuted,
-                        letterSpacing = 1.2.sp
-                    )
+                    // Main Balance Display with Eye Privacy Toggle
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "TOTAL NET BALANCE",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SlateDarkTextMuted,
+                            letterSpacing = 1.2.sp
+                        )
+                        IconButton(
+                            onClick = { isBalanceHidden = !isBalanceHidden },
+                            modifier = Modifier.size(20.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isBalanceHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = "Toggle Balance Privacy",
+                                tint = SlateDarkTextMuted,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "$currencySymbol%,.2f".format(netBalance),
+                        text = if (isBalanceHidden) "••••••" else "$currencySymbol%,.2f".format(netBalance),
                         fontSize = 32.sp,
                         fontWeight = FontWeight.Black,
                         color = SlateDarkTextPrimary,
@@ -227,7 +261,7 @@ fun FamilyLedgerDashboard(
                                 Column {
                                     Text("Income", fontSize = 10.sp, color = SlateDarkTextSecondary)
                                     Text(
-                                        text = "+$currencySymbol%,.0f".format(totalIncome),
+                                        text = if (isBalanceHidden) "+••••" else "+$currencySymbol%,.0f".format(totalIncome),
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = IncomeGreen,
@@ -266,7 +300,7 @@ fun FamilyLedgerDashboard(
                                 Column {
                                     Text("Expenses", fontSize = 10.sp, color = SlateDarkTextSecondary)
                                     Text(
-                                        text = "-$currencySymbol%,.0f".format(totalExpense),
+                                        text = if (isBalanceHidden) "-••••" else "-$currencySymbol%,.0f".format(totalExpense),
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = ExpenseRed,
@@ -488,15 +522,26 @@ fun FamilyLedgerDashboard(
                 }
             }
         } else {
-            items(recentTransactions, key = { it.transactionId }) { tx ->
-                val canModify = canModifyTransaction(tx)
-                ModernLedgerTransactionCard(
-                    transaction = tx,
-                    currencySymbol = currencySymbol,
-                    canModify = canModify,
-                    onEdit = { onEditTransaction(tx) },
-                    onDelete = { onDeleteTransaction(tx) }
-                )
+            groupedRecentTransactions.forEach { (dateHeader, txsForDate) ->
+                item(key = "header_$dateHeader") {
+                    Text(
+                        text = dateHeader,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SlateDarkTextMuted,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+                    )
+                }
+                items(txsForDate, key = { it.transactionId }) { tx ->
+                    val canModify = canModifyTransaction(tx)
+                    ModernLedgerTransactionCard(
+                        transaction = tx,
+                        currencySymbol = currencySymbol,
+                        canModify = canModify,
+                        onEdit = { onEditTransaction(tx) },
+                        onDelete = { onDeleteTransaction(tx) }
+                    )
+                }
             }
         }
     }

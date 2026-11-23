@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -52,6 +53,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        checkNotificationLaunch(intent)
 
         setContent {
             CashFlowTheme {
@@ -128,6 +130,34 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        checkNotificationLaunch(intent)
+    }
+
+    private fun checkNotificationLaunch(intent: Intent?) {
+        if (intent == null) return
+        if (intent.hasExtra("extra_upi_amount")) {
+            val amount = intent.getDoubleExtra("extra_upi_amount", 0.0)
+            val payee = intent.getStringExtra("extra_upi_payee") ?: "Merchant"
+            val category = intent.getStringExtra("extra_upi_category") ?: "Other"
+            val utr = intent.getStringExtra("extra_upi_utr")
+            val vpa = intent.getStringExtra("extra_upi_vpa")
+            val app = intent.getStringExtra("extra_upi_app") ?: "UPI"
+
+            val payment = com.example.data.upi.ExtractedUpiPayment(
+                amount = amount,
+                payeeName = payee,
+                detectedCategory = category,
+                upiTransactionId = utr,
+                upiId = vpa,
+                sourceApp = app
+            )
+            viewModel.showDetectedUpiPayment(payment)
         }
     }
 }

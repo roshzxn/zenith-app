@@ -19,6 +19,18 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE serverId = :serverId LIMIT 1")
     suspend fun getTransactionByServerId(serverId: String): TransactionEntity?
 
+    @Query("SELECT * FROM transactions WHERE amount = :amount AND type = :type AND financeScope = :scope AND isDeleted = 0 AND dateMillis BETWEEN :startMillis AND :endMillis")
+    suspend fun findPotentialDuplicates(
+        amount: Double,
+        type: TransactionType,
+        scope: FinanceScope,
+        startMillis: Long,
+        endMillis: Long
+    ): List<TransactionEntity>
+
+    @Query("SELECT * FROM transactions WHERE isDeleted = 0")
+    suspend fun getAllTransactionsOnce(): List<TransactionEntity>
+
     @Query("SELECT * FROM transactions WHERE isDeleted = 0 ORDER BY dateMillis DESC")
     fun getAllTransactions(): Flow<List<TransactionEntity>>
     

@@ -91,9 +91,14 @@ fun HomeScreen(
     val isFamily = currentFinanceScope == FinanceScope.FAMILY
 
     // Filter transactions if family member or transaction type is selected
-    val displayedTransactions = remember(state.transactions, selectedFamilyMemberFilter, selectedFamilyTypeFilter) {
+    val displayedTransactions = remember(state.transactions, selectedFamilyMemberFilter, selectedFamilyTypeFilter, familyMembers) {
         state.transactions.filter { tx ->
-            val matchesMember = selectedFamilyMemberFilter == null || tx.createdByUserId == selectedFamilyMemberFilter
+            val matchesMember = selectedFamilyMemberFilter == null ||
+                    tx.createdByUserId == selectedFamilyMemberFilter ||
+                    familyMembers.any { m ->
+                        m.userId == selectedFamilyMemberFilter &&
+                        (tx.createdByUserId.equals(m.name, ignoreCase = true) || tx.createdByUserId.equals(m.userId, ignoreCase = true))
+                    }
             val matchesType = selectedFamilyTypeFilter == null || tx.type == selectedFamilyTypeFilter
             matchesMember && matchesType
         }
@@ -155,6 +160,22 @@ fun HomeScreen(
         val now = System.currentTimeMillis()
         val sevenDaysLater = now + (7L * 24 * 60 * 60 * 1000)
         state.autoPayReminders.filter { !it.isPaused && it.nextDueDateMillis <= sevenDaysLater }
+    }
+
+    val groupedFamilyTransactions = remember(displayedTransactions) {
+        displayedTransactions.groupBy { tx ->
+            val date = Date(tx.dateMillis)
+            val now = Calendar.getInstance()
+            val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+            val txCal = Calendar.getInstance().apply { time = date }
+            when {
+                now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
+                        now.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Today"
+                yesterday.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
+                        yesterday.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
+                else -> SimpleDateFormat("EEEE, dd MMMM yyyy", Locale.getDefault()).format(date)
+            }
+        }
     }
 
     LazyColumn(
@@ -1197,33 +1218,160 @@ fun HomeScreen(
                     )
                 }
 
-                // Member Filter Chips
-                if (familyMembers.isNotEmpty()) {
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                    ) {
-                        item {
-                            FilterChip(
-                                selected = selectedFamilyMemberFilter == null,
-                                onClick = { selectedFamilyMemberFilter = null },
-                                label = { Text("All Members (${familyMembers.size.coerceAtLeast(1)})", fontSize = 11.sp) }
+                // Social Member Story Bubbles (Instagram/Social style member avatars)
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                ) {
+                    // "All Activity" Story Bubble
+                    item {
+                        val isAllSelected = selectedFamilyMemberFilter == null
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { selectedFamilyMemberFilter = null }
+                                .padding(2.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isAllSelected) Brush.sweepGradient(listOf(PastelCyan, PastelIndigo, PastelCyan))
+                                        else Brush.linearGradient(listOf(GlassBorderColor, GlassBorderColor))
+                                    )
+                                    .padding(2.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(CircleShape)
+                                        .background(if (isAllSelected) Color(0xFF0F172A) else SlateDarkSurface),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Groups,
+                                        contentDescription = "All",
+                                        tint = if (isAllSelected) PastelCyan else SlateDarkTextSecondary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "All Feed",
+                                fontSize = 10.5.sp,
+                                fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isAllSelected) PastelCyan else SlateDarkTextSecondary
                             )
                         }
-                        items(familyMembers) { member ->
-                            FilterChip(
-                                selected = selectedFamilyMemberFilter == member.userId,
-                                onClick = {
-                                    selectedFamilyMemberFilter = if (selectedFamilyMemberFilter == member.userId) null else member.userId
-                                },
-                                label = { Text("👤 ${member.name}", fontSize = 11.sp) }
+                    }
+
+                    // "+ Invite" Story Bubble
+                    item {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onManageFamilyMembers() }
+                                .padding(2.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Transparent)
+                                    .border(1.dp, PastelCyan.copy(alpha = 0.5f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PersonAdd,
+                                    contentDescription = "Invite",
+                                    tint = PastelCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "+ Invite",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = PastelCyan
+                            )
+                        }
+                    }
+
+                    // Individual Member Story Bubbles
+                    val memberGradients = listOf(
+                        Brush.linearGradient(listOf(Color(0xFF6366F1), Color(0xFF8B5CF6))),
+                        Brush.linearGradient(listOf(Color(0xFF06B6D4), Color(0xFF3B82F6))),
+                        Brush.linearGradient(listOf(Color(0xFFF59E0B), Color(0xFFEF4444))),
+                        Brush.linearGradient(listOf(Color(0xFF10B981), Color(0xFF059669))),
+                        Brush.linearGradient(listOf(Color(0xFFEC4899), Color(0xFF8B5CF6)))
+                    )
+
+                    items(familyMembers.size) { idx ->
+                        val member = familyMembers[idx]
+                        val isSelected = selectedFamilyMemberFilter == member.userId
+                        val grad = memberGradients[idx % memberGradients.size]
+                        val memberSpends = state.transactions
+                            .filter { (it.createdByUserId == member.userId || it.createdByUserId == member.name) && it.type == TransactionType.EXPENSE }
+                            .sumOf { it.amount }
+
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable {
+                                    selectedFamilyMemberFilter = if (isSelected) null else member.userId
+                                }
+                                .padding(2.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isSelected) grad else Brush.linearGradient(listOf(GlassBorderColor, GlassBorderColor)))
+                                    .padding(2.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(CircleShape)
+                                        .background(if (isSelected) Color(0xFF0F172A) else SlateDarkSurface),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (member.name.isNotBlank()) member.name.take(1).uppercase() else "M",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = if (isSelected) Color.White else SlateDarkTextSecondary
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = member.name.take(7),
+                                fontSize = 10.5.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else SlateDarkTextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "${state.currencySymbol}${String.format(Locale.US, "%,.0f", memberSpends)}",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (memberSpends > 0) PastelRose else SlateDarkTextMuted
                             )
                         }
                     }
                 }
             }
 
-            // Family Transactions List
             if (displayedTransactions.isEmpty()) {
                 item {
                     Surface(
@@ -1281,18 +1429,47 @@ fun HomeScreen(
                     }
                 }
             } else {
-                items(displayedTransactions.take(8), key = { "family_recent_${it.id}" }) { tx ->
-                    val memberName = familyMembers.firstOrNull {
-                        it.userId == tx.createdByUserId || it.name.equals(tx.createdByUserId, ignoreCase = true)
-                    }?.name ?: tx.createdByUserId?.takeIf { !it.contains("-") && it != "local_user_1" }
-                    TransactionItemCard(
-                        transaction = tx,
-                        currencySymbol = state.currencySymbol,
-                        creatorName = memberName,
-                        onClick = { selectedTransactionForDetails = it },
-                        onLongClick = { selectedTransactionForDetails = it },
-                        modifier = Modifier.animateItem()
-                    )
+                groupedFamilyTransactions.forEach { (dateHeader, txList) ->
+                    item(key = "family_header_$dateHeader") {
+                        val dayExpense = txList.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 14.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = dateHeader,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = SlateDarkTextSecondary,
+                                letterSpacing = 0.5.sp
+                            )
+                            if (dayExpense > 0) {
+                                Text(
+                                    text = "Spent: -${state.currencySymbol}${String.format(Locale.US, "%,.0f", dayExpense)}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = PastelRose
+                                )
+                            }
+                        }
+                    }
+
+                    items(txList, key = { "family_tx_${it.id}" }) { tx ->
+                        val memberName = familyMembers.firstOrNull {
+                            it.userId == tx.createdByUserId || it.name.equals(tx.createdByUserId, ignoreCase = true)
+                        }?.name ?: tx.createdByUserId?.takeIf { !it.contains("-") && it != "local_user_1" } ?: "Member"
+                        TransactionItemCard(
+                            transaction = tx,
+                            currencySymbol = state.currencySymbol,
+                            creatorName = memberName,
+                            onClick = { selectedTransactionForDetails = it },
+                            onLongClick = { selectedTransactionForDetails = it },
+                            modifier = Modifier.animateItem()
+                        )
+                    }
                 }
             }
         } else {

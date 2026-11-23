@@ -15,19 +15,25 @@ object UpiNotificationParser {
         "com.dreamplug.androidapp" to "CRED",
         "in.org.npci.upiapp" to "BHIM",
         "com.amazon.mShop.android.shopping" to "Amazon Pay",
+        "in.amazon.mShop.android.shopping" to "Amazon Pay",
         "com.whatsapp" to "WhatsApp Pay",
         "com.naviapp" to "Navi UPI",
+        "com.mobikwik_new" to "MobiKwik",
+        "com.freecharge.android" to "Freecharge",
         // Indian Banking Apps
         "com.snapwork.hdfc" to "HDFC Bank",
         "com.sbi.lotusintouch" to "SBI YONO",
         "com.csam.icici.bank.imobile" to "iMobile Pay",
         "com.axis.mobile" to "Axis Mobile",
-        "com.msf.kbank.mobile" to "Kotak Bank"
+        "com.msf.kbank.mobile" to "Kotak Bank",
+        "com.bankofbaroda.mconnect" to "BOB World",
+        "com.pnb.pnbone" to "PNB One",
+        "com.canarabank.ai1" to "Canara ai1"
     )
 
-    // Regex for matching currency amounts: ₹350, Rs. 350.00, Rs 500, INR 1,200.50, debited by 250
+    // Regex for matching currency amounts: ₹350, Rs. 350.00, Rs 500, INR 1,200.50, debited by 250, transfer of 500
     private val AMOUNT_REGEX = Pattern.compile(
-        """(?:(?:₹|Rs\.?|INR)\s*|(?:(?:debited|credited)\s+(?:by|for|with)\s*(?:₹|Rs\.?|INR)?\s*)|(?:(?:paid|sent)\s+(?:₹|Rs\.?|INR)?\s*))([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)""",
+        """(?:(?:₹|Rs\.?|INR)\s*|(?:(?:debited|credited)\s+(?:by|for|with|of)?\s*(?:₹|Rs\.?|INR)?\s*)|(?:(?:paid|sent|transfer of|payment of|spent)\s+(?:₹|Rs\.?|INR)?\s*))([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)""",
         Pattern.CASE_INSENSITIVE
     )
 
@@ -100,16 +106,36 @@ object UpiNotificationParser {
 
     private fun isNonTransactionNotification(text: String): Boolean {
         val lower = text.lowercase()
-        return lower.contains("otp") ||
-                lower.contains("verification code") ||
-                lower.contains("login alert") ||
-                lower.contains("requested money") ||
-                lower.contains("request from") ||
-                lower.contains("payment request") ||
-                lower.contains("offer") ||
-                lower.contains("cashback available") ||
-                lower.contains("discount on") ||
+        // If it's an explicit payment confirmation, it is NEVER discarded as a non-transaction
+        val hasTransactionSignal = lower.contains("paid") ||
+                lower.contains("debited") ||
+                lower.contains("sent") ||
+                lower.contains("transferred") ||
+                lower.contains("spent") ||
+                lower.contains("payment to") ||
+                lower.contains("payment at") ||
+                lower.contains("credited")
+
+        if (lower.contains("otp") ||
+            lower.contains("verification code") ||
+            lower.contains("login alert") ||
+            lower.contains("requested money") ||
+            lower.contains("request from") ||
+            lower.contains("payment request")
+        ) {
+            return true
+        }
+
+        if (!hasTransactionSignal) {
+            if (lower.contains("offer") ||
+                lower.contains("cashback") ||
+                lower.contains("discount") ||
                 lower.contains("reminder")
+            ) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun isDebitTransaction(text: String): Boolean {

@@ -293,6 +293,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             if (!initialFamId.isNullOrBlank()) {
                 familyLedgerRepository.startSync(initialFamId, currentUserId)
             }
+            repository.deduplicateTransactions()
         }
     }
 
@@ -854,6 +855,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             val isFamily = targetScope == FinanceScope.FAMILY
             val fId = if (isFamily) getOrCreateFamilyIdSync() else null
             val creator = if (isFamily) (memberId ?: currentUserId) else null
+            val generatedTxServerId = UUID.randomUUID().toString()
 
             // 1. Direct write to decoupled high-reliability family ledger if in family scope
             if (isFamily && fId != null) {
@@ -885,10 +887,11 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                         note = note,
                         financeScope = if (isFamily) FinanceScope.FAMILY else FinanceScope.PERSONAL,
                         familyId = fId,
-                        createdByUserId = creator,
+                        createdByUserId = creator ?: currentUserName,
                         dateMillis = dateMillis,
                         upiId = upiId,
                         upiTransactionId = upiTransactionId,
+                        serverId = generatedTxServerId,
                         syncStatus = "PENDING_CREATE"
                     )
                 )
@@ -932,6 +935,10 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
     fun dismissDetectedUpiPayment() {
         _detectedUpiPayment.value = null
+    }
+
+    fun showDetectedUpiPayment(payment: com.example.data.upi.ExtractedUpiPayment) {
+        _detectedUpiPayment.value = payment
     }
 
     fun confirmDetectedUpiPayment(

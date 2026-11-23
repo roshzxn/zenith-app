@@ -63,6 +63,7 @@ fun AddTransactionDialog(
     var showCategoryPickerSheet by remember { mutableStateOf(false) }
     var showScopeDropdown by remember { mutableStateOf(false) }
     var showMemberDropdown by remember { mutableStateOf(false) }
+    var isSubmitting by remember { mutableStateOf(false) }
 
     val todayFormatted = remember { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date()) }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
@@ -461,12 +462,13 @@ fun AddTransactionDialog(
                 Spacer(modifier = Modifier.height(22.dp))
 
                 // --- 8. SAVE BUTTON ---
-                val isValid = (amountText.toDoubleOrNull() ?: 0.0) > 0 && title.isNotBlank()
+                val isValid = (amountText.toDoubleOrNull() ?: 0.0) > 0 && title.isNotBlank() && !isSubmitting
 
                 Button(
                     onClick = {
                         val parsedAmount = amountText.toDoubleOrNull() ?: 0.0
-                        if (isValid) {
+                        if (isValid && !isSubmitting) {
+                            isSubmitting = true
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             onAdd(
                                 title.trim(),
@@ -481,6 +483,7 @@ fun AddTransactionDialog(
                             )
                         }
                     },
+                    enabled = isValid && !isSubmitting,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
@@ -488,8 +491,7 @@ fun AddTransactionDialog(
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (selectedType == TransactionType.EXPENSE) ExpenseRed else IncomeGreen
-                    ),
-                    enabled = isValid
+                    )
                 ) {
                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))

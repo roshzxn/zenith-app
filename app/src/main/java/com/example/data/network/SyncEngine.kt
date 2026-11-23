@@ -6,6 +6,7 @@ import com.example.data.models.*
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.util.UUID
@@ -28,6 +29,7 @@ class SyncEngine(
     private val savingsGoalDao: SavingsGoalDao? = null
 ) {
     private val tag = "SyncEngine"
+    private val syncMutex = kotlinx.coroutines.sync.Mutex()
 
     fun isValidUuid(id: String?): Boolean {
         if (id.isNullOrBlank()) return false
@@ -64,17 +66,19 @@ class SyncEngine(
 
         val effectiveFamId = activeFamilyId ?: try { familyDao.getFirstFamily()?.id } catch (e: Exception) { null }
 
-        try {
-            val txSuccess = syncPersonalTransactions(userId)
-            val famSuccess = if (!effectiveFamId.isNullOrBlank() && isValidUuid(effectiveFamId)) {
-                syncFamilyTransactions(effectiveFamId, userId)
-            } else true
-            val budgetSuccess = syncPersonalBudgets(userId)
-            val goalsSuccess = syncPersonalSavingsGoals(userId)
-            txSuccess && famSuccess && budgetSuccess && goalsSuccess
-        } catch (e: Exception) {
-            Log.e(tag, "syncAll error: ${e.message}", e)
-            false
+        syncMutex.withLock {
+            try {
+                val txSuccess = syncPersonalTransactions(userId)
+                val famSuccess = if (!effectiveFamId.isNullOrBlank() && isValidUuid(effectiveFamId)) {
+                    syncFamilyTransactions(effectiveFamId, userId)
+                } else true
+                val budgetSuccess = syncPersonalBudgets(userId)
+                val goalsSuccess = syncPersonalSavingsGoals(userId)
+                txSuccess && famSuccess && budgetSuccess && goalsSuccess
+            } catch (e: Exception) {
+                Log.e(tag, "syncAll error: ${e.message}", e)
+                false
+            }
         }
     }
 
@@ -195,25 +199,47 @@ class SyncEngine(
                 val isFamily = dto.financeScope?.equals("FAMILY", ignoreCase = true) == true && !dto.familyId.isNullOrBlank()
                 if (isFamily) continue
 
-                val existing = transactionDao.getTransactionByServerId(dto.id)
+                var existing = transactionDao.getTransactionByServerId(dto.id)
+                val txDateMillis = parseIsoTimestamp(dto.transactionDate)
+                val txUpdatedMillis = parseIsoTimestamp(dto.updatedAt ?: dto.createdAt)
+                val txTitle = dto.title?.takeIf { it.isNotBlank() }
+                    ?: dto.description?.takeIf { it.isNotBlank() }
+                    ?: "Transaction"
+                val txCategory = dto.category ?: dto.categoryId ?: "General"
+                val txType = try {
+                    val typeStr = (dto.transactionType ?: dto.type ?: "EXPENSE").uppercase()
+                    TransactionType.valueOf(typeStr)
+                } catch (e: Exception) {
+                    TransactionType.EXPENSE
+                }
+
+                // Deduplication guard: check local transactions with matching amount, type and date within 60s
+                if (existing == null && !dto.isDeleted) {
+                    val dupes = transactionDao.findPotentialDuplicates(
+                        amount = dto.amount,
+                        type = txType,
+                        scope = FinanceScope.PERSONAL,
+                        startMillis = txDateMillis - 60_000L,
+                        endMillis = txDateMillis + 60_000L
+                    )
+                    val match = dupes.firstOrNull { it.serverId.isNullOrBlank() || it.serverId == dto.id }
+                    if (match != null) {
+                        existing = match
+                        transactionDao.updateTransaction(
+                            existing.copy(
+                                serverId = dto.id,
+                                syncStatus = "SYNCED",
+                                updatedAt = maxOf(existing.updatedAt, txUpdatedMillis)
+                            )
+                        )
+                    }
+                }
+
                 if (dto.isDeleted) {
                     if (existing != null) {
                         transactionDao.deleteTransaction(existing)
                     }
                 } else {
-                    val txDateMillis = parseIsoTimestamp(dto.transactionDate)
-                    val txUpdatedMillis = parseIsoTimestamp(dto.updatedAt ?: dto.createdAt)
-                    val txTitle = dto.title?.takeIf { it.isNotBlank() }
-                        ?: dto.description?.takeIf { it.isNotBlank() }
-                        ?: "Transaction"
-                    val txCategory = dto.category ?: dto.categoryId ?: "General"
-                    val txType = try {
-                        val typeStr = (dto.transactionType ?: dto.type ?: "EXPENSE").uppercase()
-                        TransactionType.valueOf(typeStr)
-                    } catch (e: Exception) {
-                        TransactionType.EXPENSE
-                    }
-
                     if (existing == null) {
                         val newEntity = TransactionEntity(
                             title = txTitle,
@@ -284,6 +310,8 @@ class SyncEngine(
                 category = localTx.category.ifBlank { "Other" },
                 description = localTx.note.ifBlank { localTx.title.ifBlank { "Transaction" } },
                 paymentMethod = localTx.paymentMethod,
+                paidByName = localTx.createdByUserId,
+                paidByMemberId = localTx.createdByUserId.takeIf { isValidUuid(it) },
                 upiId = localTx.upiId,
                 upiTransactionId = localTx.upiTransactionId,
                 transactionDate = Instant.ofEpochMilli(localTx.dateMillis).toString(),
@@ -373,25 +401,49 @@ class SyncEngine(
                 .decodeList<TransactionDto>()
 
             for (dto in remoteTxs) {
-                val existing = transactionDao.getTransactionByServerId(dto.id)
+                var existing = transactionDao.getTransactionByServerId(dto.id)
+                val txDateMillis = parseIsoTimestamp(dto.transactionDate)
+                val txUpdatedMillis = parseIsoTimestamp(dto.updatedAt ?: dto.createdAt)
+                val txTitle = dto.title?.takeIf { it.isNotBlank() }
+                    ?: dto.description?.takeIf { it.isNotBlank() }
+                    ?: "Family Transaction"
+                val txCategory = dto.category ?: dto.categoryId ?: "General"
+                val txType = try {
+                    val typeStr = (dto.transactionType ?: dto.type ?: "EXPENSE").uppercase()
+                    TransactionType.valueOf(typeStr)
+                } catch (e: Exception) {
+                    TransactionType.EXPENSE
+                }
+                val resolvedCreator = dto.paidByName?.takeIf { it.isNotBlank() } ?: dto.userId ?: userId
+
+                // Deduplication guard for family transactions
+                if (existing == null && !dto.isDeleted) {
+                    val dupes = transactionDao.findPotentialDuplicates(
+                        amount = dto.amount,
+                        type = txType,
+                        scope = FinanceScope.FAMILY,
+                        startMillis = txDateMillis - 60_000L,
+                        endMillis = txDateMillis + 60_000L
+                    )
+                    val match = dupes.firstOrNull { it.serverId.isNullOrBlank() || it.serverId == dto.id }
+                    if (match != null) {
+                        existing = match
+                        transactionDao.updateTransaction(
+                            existing.copy(
+                                serverId = dto.id,
+                                createdByUserId = resolvedCreator,
+                                syncStatus = "SYNCED",
+                                updatedAt = maxOf(existing.updatedAt, txUpdatedMillis)
+                            )
+                        )
+                    }
+                }
+
                 if (dto.isDeleted) {
                     if (existing != null) {
                         transactionDao.deleteTransaction(existing)
                     }
                 } else {
-                    val txDateMillis = parseIsoTimestamp(dto.transactionDate)
-                    val txUpdatedMillis = parseIsoTimestamp(dto.updatedAt ?: dto.createdAt)
-                    val txTitle = dto.title?.takeIf { it.isNotBlank() }
-                        ?: dto.description?.takeIf { it.isNotBlank() }
-                        ?: "Family Transaction"
-                    val txCategory = dto.category ?: dto.categoryId ?: "General"
-                    val txType = try {
-                        val typeStr = (dto.transactionType ?: dto.type ?: "EXPENSE").uppercase()
-                        TransactionType.valueOf(typeStr)
-                    } catch (e: Exception) {
-                        TransactionType.EXPENSE
-                    }
-
                     if (existing == null) {
                         val newEntity = TransactionEntity(
                             title = txTitle,
@@ -405,7 +457,7 @@ class SyncEngine(
                             upiTransactionId = dto.upiTransactionId,
                             financeScope = FinanceScope.FAMILY,
                             familyId = familyId,
-                            createdByUserId = dto.userId ?: userId,
+                            createdByUserId = resolvedCreator,
                             serverId = dto.id,
                             syncStatus = "SYNCED",
                             updatedAt = txUpdatedMillis,
@@ -423,6 +475,7 @@ class SyncEngine(
                             dateMillis = txDateMillis,
                             upiId = dto.upiId,
                             upiTransactionId = dto.upiTransactionId,
+                            createdByUserId = resolvedCreator,
                             syncStatus = "SYNCED",
                             updatedAt = txUpdatedMillis,
                             isDeleted = false

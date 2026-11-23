@@ -126,6 +126,40 @@ class CashFlowRepository(
         return transactionDao.getTransactionByServerId(serverId)
     }
 
+    suspend fun findPotentialDuplicates(
+        amount: Double,
+        type: TransactionType,
+        scope: FinanceScope,
+        startMillis: Long,
+        endMillis: Long
+    ): List<TransactionEntity> {
+        return transactionDao.findPotentialDuplicates(amount, type, scope, startMillis, endMillis)
+    }
+
+    suspend fun deduplicateTransactions() {
+        try {
+            val all = transactionDao.getAllTransactionsOnce()
+            val grouped = all.groupBy { "${it.title.trim().lowercase()}_${it.amount}_${it.type}_${it.financeScope}" }
+            for ((_, group) in grouped) {
+                if (group.size <= 1) continue
+                val sorted = group.sortedWith(
+                    compareBy<TransactionEntity> { it.serverId.isNullOrBlank() }
+                        .thenBy { it.syncStatus != "SYNCED" }
+                        .thenBy { it.id }
+                )
+                val keep = sorted.first()
+                val duplicates = sorted.drop(1).filter { dup ->
+                    kotlin.math.abs(dup.dateMillis - keep.dateMillis) <= 60_000L
+                }
+                for (dup in duplicates) {
+                    transactionDao.deleteTransactionById(dup.id)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("CashFlowRepo", "deduplicateTransactions error: ${e.message}")
+        }
+    }
+
     suspend fun updateTransaction(transaction: TransactionEntity) {
         transactionDao.updateTransaction(transaction.copy(syncStatus = "PENDING_UPDATE", updatedAt = System.currentTimeMillis()))
     }

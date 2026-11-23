@@ -51,6 +51,7 @@ fun UpiPaymentDetectedModal(
     var selectedCategory by remember { mutableStateOf(payment.detectedCategory) }
     var selectedScope by remember { mutableStateOf(FinanceScope.PERSONAL) }
     var selectedMemberId by remember { mutableStateOf<String?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
 
     val categories = listOf(
         "Food & Dining",
@@ -309,16 +310,20 @@ fun UpiPaymentDetectedModal(
 
                     Button(
                         onClick = {
-                            onConfirmSave(
-                                titleText.ifBlank { payment.payeeName },
-                                payment.amount,
-                                selectedCategory,
-                                selectedScope,
-                                selectedMemberId,
-                                payment.upiId,
-                                payment.upiTransactionId
-                            )
+                            if (!isSubmitting) {
+                                isSubmitting = true
+                                onConfirmSave(
+                                    titleText.ifBlank { payment.payeeName },
+                                    payment.amount,
+                                    selectedCategory,
+                                    selectedScope,
+                                    selectedMemberId,
+                                    payment.upiId,
+                                    payment.upiTransactionId
+                                )
+                            }
                         },
+                        enabled = !isSubmitting,
                         colors = ButtonDefaults.buttonColors(containerColor = IncomeGreen),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1.5f)
