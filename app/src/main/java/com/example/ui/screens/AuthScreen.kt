@@ -149,6 +149,8 @@ fun AuthScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(brush = AmbientBackgroundBrush)
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(horizontal = 20.dp)
             .testTag("zenith_auth_screen")
     ) {
@@ -158,7 +160,7 @@ fun AuthScreen(
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(36.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Top Bar with Back Button
             Row(

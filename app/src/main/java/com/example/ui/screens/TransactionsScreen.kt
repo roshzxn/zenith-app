@@ -299,12 +299,13 @@ fun TransactionsScreen(
                 filteredTransactions.groupBy { tx ->
                     val date = Date(tx.dateMillis)
                     val now = Calendar.getInstance()
+                    val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
                     val txCal = Calendar.getInstance().apply { time = date }
                     when {
                         now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
                                 now.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Today"
-                        now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
-                                now.get(Calendar.DAY_OF_YEAR) - txCal.get(Calendar.DAY_OF_YEAR) == 1 -> "Yesterday"
+                        yesterday.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
+                                yesterday.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
                         else -> java.text.SimpleDateFormat("EEEE, dd MMMM yyyy", Locale.getDefault()).format(date)
                     }
                 }

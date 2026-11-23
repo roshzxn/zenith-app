@@ -587,7 +587,13 @@ fun TransactionDetailModal(
                     // Amount
                     OutlinedTextField(
                         value = editAmountText,
-                        onValueChange = { editAmountText = it },
+                        onValueChange = { input ->
+                            val normalized = input.replace(',', '.')
+                            val clean = normalized.filter { it.isDigit() || it == '.' }
+                            if (clean.count { it == '.' } <= 1) {
+                                editAmountText = clean
+                            }
+                        },
                         label = { Text("Amount ($currencySymbol)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
@@ -659,7 +665,7 @@ fun TransactionDetailModal(
 
                         Button(
                             onClick = {
-                                val parsedAmt = editAmountText.toDoubleOrNull() ?: transaction.amount
+                                val parsedAmt = editAmountText.replace(',', '.').toDoubleOrNull() ?: transaction.amount
                                 if (editTitle.isNotBlank() && parsedAmt > 0) {
                                     val updated = transaction.copy(
                                         title = editTitle,

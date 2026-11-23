@@ -25,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -322,14 +323,15 @@ fun AddTransactionDialog(
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { input ->
-                        val clean = input.filter { it.isDigit() || it == '.' }
+                        val normalized = input.replace(',', '.')
+                        val clean = normalized.filter { it.isDigit() || it == '.' }
                         if (clean.count { it == '.' } <= 1) {
                             amountText = clean
                         }
                     },
                     label = { Text("Amount ($currencySymbol)") },
                     placeholder = { Text("0.00", color = SlateDarkTextMuted) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = if (selectedType == TransactionType.EXPENSE) PastelRose else PastelGreen,
@@ -353,6 +355,7 @@ fun AddTransactionDialog(
                     onValueChange = { title = it },
                     label = { Text("Title / Description") },
                     placeholder = { Text("e.g. Grocery, Lunch, Salary", color = SlateDarkTextMuted) },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = EmeraldDarkPrimary,
@@ -441,6 +444,7 @@ fun AddTransactionDialog(
                     onValueChange = { note = it },
                     label = { Text("Note (Optional)") },
                     placeholder = { Text("Additional details...", color = SlateDarkTextMuted) },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = EmeraldDarkPrimary,
@@ -618,6 +622,7 @@ fun AddTransactionDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .navigationBarsPadding()
                     .padding(horizontal = 20.dp, vertical = 10.dp)
             ) {
                 Text(

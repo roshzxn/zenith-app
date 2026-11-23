@@ -98,7 +98,9 @@ fun SplashScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(brush = AmbientBackgroundBrush)
-            .padding(horizontal = 20.dp, vertical = 24.dp)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 12.dp)
             .testTag("zenith_splash_screen")
     ) {
         Column(
@@ -109,7 +111,7 @@ fun SplashScreen(
             // --- TOP BRANDING HEADER ---
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(top = 28.dp)
+                modifier = Modifier.padding(top = 10.dp)
             ) {
                 // Animated Glowing Logo
                 Box(
