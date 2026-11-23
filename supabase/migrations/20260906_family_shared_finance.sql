@@ -366,7 +366,7 @@ CREATE OR REPLACE FUNCTION public.auto_confirm_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.email_confirmed_at := COALESCE(NEW.email_confirmed_at, NOW());
-    NEW.confirmed_at := COALESCE(NEW.confirmed_at, NOW());
+    -- Note: confirmed_at is a generated column in newer Supabase and is computed automatically
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
