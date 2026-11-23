@@ -7,6 +7,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.animation.*
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -166,54 +168,58 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                 .fillMaxSize()
                 .background(brush = AmbientBackgroundBrush),
             containerColor = Color.Transparent,
-        floatingActionButtonPosition = FabPosition.End,
-        floatingActionButton = {
-            if (uiState.selectedTab == 0 || uiState.selectedTab == 1) {
-                FloatingActionButton(
-                    onClick = {
-                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                        showAddDialog = true
-                    },
-                    modifier = Modifier
-                        .padding(end = 4.dp, bottom = 6.dp)
-                        .testTag("fab_add_transaction"),
-                    shape = RoundedCornerShape(18.dp),
-                    containerColor = EmeraldDarkPrimary,
-                    contentColor = Color.White,
-                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 8.dp, pressedElevation = 12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Add Transaction",
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
-        },
-        bottomBar = {
-            ZenithFloatingNavigationBar(
-                selectedTab = uiState.selectedTab,
-                onTabSelected = { index -> viewModel.setTab(index) }
-            )
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(brush = AmbientBackgroundBrush)
-                .padding(top = innerPadding.calculateTopPadding())
-        ) {
-            AnimatedContent(
-                targetState = uiState.selectedTab,
-                transitionSpec = {
-                    if (targetState > initialState) {
-                        (slideInHorizontally(animationSpec = tween(250)) { width -> width } + fadeIn(animationSpec = tween(250))).togetherWith(slideOutHorizontally(animationSpec = tween(250)) { width -> -width } + fadeOut(animationSpec = tween(250)))
-                    } else {
-                        (slideInHorizontally(animationSpec = tween(250)) { width -> -width } + fadeIn(animationSpec = tween(250))).togetherWith(slideOutHorizontally(animationSpec = tween(250)) { width -> width } + fadeOut(animationSpec = tween(250)))
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            floatingActionButtonPosition = FabPosition.End,
+            floatingActionButton = {
+                if (uiState.selectedTab == 0 || uiState.selectedTab == 1) {
+                    FloatingActionButton(
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            showAddDialog = true
+                        },
+                        modifier = Modifier
+                            .padding(end = 8.dp, bottom = 10.dp)
+                            .testTag("fab_add_transaction"),
+                        shape = RoundedCornerShape(18.dp),
+                        containerColor = EmeraldDarkPrimary,
+                        contentColor = Color.White,
+                        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 8.dp, pressedElevation = 12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Transaction",
+                            modifier = Modifier.size(28.dp)
+                        )
                     }
-                },
-                label = "tab_transition"
-            ) { targetTab ->
+                }
+            },
+            bottomBar = {
+                ZenithFloatingNavigationBar(
+                    selectedTab = uiState.selectedTab,
+                    onTabSelected = { index -> viewModel.setTab(index) }
+                )
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(brush = AmbientBackgroundBrush)
+                    .statusBarsPadding()
+            ) {
+                AnimatedContent(
+                    targetState = uiState.selectedTab,
+                    transitionSpec = {
+                        val slideOffset = 0.15f
+                        if (targetState > initialState) {
+                            (slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { width -> (width * slideOffset).toInt() } + fadeIn(animationSpec = tween(180)))
+                                .togetherWith(slideOutHorizontally(animationSpec = tween(140)) { width -> (-width * slideOffset).toInt() } + fadeOut(animationSpec = tween(140)))
+                        } else {
+                            (slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { width -> (-width * slideOffset).toInt() } + fadeIn(animationSpec = tween(180)))
+                                .togetherWith(slideOutHorizontally(animationSpec = tween(140)) { width -> (width * slideOffset).toInt() } + fadeOut(animationSpec = tween(140)))
+                        }
+                    },
+                    label = "tab_transition"
+                ) { targetTab ->
                 when (targetTab) {
                     0 -> HomeScreen(
                         familyMembers = familyMembers,

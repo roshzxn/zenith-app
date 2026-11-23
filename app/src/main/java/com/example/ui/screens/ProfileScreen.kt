@@ -107,7 +107,7 @@ fun ProfileScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 108.dp)
+        contentPadding = PaddingValues(top = 16.dp, bottom = 144.dp)
     ) {
         // --- 1. USER PROFILE HEADER CARD ---
         item {

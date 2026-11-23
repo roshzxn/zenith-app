@@ -312,7 +312,7 @@ fun TransactionsScreen(
 
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(bottom = 108.dp)
+                contentPadding = PaddingValues(bottom = 144.dp)
             ) {
                 groupedTransactions.forEach { (dateHeader, txList) ->
                     item(key = "header_$dateHeader") {
