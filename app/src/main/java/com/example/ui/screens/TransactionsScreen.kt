@@ -46,6 +46,26 @@ fun TransactionsScreen(
 ) {
     var selectedTransactionForDetails by remember { mutableStateOf<TransactionEntity?>(null) }
     var transactionToDelete by remember { mutableStateOf<TransactionEntity?>(null) }
+    var selectedDateRange by remember { mutableStateOf("ALL") }
+
+    val filteredTransactions = remember(state.transactions, selectedDateRange) {
+        val now = Calendar.getInstance()
+        when (selectedDateRange) {
+            "TODAY" -> state.transactions.filter { tx ->
+                val cal = Calendar.getInstance().apply { timeInMillis = tx.dateMillis }
+                cal.get(Calendar.YEAR) == now.get(Calendar.YEAR) && cal.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR)
+            }
+            "THIS_WEEK" -> state.transactions.filter { tx ->
+                val cal = Calendar.getInstance().apply { timeInMillis = tx.dateMillis }
+                cal.get(Calendar.YEAR) == now.get(Calendar.YEAR) && cal.get(Calendar.WEEK_OF_YEAR) == now.get(Calendar.WEEK_OF_YEAR)
+            }
+            "THIS_MONTH" -> state.transactions.filter { tx ->
+                val cal = Calendar.getInstance().apply { timeInMillis = tx.dateMillis }
+                cal.get(Calendar.YEAR) == now.get(Calendar.YEAR) && cal.get(Calendar.MONTH) == now.get(Calendar.MONTH)
+            }
+            else -> state.transactions
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -153,6 +173,28 @@ fun TransactionsScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        // --- 3.5 DATE RANGE ROW ---
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            val dateRanges = listOf(
+                "ALL" to "All Time",
+                "THIS_MONTH" to "This Month",
+                "THIS_WEEK" to "This Week",
+                "TODAY" to "Today"
+            )
+            items(dateRanges) { (key, label) ->
+                FilterChip(
+                    selected = selectedDateRange == key,
+                    onClick = { selectedDateRange = key },
+                    label = { Text(label, fontSize = 11.sp, fontWeight = if (selectedDateRange == key) FontWeight.Bold else FontWeight.Normal) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         // --- 4. CATEGORY HORIZONTAL ROW ---
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -208,7 +250,7 @@ fun TransactionsScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         // --- 6. TRANSACTION LIST (Grouped by Date) ---
-        if (state.transactions.isEmpty()) {
+        if (filteredTransactions.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -237,7 +279,7 @@ fun TransactionsScreen(
                             color = SlateDarkTextPrimary
                         )
                         Text(
-                            text = "Your financial activity will appear here.",
+                            text = if (state.searchQuery.isNotBlank() || selectedDateRange != "ALL") "Try clearing filters to see more results." else "Your financial activity will appear here.",
                             fontSize = 12.sp,
                             color = SlateDarkTextSecondary
                         )
@@ -253,8 +295,8 @@ fun TransactionsScreen(
                 }
             }
         } else {
-            val groupedTransactions = remember(state.transactions) {
-                state.transactions.groupBy { tx ->
+            val groupedTransactions = remember(filteredTransactions) {
+                filteredTransactions.groupBy { tx ->
                     val date = Date(tx.dateMillis)
                     val now = Calendar.getInstance()
                     val txCal = Calendar.getInstance().apply { time = date }

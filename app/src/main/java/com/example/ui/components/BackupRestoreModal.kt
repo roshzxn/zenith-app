@@ -328,7 +328,8 @@ fun BackupRestoreModal(
                     }
                 } else {
                     // --- RESTORE BACKUP TAB ---
-                    if (restorePreview == null) {
+                    val currentPreview = restorePreview
+                    if (currentPreview == null) {
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = GlassCardBg,
@@ -377,7 +378,7 @@ fun BackupRestoreModal(
                             }
                         }
                     } else {
-                        val prev = restorePreview!!
+                        val prev = currentPreview
                         Text(
                             text = "BACKUP DETAILS",
                             fontSize = 11.sp,

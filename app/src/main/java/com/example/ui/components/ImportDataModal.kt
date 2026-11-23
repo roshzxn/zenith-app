@@ -134,7 +134,8 @@ fun ImportDataModal(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (!isImportComplete) {
-                    if (validationResult == null) {
+                    val currentValidationResult = validationResult
+                    if (currentValidationResult == null) {
                         // --- 1. UPLOAD BOX ---
                         Surface(
                             shape = RoundedCornerShape(16.dp),
@@ -238,7 +239,7 @@ fun ImportDataModal(
                         }
                     } else {
                         // --- 3. PREVIEW & VALIDATION RESULTS ---
-                        val result = validationResult!!
+                        val result = currentValidationResult
 
                         Text(
                             text = "IMPORT PREVIEW",

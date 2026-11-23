@@ -303,17 +303,18 @@ fun TransactionDetailModal(
                                     }
                                 }
 
-                                if (receiptState != null) {
+                                val currentReceipt = receiptState
+                                if (currentReceipt != null) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = receiptState!!.merchantName,
+                                        text = currentReceipt.merchantName,
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = SlateDarkTextPrimary
                                     )
-                                    if (receiptState!!.receiptDate.isNotBlank()) {
+                                    if (currentReceipt.receiptDate.isNotBlank()) {
                                         Text(
-                                            text = "${receiptState!!.receiptDate} ${receiptState!!.receiptTime ?: ""}",
+                                            text = "${currentReceipt.receiptDate} ${currentReceipt.receiptTime ?: ""}",
                                             fontSize = 11.sp,
                                             color = SlateDarkTextSecondary
                                         )
@@ -364,19 +365,20 @@ fun TransactionDetailModal(
                                     }
 
                                     // Tax / Discount / Subtotal breakdown if present
-                                    if ((receiptState?.tax ?: 0.0) > 0 || (receiptState?.discount ?: 0.0) > 0 || (receiptState?.subtotal ?: 0.0) > 0) {
+                                    val rState = receiptState
+                                    if (rState != null && ((rState.tax > 0) || (rState.discount > 0) || (rState.subtotal > 0))) {
                                         Spacer(modifier = Modifier.height(6.dp))
                                         HorizontalDivider(color = GlassBorderColor)
                                         Spacer(modifier = Modifier.height(6.dp))
 
-                                        if ((receiptState?.subtotal ?: 0.0) > 0) {
-                                            ReceiptSummaryRow(label = "Subtotal", amount = "$currencySymbol${String.format(Locale.US, "%.2f", receiptState!!.subtotal)}")
+                                        if (rState.subtotal > 0) {
+                                            ReceiptSummaryRow(label = "Subtotal", amount = "$currencySymbol${String.format(Locale.US, "%.2f", rState.subtotal)}")
                                         }
-                                        if ((receiptState?.tax ?: 0.0) > 0) {
-                                            ReceiptSummaryRow(label = "Tax / GST", amount = "+$currencySymbol${String.format(Locale.US, "%.2f", receiptState!!.tax)}")
+                                        if (rState.tax > 0) {
+                                            ReceiptSummaryRow(label = "Tax / GST", amount = "+$currencySymbol${String.format(Locale.US, "%.2f", rState.tax)}")
                                         }
-                                        if ((receiptState?.discount ?: 0.0) > 0) {
-                                            ReceiptSummaryRow(label = "Discount", amount = "-$currencySymbol${String.format(Locale.US, "%.2f", receiptState!!.discount)}", color = IncomeGreen)
+                                        if (rState.discount > 0) {
+                                            ReceiptSummaryRow(label = "Discount", amount = "-$currencySymbol${String.format(Locale.US, "%.2f", rState.discount)}", color = IncomeGreen)
                                         }
                                     }
                                 }
@@ -1124,9 +1126,10 @@ fun ReceiptImageViewerDialog(
                     },
                 contentAlignment = Alignment.Center
             ) {
-                if (bitmap != null) {
+                val b = bitmap
+                if (b != null) {
                     Image(
-                        bitmap = bitmap!!.asImageBitmap(),
+                        bitmap = b.asImageBitmap(),
                         contentDescription = "Original Receipt Image",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier

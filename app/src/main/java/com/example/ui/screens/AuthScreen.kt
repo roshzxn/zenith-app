@@ -326,23 +326,60 @@ fun AuthScreen(
                             .fillMaxWidth()
                             .padding(bottom = 14.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            modifier = Modifier.padding(12.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.ErrorOutline,
-                                contentDescription = null,
-                                tint = ExpenseRed,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = error,
-                                fontSize = 12.sp,
-                                color = SlateDarkTextPrimary,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = ExpenseRed,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = error,
+                                    fontSize = 12.sp,
+                                    color = SlateDarkTextPrimary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            // Quick 1-tap offline fallback if network/cloud fails
+                            val isNetworkOrCloudError = error.contains("network", ignoreCase = true) ||
+                                    error.contains("connect", ignoreCase = true) ||
+                                    error.contains("reach", ignoreCase = true) ||
+                                    error.contains("offline", ignoreCase = true) ||
+                                    error.contains("internet", ignoreCase = true)
+
+                            if (isNetworkOrCloudError) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Button(
+                                    onClick = onContinueAsGuest,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(38.dp)
+                                        .testTag("auth_btn_offline_fallback"),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.LockOpen,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp),
+                                        tint = Color.White
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Continue in Offline Vault (No Cloud Required)",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
                         }
                     }
                 }

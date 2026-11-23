@@ -479,6 +479,17 @@ fun BudgetsAndGoalsScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
+                        targetValue = progress.coerceIn(0f, 1f),
+                        animationSpec = androidx.compose.animation.core.tween(500),
+                        label = "budget_progress"
+                    )
+                    val progressColor = when {
+                        isOver -> ExpenseRed
+                        progress >= 0.75f -> PastelAmber
+                        else -> EmeraldDarkPrimary
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -493,7 +504,7 @@ fun BudgetsAndGoalsScreen(
                             text = "${(progress * 100).toInt()}% Used",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (isOver) ExpenseRed else EmeraldDarkPrimary,
+                            color = progressColor,
                             maxLines = 1
                         )
                     }
@@ -501,12 +512,12 @@ fun BudgetsAndGoalsScreen(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     LinearProgressIndicator(
-                        progress = { progress },
+                        progress = { animatedProgress },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(8.dp)
                             .clip(CircleShape),
-                        color = if (isOver) ExpenseRed else EmeraldDarkPrimary,
+                        color = progressColor,
                         trackColor = SlateDarkSurfaceVariant
                     )
                 }
@@ -684,13 +695,19 @@ fun BudgetsAndGoalsScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
+                    val animatedGoalProgress by androidx.compose.animation.core.animateFloatAsState(
+                        targetValue = progress.coerceIn(0f, 1f),
+                        animationSpec = androidx.compose.animation.core.tween(500),
+                        label = "goal_progress"
+                    )
+
                     LinearProgressIndicator(
-                        progress = { progress },
+                        progress = { animatedGoalProgress },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(8.dp)
                             .clip(CircleShape),
-                        color = EmeraldDarkPrimary,
+                        color = if (progress >= 1f) GoldAccent else EmeraldDarkPrimary,
                         trackColor = SlateDarkSurfaceVariant
                     )
                 }
@@ -1059,7 +1076,42 @@ fun DepositGoalModal(
                         .testTag("deposit_amount_input")
                 )
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Fast deposit shortcut chips
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(500.0, 1000.0, 2500.0, 5000.0).forEach { quickAmt ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = SlateDarkSurfaceVariant,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val current = depositText.toDoubleOrNull() ?: 0.0
+                                    depositText = (current + quickAmt).toInt().toString()
+                                }
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "+$currencySymbol${quickAmt.toInt()}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EmeraldDarkPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
 
                 Button(
                     onClick = {

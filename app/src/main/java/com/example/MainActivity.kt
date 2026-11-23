@@ -142,6 +142,7 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
     val familyMembers by viewModel.familyMembers.collectAsStateWithLifecycle(initialValue = emptyList())
     var showAddDialog by remember { mutableStateOf(false) }
     var showFamilyMembersDialog by remember { mutableStateOf(false) }
+    var showFullFamilyLedger by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val totalIncome = remember(uiState.transactions) { viewModel.getTotalIncome(uiState.transactions) }
@@ -149,11 +150,22 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
     val netBalance = remember(uiState.transactions) { viewModel.getNetBalance(uiState.transactions) }
     val familySettlementSummary by viewModel.familySettlementSummary.collectAsStateWithLifecycle()
 
-    Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(brush = AmbientBackgroundBrush),
-        containerColor = Color.Transparent,
+    BackHandler(enabled = showFullFamilyLedger) {
+        showFullFamilyLedger = false
+    }
+
+    if (showFullFamilyLedger) {
+        com.example.ui.familyledger.FamilyLedgerScreen(
+            viewModel = familyLedgerViewModel,
+            state = familyLedgerUiState,
+            onBackToPersonal = { showFullFamilyLedger = false }
+        )
+    } else {
+        Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(brush = AmbientBackgroundBrush),
+            containerColor = Color.Transparent,
         floatingActionButtonPosition = FabPosition.End,
         floatingActionButton = {
             if (uiState.selectedTab == 0 || uiState.selectedTab == 1) {
@@ -236,7 +248,8 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                                     android.widget.Toast.LENGTH_SHORT
                                 ).show()
                             }
-                        }
+                        },
+                        onOpenFullFamilyLedger = { showFullFamilyLedger = true }
                     )
                     1 -> TransactionsScreen(
                         state = uiState,
@@ -465,4 +478,5 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
             )
         }
     }
+}
 }

@@ -937,7 +937,7 @@ fun UserProfileGlassHeader(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (!isGuest) userName else "Guest Mode",
+                        text = if (!isGuest) userName else "Offline Vault (Private)",
                         fontSize = 17.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = SlateDarkTextPrimary
@@ -955,7 +955,7 @@ fun UserProfileGlassHeader(
                 }
 
                 Text(
-                    text = if (!isGuest) (userEmail ?: "Cloud Account") else "Local Vault on Device",
+                    text = if (!isGuest) (userEmail ?: "Cloud Account") else "Private Vault • 100% Stored On Device",
                     fontSize = 12.sp,
                     color = SlateDarkTextSecondary
                 )

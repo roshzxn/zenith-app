@@ -233,8 +233,8 @@ fun ReceiptScanModal(
     val takePictureLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success: Boolean ->
-        if (success && tempCameraUri != null) {
-            processImageForOcr(tempCameraUri!!)
+        if (success) {
+            tempCameraUri?.let { uri -> processImageForOcr(uri) }
         }
     }
 

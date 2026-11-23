@@ -460,8 +460,9 @@ fun FamilyLedgerScreen(
                         }
                     }
                 } else {
+                    val existingTx = transactionToEdit ?: return@AddEditLedgerTransactionDialog
                     viewModel.updateTransaction(
-                        existing = transactionToEdit!!,
+                        existing = existingTx,
                         title = title,
                         description = desc,
                         amount = amt,

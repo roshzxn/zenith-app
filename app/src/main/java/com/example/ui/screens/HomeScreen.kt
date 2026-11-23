@@ -77,7 +77,8 @@ fun HomeScreen(
     inviteCode: String = "",
     currentUserName: String = "You",
     syncUiState: SyncUiState = SyncUiState.Idle,
-    onSyncNow: (() -> Unit)? = null
+    onSyncNow: (() -> Unit)? = null,
+    onOpenFullFamilyLedger: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var selectedTransactionForDetails by remember { mutableStateOf<TransactionEntity?>(null) }
@@ -596,6 +597,30 @@ fun HomeScreen(
                                         )
                                     }
                                 }
+                            }
+                        }
+
+                        if (onOpenFullFamilyLedger != null) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = onOpenFullFamilyLedger,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(42.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = PastelCyan.copy(alpha = 0.2f)),
+                                border = BorderStroke(1.dp, PastelCyan.copy(alpha = 0.5f))
+                            ) {
+                                Icon(Icons.Default.Analytics, contentDescription = null, tint = PastelCyan, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Open Full Ledger & Split Analytics",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = PastelCyan
+                                )
+                                Spacer(modifier = Modifier.weight(1f))
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = PastelCyan, modifier = Modifier.size(15.dp))
                             }
                         }
                     }

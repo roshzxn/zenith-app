@@ -145,7 +145,7 @@ fun AddEditLedgerTransactionDialog(
             amountError = null
         }
 
-        if (hasError) return
+        if (hasError || parsedAmount == null) return
 
         val payerId = selectedMember?.memberId ?: selectedMember?.userId ?: currentUserId
         val payerName = selectedMember?.name ?: currentUserName
@@ -153,7 +153,7 @@ fun AddEditLedgerTransactionDialog(
         onSave(
             cleanTitle,
             description.trim(),
-            parsedAmount!!,
+            parsedAmount,
             selectedCategory,
             selectedType,
             selectedPaymentMethod,
@@ -279,9 +279,7 @@ fun AddEditLedgerTransactionDialog(
                     },
                     isError = amountError != null,
                     supportingText = {
-                        if (amountError != null) {
-                            Text(amountError!!, color = PastelRose, fontSize = 11.sp)
-                        }
+                        amountError?.let { Text(it, color = PastelRose, fontSize = 11.sp) }
                     },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     shape = RoundedCornerShape(14.dp),
@@ -310,9 +308,7 @@ fun AddEditLedgerTransactionDialog(
                     placeholder = { Text("e.g. Groceries, Electricity") },
                     isError = titleError != null,
                     supportingText = {
-                        if (titleError != null) {
-                            Text(titleError!!, color = PastelRose, fontSize = 11.sp)
-                        }
+                        titleError?.let { Text(it, color = PastelRose, fontSize = 11.sp) }
                     },
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(

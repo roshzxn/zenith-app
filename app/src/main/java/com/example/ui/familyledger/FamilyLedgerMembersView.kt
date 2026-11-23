@@ -385,7 +385,7 @@ fun FamilyLedgerMembersView(
                         label = { Text("Member Name") },
                         placeholder = { Text("e.g. Priya, Dad, Brother") },
                         isError = nameError != null,
-                        supportingText = { if (nameError != null) Text(nameError!!, color = PastelRose, fontSize = 11.sp) },
+                        supportingText = { nameError?.let { Text(it, color = PastelRose, fontSize = 11.sp) } },
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth().testTag("input_new_member_name"),
                         singleLine = true
