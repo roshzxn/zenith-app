@@ -244,6 +244,7 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                         onManageFamilyMembers = { showFamilyMembersDialog = true },
                         onNavigateToActivity = { viewModel.setTab(1) },
                         onNavigateToProfile = { viewModel.setTab(4) },
+                        onNavigateToBudgets = { viewModel.setTab(2) },
                         currentUserName = viewModel.currentUserName,
                         syncUiState = syncUiState,
                         onSyncNow = {
@@ -286,7 +287,15 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                             viewModel.saveSavingsGoalEntity(goal)
                         },
                         onDeleteSavingsGoal = { goal -> viewModel.deleteSavingsGoal(goal) },
-                        onDepositToGoal = { goal, amount -> viewModel.updateGoalDeposit(goal, amount) }
+                        onDepositToGoal = { goal, amount -> viewModel.updateGoalDeposit(goal, amount) },
+                        onSaveAutoPayReminder = { title, amount, category, paymentMethod, frequency, dueDayOfMonth, nextDueDateMillis, isAutoDebit, reminderDaysBefore, notes, reminderId ->
+                            viewModel.saveAutoPayReminder(
+                                title, amount, category, paymentMethod, frequency, dueDayOfMonth, nextDueDateMillis, isAutoDebit, reminderDaysBefore, notes, reminderId
+                            )
+                        },
+                        onDeleteAutoPayReminder = { reminder -> viewModel.deleteAutoPayReminder(reminder) },
+                        onTogglePauseAutoPayReminder = { reminder -> viewModel.togglePauseAutoPayReminder(reminder) },
+                        onMarkAutoPayPaid = { reminder -> viewModel.markAutoPayPaidAndLogTransaction(reminder) }
                     )
                     3 -> AnalyticsScreen(
                         state = uiState,

@@ -22,9 +22,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.example.data.models.AutoPayReminderEntity
 import com.example.data.models.BudgetEntity
 import com.example.data.models.SavingsGoalEntity
 import com.example.data.models.TransactionType
+import com.example.ui.components.AddAutoPayReminderDialog
 import com.example.ui.components.CleanCard
 import com.example.ui.components.GlassCard
 import com.example.ui.theme.*
@@ -38,7 +40,11 @@ fun BudgetsAndGoalsScreen(
     onDeleteBudget: (BudgetEntity) -> Unit,
     onSaveSavingsGoal: (SavingsGoalEntity) -> Unit,
     onDeleteSavingsGoal: (SavingsGoalEntity) -> Unit,
-    onDepositToGoal: (SavingsGoalEntity, Double) -> Unit
+    onDepositToGoal: (SavingsGoalEntity, Double) -> Unit,
+    onSaveAutoPayReminder: ((title: String, amount: Double, category: String, paymentMethod: String, frequency: String, dueDayOfMonth: Int, nextDueDateMillis: Long, isAutoDebit: Boolean, reminderDaysBefore: Int, notes: String, reminderId: Long) -> Unit)? = null,
+    onDeleteAutoPayReminder: ((AutoPayReminderEntity) -> Unit)? = null,
+    onTogglePauseAutoPayReminder: ((AutoPayReminderEntity) -> Unit)? = null,
+    onMarkAutoPayPaid: ((AutoPayReminderEntity) -> Unit)? = null
 ) {
     var showAddBudgetModal by remember { mutableStateOf(false) }
     var editingBudget by remember { mutableStateOf<BudgetEntity?>(null) }
@@ -48,6 +54,10 @@ fun BudgetsAndGoalsScreen(
     var editingGoal by remember { mutableStateOf<SavingsGoalEntity?>(null) }
     var goalToDelete by remember { mutableStateOf<SavingsGoalEntity?>(null) }
     var selectedGoalForDeposit by remember { mutableStateOf<SavingsGoalEntity?>(null) }
+
+    var showAddAutoPayModal by remember { mutableStateOf(false) }
+    var editingAutoPay by remember { mutableStateOf<AutoPayReminderEntity?>(null) }
+    var autoPayToDelete by remember { mutableStateOf<AutoPayReminderEntity?>(null) }
 
     var selectedPeriodFilter by remember { mutableStateOf("ALL") }
 
@@ -715,6 +725,238 @@ fun BudgetsAndGoalsScreen(
                 }
             }
         }
+
+        // --- 5. AUTO-PAY & RECURRING BILLS SECTION ---
+        item {
+            Spacer(modifier = Modifier.height(24.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f, fill = false)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Auto-Pay & Recurring Bills",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SlateDarkTextPrimary,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF8B5CF6).copy(alpha = 0.2f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = "${state.autoPayReminders.count { !it.isPaused }} Active",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFC4B5FD),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Track subscriptions, utilities & avoid late fees",
+                        fontSize = 12.sp,
+                        color = SlateDarkTextSecondary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        editingAutoPay = null
+                        showAddAutoPayModal = true
+                    },
+                    modifier = Modifier
+                        .height(42.dp)
+                        .testTag("add_autopay_btn"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("New Reminder", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+        }
+
+        if (state.autoPayReminders.isEmpty()) {
+            item {
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    backgroundColor = GlassCardBg
+                ) {
+                    Text(
+                        text = "No recurring bills or subscriptions added yet. Tap '+ New Reminder' to track Wi-Fi, Netflix, rent, or electricity deadlines!",
+                        fontSize = 13.sp,
+                        color = SlateDarkTextSecondary,
+                        modifier = Modifier.padding(14.dp)
+                    )
+                }
+            }
+        } else {
+            items(state.autoPayReminders, key = { "autopay_${it.id}" }) { reminder ->
+                val now = System.currentTimeMillis()
+                val diffDays = ((reminder.nextDueDateMillis - now) / (1000 * 60 * 60 * 24)).toInt()
+                val dueDateFormatted = remember(reminder.nextDueDateMillis) {
+                    java.text.SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(reminder.nextDueDateMillis))
+                }
+
+                CleanCard(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                    backgroundColor = SlateDarkSurface.copy(alpha = 0.85f)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(if (reminder.isAutoDebit) Color(0xFF8B5CF6).copy(alpha = 0.2f) else EmeraldDarkPrimary.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (reminder.isAutoDebit) Icons.Default.FlashOn else Icons.Default.Receipt,
+                                    contentDescription = null,
+                                    tint = if (reminder.isAutoDebit) Color(0xFFC4B5FD) else EmeraldDarkPrimary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = reminder.title,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SlateDarkTextPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (reminder.isAutoDebit) Color(0xFF8B5CF6).copy(alpha = 0.2f) else Color(0xFF06B6D4).copy(alpha = 0.2f)
+                                    ) {
+                                        Text(
+                                            text = if (reminder.isAutoDebit) "Auto-Debit" else "Manual Pay",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (reminder.isAutoDebit) Color(0xFFC4B5FD) else Color(0xFF67E8F9),
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(2.dp))
+
+                                Text(
+                                    text = "${reminder.frequency.lowercase().replaceFirstChar { it.uppercase() }} • Due $dueDateFormatted",
+                                    fontSize = 11.sp,
+                                    color = SlateDarkTextSecondary
+                                )
+                            }
+                        }
+
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "${state.currencySymbol}${String.format(Locale.US, "%,.2f", reminder.amount)}",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = SlateDarkTextPrimary
+                            )
+
+                            val badgeColor = when {
+                                reminder.isPaused -> SlateDarkTextMuted
+                                diffDays < 0 -> ExpenseRed
+                                diffDays == 0 -> ExpenseRed
+                                diffDays <= reminder.reminderDaysBefore -> PastelAmber
+                                else -> PastelGreen
+                            }
+                            val badgeText = when {
+                                reminder.isPaused -> "Paused ⏸️"
+                                diffDays < 0 -> "Overdue ⚠️"
+                                diffDays == 0 -> "Due Today 🔔"
+                                else -> "In $diffDays days"
+                            }
+
+                            Text(
+                                text = badgeText,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = badgeColor,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            IconButton(
+                                onClick = {
+                                    editingAutoPay = reminder
+                                    showAddAutoPayModal = true
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = SlateDarkTextSecondary, modifier = Modifier.size(16.dp))
+                            }
+
+                            IconButton(
+                                onClick = { onTogglePauseAutoPayReminder?.invoke(reminder) },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (reminder.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                    contentDescription = if (reminder.isPaused) "Resume" else "Pause",
+                                    tint = SlateDarkTextSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { autoPayToDelete = reminder },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = ExpenseRed.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                onMarkAutoPayPaid?.invoke(reminder)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary.copy(alpha = 0.2f), contentColor = EmeraldDarkPrimary),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Mark Paid", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // --- MODALS & DIALOGS ---
@@ -829,6 +1071,52 @@ fun BudgetsAndGoalsScreen(
                 onDepositToGoal(goal, amount)
                 selectedGoalForDeposit = null
             }
+        )
+    }
+
+    // Add or Edit Auto-Pay Reminder Modal
+    if (showAddAutoPayModal) {
+        AddAutoPayReminderDialog(
+            currencySymbol = state.currencySymbol,
+            initialReminder = editingAutoPay,
+            onDismiss = {
+                showAddAutoPayModal = false
+                editingAutoPay = null
+            },
+            onSave = { title, amount, category, paymentMethod, frequency, dueDayOfMonth, nextDueDateMillis, isAutoDebit, reminderDaysBefore, notes, reminderId ->
+                onSaveAutoPayReminder?.invoke(
+                    title, amount, category, paymentMethod, frequency, dueDayOfMonth, nextDueDateMillis, isAutoDebit, reminderDaysBefore, notes, reminderId
+                )
+                showAddAutoPayModal = false
+                editingAutoPay = null
+            }
+        )
+    }
+
+    // Confirm Delete Auto-Pay Reminder
+    autoPayToDelete?.let { reminder ->
+        AlertDialog(
+            onDismissRequest = { autoPayToDelete = null },
+            title = { Text("Delete Reminder?", fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary) },
+            text = { Text("Are you sure you want to delete the reminder for '${reminder.title}'?", color = SlateDarkTextSecondary, fontSize = 13.sp) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteAutoPayReminder?.invoke(reminder)
+                        autoPayToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
+                ) {
+                    Text("Delete", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { autoPayToDelete = null }) {
+                    Text("Cancel")
+                }
+            },
+            containerColor = SlateDarkSurface,
+            shape = RoundedCornerShape(20.dp)
         )
     }
 }

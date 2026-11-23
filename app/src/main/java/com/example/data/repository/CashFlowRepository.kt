@@ -12,7 +12,8 @@ class CashFlowRepository(
     private val scannedItemDao: ScannedItemDao,
     private val familyDao: FamilyDao,
     private val familyMemberDao: FamilyMemberDao,
-    private val receiptDao: ReceiptDao
+    private val receiptDao: ReceiptDao,
+    private val autoPayReminderDao: AutoPayReminderDao? = null
 ) {
     val allTransactions: Flow<List<TransactionEntity>> = transactionDao.getAllTransactions()
     val allCategories: Flow<List<CategoryEntity>> = categoryDao.getAllCategories()
@@ -21,6 +22,34 @@ class CashFlowRepository(
     val allScannedItems: Flow<List<ScannedItemEntity>> = scannedItemDao.getAllScannedItems()
     val allReceipts: Flow<List<ReceiptEntity>> = receiptDao.getAllReceipts()
     val allReceiptItems: Flow<List<ReceiptItemEntity>> = receiptDao.getAllReceiptItems()
+    val allAutoPayReminders: Flow<List<AutoPayReminderEntity>> = autoPayReminderDao?.getAllReminders() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
+    // Auto-Pay Reminders scoping & operations
+    fun getAutoPayRemindersByScope(scope: FinanceScope): Flow<List<AutoPayReminderEntity>> =
+        autoPayReminderDao?.getRemindersByScope(scope) ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
+    fun getUpcomingAutoPayReminders(untilMillis: Long): Flow<List<AutoPayReminderEntity>> =
+        autoPayReminderDao?.getUpcomingReminders(untilMillis) ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
+    suspend fun saveAutoPayReminder(reminder: AutoPayReminderEntity): Long {
+        return autoPayReminderDao?.insertReminder(reminder) ?: 0L
+    }
+
+    suspend fun updateAutoPayReminder(reminder: AutoPayReminderEntity) {
+        autoPayReminderDao?.updateReminder(reminder)
+    }
+
+    suspend fun deleteAutoPayReminder(reminder: AutoPayReminderEntity) {
+        autoPayReminderDao?.softDeleteReminder(reminder.id)
+    }
+
+    suspend fun togglePauseAutoPayReminder(id: Long, isPaused: Boolean) {
+        autoPayReminderDao?.setPaused(id, isPaused)
+    }
+
+    suspend fun markAutoPayPaid(id: Long, nextDueDateMillis: Long, lastPaidMillis: Long) {
+        autoPayReminderDao?.markAsPaid(id, nextDueDateMillis, lastPaidMillis)
+    }
 
     // Receipt scoping & operations
     fun getReceiptForTransaction(transactionId: Long): Flow<ReceiptEntity?> = receiptDao.getReceiptForTransaction(transactionId)

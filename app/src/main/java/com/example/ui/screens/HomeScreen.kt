@@ -71,6 +71,7 @@ fun HomeScreen(
     onManageFamilyMembers: () -> Unit,
     onNavigateToActivity: () -> Unit,
     onNavigateToProfile: () -> Unit,
+    onNavigateToBudgets: () -> Unit = {},
     onUpdateTransaction: ((TransactionEntity) -> Unit)? = null,
     familyMembers: List<FamilyMemberEntity> = emptyList(),
     familyName: String = "Family Vault",
@@ -148,6 +149,12 @@ fun HomeScreen(
 
     val userInitial = remember(currentUserName) {
         currentUserName.trim().firstOrNull()?.uppercase() ?: "Y"
+    }
+
+    val upcomingBills = remember(state.autoPayReminders) {
+        val now = System.currentTimeMillis()
+        val sevenDaysLater = now + (7L * 24 * 60 * 60 * 1000)
+        state.autoPayReminders.filter { !it.isPaused && it.nextDueDateMillis <= sevenDaysLater }
     }
 
     LazyColumn(
@@ -1530,6 +1537,103 @@ fun HomeScreen(
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            // Upcoming Auto-Pay & Bills Smart Card (shown when bills due within 7 days)
+            if (upcomingBills.isNotEmpty()) {
+                item {
+                    val totalUpcomingAmt = upcomingBills.sumOf { it.amount }
+                    val earliestBill = upcomingBills.minByOrNull { it.nextDueDateMillis }!!
+                    val now = System.currentTimeMillis()
+                    val diffDays = ((earliestBill.nextDueDateMillis - now) / (1000 * 60 * 60 * 24)).toInt()
+                    val dueText = when {
+                        diffDays < 0 -> "Overdue ⚠️"
+                        diffDays == 0 -> "Due today 🔔"
+                        diffDays == 1 -> "Due tomorrow"
+                        else -> "Due in $diffDays days"
+                    }
+
+                    CleanCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onNavigateToBudgets() },
+                        backgroundColor = Color(0xFF8B5CF6).copy(alpha = 0.12f),
+                        contentPadding = PaddingValues(14.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0xFF8B5CF6).copy(alpha = 0.25f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Schedule,
+                                        contentDescription = null,
+                                        tint = Color(0xFFC4B5FD),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Column {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "Upcoming Auto-Pay & Bills",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = SlateDarkTextPrimary
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = if (diffDays <= 1) ExpenseRed.copy(alpha = 0.2f) else PastelAmber.copy(alpha = 0.2f)
+                                        ) {
+                                            Text(
+                                                text = dueText,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (diffDays <= 1) ExpenseRed else PastelAmber,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(2.dp))
+
+                                    Text(
+                                        text = "${earliestBill.title}${if (upcomingBills.size > 1) " + ${upcomingBills.size - 1} more" else ""} • Tap to view",
+                                        fontSize = 11.sp,
+                                        color = SlateDarkTextSecondary
+                                    )
+                                }
+                            }
+
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalUpcomingAmt)}",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE9D5FF)
+                                )
+                                Text(
+                                    text = "Committed",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFFC4B5FD)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
             }
 
             // Spending Insight Card

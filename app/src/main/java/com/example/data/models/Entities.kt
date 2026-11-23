@@ -217,3 +217,34 @@ data class ReceiptItemEntity(
     val totalPrice: Double = 0.0
 )
 
+@Entity(
+    tableName = "auto_pay_reminders",
+    indices = [
+        Index(value = ["nextDueDateMillis", "isDeleted"]),
+        Index(value = ["financeScope", "isDeleted"]),
+        Index(value = ["familyId", "isDeleted"]),
+        Index(value = ["syncStatus"])
+    ]
+)
+data class AutoPayReminderEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val amount: Double,
+    val category: String = "Bills & Utilities",
+    val paymentMethod: String = "UPI",
+    val frequency: String = "MONTHLY", // "MONTHLY", "WEEKLY", "QUARTERLY", "YEARLY", "ONE_TIME"
+    val dueDayOfMonth: Int = 1,
+    val nextDueDateMillis: Long,
+    val isAutoDebit: Boolean = true, // true = bank/card auto-debits; false = manual payment required
+    val reminderDaysBefore: Int = 2,
+    val financeScope: FinanceScope = FinanceScope.PERSONAL,
+    val familyId: String? = null,
+    val isPaused: Boolean = false,
+    val lastPaidDateMillis: Long? = null,
+    val notes: String = "",
+    val serverId: String? = null,
+    val syncStatus: String = "SYNCED",
+    val updatedAt: Long = System.currentTimeMillis(),
+    val isDeleted: Boolean = false
+)
+

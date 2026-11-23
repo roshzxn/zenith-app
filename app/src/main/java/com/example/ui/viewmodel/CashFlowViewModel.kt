@@ -109,7 +109,8 @@ data class CashFlowUiState(
     val isHapticEnabled: Boolean = true,
     val isNotificationEnabled: Boolean = true,
     val detectedUpiPayment: com.example.data.upi.ExtractedUpiPayment? = null,
-    val isBalanceHidden: Boolean = false
+    val isBalanceHidden: Boolean = false,
+    val autoPayReminders: List<AutoPayReminderEntity> = emptyList()
 )
 
 class CashFlowViewModel(application: Application) : AndroidViewModel(application) {
@@ -223,7 +224,8 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             database.scannedItemDao(),
             database.familyDao(),
             database.familyMemberDao(),
-            database.receiptDao()
+            database.receiptDao(),
+            database.autoPayReminderDao()
         )
         familyLedgerRepository = FamilyLedgerRepository(
             ledgerDao = database.familyLedgerDao(),
@@ -478,15 +480,13 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         } else {
             repository.getGoalsByScope(FinanceScope.PERSONAL)
         }
+        val autoPayFlow = repository.getAutoPayRemindersByScope(scope)
 
         combine(
-            txFlow,
-            repository.allCategories,
-            budgetFlow,
-            goalFlow,
-            repository.allScannedItems
-        ) { txList, catList, budgetList, goalList, scannedList ->
-            BaseData(txList, catList, budgetList, goalList, scannedList)
+            combine(txFlow, repository.allCategories, budgetFlow, ::Triple),
+            combine(goalFlow, repository.allScannedItems, autoPayFlow, ::Triple)
+        ) { (txList, catList, budgetList), (goalList, scannedList, autoPayList) ->
+            BaseData(txList, catList, budgetList, goalList, scannedList, autoPayList)
         }
     }
 
@@ -575,7 +575,8 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             scannedBarcodeValue = scannedItem.barcodeValue,
             isScannedBarcodeSheetShowing = scannedItem.sheetShowing,
             detectedUpiPayment = voice.detectedPayment,
-            isBalanceHidden = filter.isBalanceHidden
+            isBalanceHidden = filter.isBalanceHidden,
+            autoPayReminders = base.autoPayReminders
         )
     }.stateIn(
         scope = viewModelScope,
@@ -1172,6 +1173,92 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    // --- AUTO-PAY & RECURRING BILL REMINDER METHODS ---
+    fun saveAutoPayReminder(
+        title: String,
+        amount: Double,
+        category: String,
+        paymentMethod: String,
+        frequency: String = "MONTHLY",
+        dueDayOfMonth: Int = 1,
+        nextDueDateMillis: Long = System.currentTimeMillis(),
+        isAutoDebit: Boolean = true,
+        reminderDaysBefore: Int = 2,
+        notes: String = "",
+        reminderId: Long = 0L
+    ) {
+        viewModelScope.launch {
+            val isFamily = _currentFinanceScope.value == FinanceScope.FAMILY
+            val fId = if (isFamily) getOrCreateFamilyIdSync() else null
+            val reminder = AutoPayReminderEntity(
+                id = reminderId,
+                title = title.trim(),
+                amount = amount,
+                category = category,
+                paymentMethod = paymentMethod,
+                frequency = frequency,
+                dueDayOfMonth = dueDayOfMonth,
+                nextDueDateMillis = nextDueDateMillis,
+                isAutoDebit = isAutoDebit,
+                reminderDaysBefore = reminderDaysBefore,
+                financeScope = _currentFinanceScope.value,
+                familyId = fId,
+                notes = notes.trim(),
+                updatedAt = System.currentTimeMillis()
+            )
+            repository.saveAutoPayReminder(reminder)
+        }
+    }
+
+    fun deleteAutoPayReminder(reminder: AutoPayReminderEntity) {
+        viewModelScope.launch {
+            repository.deleteAutoPayReminder(reminder)
+        }
+    }
+
+    fun togglePauseAutoPayReminder(reminder: AutoPayReminderEntity) {
+        viewModelScope.launch {
+            repository.togglePauseAutoPayReminder(reminder.id, !reminder.isPaused)
+        }
+    }
+
+    fun markAutoPayPaidAndLogTransaction(reminder: AutoPayReminderEntity) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val isFamily = reminder.financeScope == FinanceScope.FAMILY
+            val tx = TransactionEntity(
+                title = reminder.title,
+                amount = reminder.amount,
+                type = TransactionType.EXPENSE,
+                category = reminder.category,
+                paymentMethod = reminder.paymentMethod,
+                dateMillis = now,
+                note = if (reminder.notes.isNotBlank()) "Auto-Pay: ${reminder.notes}" else "Auto-Pay: ${reminder.title}",
+                financeScope = reminder.financeScope,
+                familyId = reminder.familyId,
+                createdByUserId = currentUserId,
+                syncStatus = "PENDING_CREATE",
+                updatedAt = now
+            )
+            repository.insertTransaction(tx)
+
+            val cal = Calendar.getInstance().apply { timeInMillis = reminder.nextDueDateMillis }
+            when (reminder.frequency.uppercase()) {
+                "WEEKLY" -> cal.add(Calendar.WEEK_OF_YEAR, 1)
+                "QUARTERLY" -> cal.add(Calendar.MONTH, 3)
+                "YEARLY" -> cal.add(Calendar.YEAR, 1)
+                "ONE_TIME" -> {
+                    repository.togglePauseAutoPayReminder(reminder.id, true)
+                }
+                else -> {
+                    cal.add(Calendar.MONTH, 1)
+                }
+            }
+            val nextDate = cal.timeInMillis
+            repository.markAutoPayPaid(reminder.id, nextDate, now)
+        }
+    }
+
     private fun isValidUuid(str: String): Boolean = try {
         UUID.fromString(str); true
     } catch (e: Exception) { false }
@@ -1700,7 +1787,8 @@ private data class BaseData(
     val categories: List<CategoryEntity>,
     val budgets: List<BudgetEntity>,
     val savingsGoals: List<SavingsGoalEntity>,
-    val scannedItems: List<ScannedItemEntity>
+    val scannedItems: List<ScannedItemEntity>,
+    val autoPayReminders: List<AutoPayReminderEntity> = emptyList()
 )
 
 private data class FilterState(
