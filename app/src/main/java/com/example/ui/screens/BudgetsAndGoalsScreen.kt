@@ -81,8 +81,10 @@ fun BudgetsAndGoalsScreen(
     val totalSpentOnBudgets = remember(filteredBudgets, state.transactions) {
         filteredBudgets.sumOf { budget -> calculateSpent(budget, state.transactions) }
     }
-    val totalRemaining = totalBudgeted - totalSpentOnBudgets
-    val overallProgress = if (totalBudgeted > 0) (totalSpentOnBudgets / totalBudgeted).toFloat().coerceIn(0f, 1f) else 0f
+    val totalRemaining = remember(totalBudgeted, totalSpentOnBudgets) { totalBudgeted - totalSpentOnBudgets }
+    val overallProgress = remember(totalBudgeted, totalSpentOnBudgets) {
+        if (totalBudgeted > 0) (totalSpentOnBudgets / totalBudgeted).toFloat().coerceIn(0f, 1f) else 0f
+    }
     val overbudgetCount = remember(filteredBudgets, state.transactions) {
         filteredBudgets.count { budget -> calculateSpent(budget, state.transactions) > budget.monthlyLimit }
     }

@@ -87,8 +87,10 @@ fun AnalyticsScreen(
         filteredTransactions.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
     }
 
-    val netSavings = rangeIncome - rangeExpense
-    val savingsRate = if (rangeIncome > 0) ((netSavings / rangeIncome) * 100).toInt().coerceAtLeast(0) else 0
+    val netSavings = remember(rangeIncome, rangeExpense) { rangeIncome - rangeExpense }
+    val savingsRate = remember(rangeIncome, netSavings) {
+        if (rangeIncome > 0) ((netSavings / rangeIncome) * 100).toInt().coerceAtLeast(0) else 0
+    }
 
     val expensesByCategory = remember(filteredTransactions) {
         filteredTransactions

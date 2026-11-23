@@ -108,7 +108,8 @@ data class CashFlowUiState(
     val defaultTransactionType: TransactionType = TransactionType.EXPENSE,
     val isHapticEnabled: Boolean = true,
     val isNotificationEnabled: Boolean = true,
-    val detectedUpiPayment: com.example.data.upi.ExtractedUpiPayment? = null
+    val detectedUpiPayment: com.example.data.upi.ExtractedUpiPayment? = null,
+    val isBalanceHidden: Boolean = false
 )
 
 class CashFlowViewModel(application: Application) : AndroidViewModel(application) {
@@ -184,6 +185,15 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
     private val _isNotificationsEnabled = MutableStateFlow(prefs.getBoolean("is_notifications_enabled", true))
     val isNotificationsEnabled: StateFlow<Boolean> = _isNotificationsEnabled.asStateFlow()
+
+    private val _isBalanceHidden = MutableStateFlow(prefs.getBoolean("is_balance_hidden", false))
+    val isBalanceHidden: StateFlow<Boolean> = _isBalanceHidden.asStateFlow()
+
+    fun toggleBalanceHidden() {
+        val newVal = !_isBalanceHidden.value
+        _isBalanceHidden.value = newVal
+        prefs.edit().putBoolean("is_balance_hidden", newVal).apply()
+    }
 
     private val _isUpiAutoDetectionEnabled = MutableStateFlow<Boolean>(
         UpiNotificationListenerService.isAutoDetectionEnabled(application)
@@ -488,8 +498,8 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         _filterMember
     ) { search, type, cat, member ->
         object { val s = search; val t = type; val c = cat; val m = member }
-    }.combine(combine(_currencySymbol, _selectedTab, ::Pair)) { f1, f2 ->
-        FilterState(f1.s, f1.t, f1.c, f1.m, f2.first, f2.second)
+    }.combine(combine(_currencySymbol, _selectedTab, _isBalanceHidden, ::Triple)) { f1, f2 ->
+        FilterState(f1.s, f1.t, f1.c, f1.m, f2.first, f2.second, f2.third)
     }
 
     private val voiceState: Flow<VoiceState> = combine(
@@ -564,11 +574,12 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             selectedTab = filter.tab,
             scannedBarcodeValue = scannedItem.barcodeValue,
             isScannedBarcodeSheetShowing = scannedItem.sheetShowing,
-            detectedUpiPayment = voice.detectedPayment
+            detectedUpiPayment = voice.detectedPayment,
+            isBalanceHidden = filter.isBalanceHidden
         )
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
+        started = SharingStarted.Eagerly,
         initialValue = CashFlowUiState()
     )
 
@@ -1698,7 +1709,8 @@ private data class FilterState(
     val category: String?,
     val member: String?,
     val currency: String,
-    val tab: Int
+    val tab: Int,
+    val isBalanceHidden: Boolean
 )
 
 private data class VoiceState(

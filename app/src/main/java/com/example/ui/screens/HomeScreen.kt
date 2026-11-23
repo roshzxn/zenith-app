@@ -78,7 +78,8 @@ fun HomeScreen(
     currentUserName: String = "You",
     syncUiState: SyncUiState = SyncUiState.Idle,
     onSyncNow: (() -> Unit)? = null,
-    onOpenFullFamilyLedger: (() -> Unit)? = null
+    onOpenFullFamilyLedger: (() -> Unit)? = null,
+    onToggleHideBalance: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var selectedTransactionForDetails by remember { mutableStateOf<TransactionEntity?>(null) }
@@ -664,13 +665,27 @@ fun HomeScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "FAMILY VAULT NET BALANCE",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.2.sp,
-                                    color = PastelCyan
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "FAMILY VAULT NET BALANCE",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.2.sp,
+                                        color = PastelCyan
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    IconButton(
+                                        onClick = onToggleHideBalance,
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (state.isBalanceHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                            contentDescription = "Toggle Balance Privacy",
+                                            tint = PastelCyan.copy(alpha = 0.85f),
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+                                }
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
                                     color = Color.White.copy(alpha = 0.08f),
@@ -691,7 +706,7 @@ fun HomeScreen(
                             val famNet = familySettlementSummary.familyNetBalance
                             val netPrefix = if (famNet < 0) "-${state.currencySymbol}" else if (famNet > 0) "+${state.currencySymbol}" else state.currencySymbol
                             Text(
-                                text = "$netPrefix${String.format(Locale.US, "%,.2f", Math.abs(famNet))}",
+                                text = if (state.isBalanceHidden) "••••••" else "$netPrefix${String.format(Locale.US, "%,.2f", Math.abs(famNet))}",
                                 fontSize = 34.sp,
                                 fontWeight = FontWeight.Black,
                                 color = if (famNet >= 0) Color.White else PastelRose,
@@ -733,7 +748,7 @@ fun HomeScreen(
                                         Column {
                                             Text("Group Income", fontSize = 10.sp, color = SlateDarkTextSecondary, maxLines = 1)
                                             Text(
-                                                "+${state.currencySymbol}${String.format(Locale.US, "%,.0f", familySettlementSummary.familyTotalIncome)}",
+                                                if (state.isBalanceHidden) "+••••" else "+${state.currencySymbol}${String.format(Locale.US, "%,.0f", familySettlementSummary.familyTotalIncome)}",
                                                 fontSize = 13.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = PastelGreen,
@@ -771,7 +786,7 @@ fun HomeScreen(
                                         Column {
                                             Text("Group Spends", fontSize = 10.sp, color = SlateDarkTextSecondary, maxLines = 1)
                                             Text(
-                                                "-${state.currencySymbol}${String.format(Locale.US, "%,.0f", familySettlementSummary.familyTotalExpense)}",
+                                                if (state.isBalanceHidden) "-••••" else "-${state.currencySymbol}${String.format(Locale.US, "%,.0f", familySettlementSummary.familyTotalExpense)}",
                                                 fontSize = 13.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = PastelRose,
@@ -1301,13 +1316,27 @@ fun HomeScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "TOTAL NET BALANCE",
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.3.sp,
-                                    color = PastelIndigo
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "TOTAL NET BALANCE",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.3.sp,
+                                        color = PastelIndigo
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    IconButton(
+                                        onClick = onToggleHideBalance,
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (state.isBalanceHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                            contentDescription = "Toggle Balance Privacy",
+                                            tint = PastelIndigo.copy(alpha = 0.85f),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
 
                                 if (state.transactions.isNotEmpty()) {
                                     Surface(
@@ -1340,7 +1369,7 @@ fun HomeScreen(
                             Spacer(modifier = Modifier.height(10.dp))
 
                             Text(
-                                text = "${if (netBalance >= 0) "" else "-"}${state.currencySymbol}${String.format(Locale.US, "%,.2f", Math.abs(netBalance))}",
+                                text = if (state.isBalanceHidden) "••••••" else "${if (netBalance >= 0) "" else "-"}${state.currencySymbol}${String.format(Locale.US, "%,.2f", Math.abs(netBalance))}",
                                 fontSize = 34.sp,
                                 fontWeight = FontWeight.Black,
                                 color = SlateDarkTextPrimary,
@@ -1389,7 +1418,7 @@ fun HomeScreen(
                                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                "+${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalIncome)}",
+                                                if (state.isBalanceHidden) "+••••" else "+${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalIncome)}",
                                                 fontSize = 14.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = PastelGreen,
@@ -1434,7 +1463,7 @@ fun HomeScreen(
                                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                "-${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalExpense)}",
+                                                if (state.isBalanceHidden) "-••••" else "-${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalExpense)}",
                                                 fontSize = 14.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = PastelRose,

@@ -255,7 +255,8 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                                 ).show()
                             }
                         },
-                        onOpenFullFamilyLedger = { showFullFamilyLedger = true }
+                        onOpenFullFamilyLedger = { showFullFamilyLedger = true },
+                        onToggleHideBalance = { viewModel.toggleBalanceHidden() }
                     )
                     1 -> TransactionsScreen(
                         state = uiState,
