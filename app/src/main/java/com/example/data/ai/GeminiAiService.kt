@@ -172,7 +172,7 @@ object GeminiAiService {
                 Return plain JSON only without markdown formatting.
             """.trimIndent()
 
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
@@ -213,7 +213,20 @@ object GeminiAiService {
                 val firstCandidate = candidates?.optJSONObject(0)
                 val content = firstCandidate?.optJSONObject("content")
                 val parts = content?.optJSONArray("parts")
-                val text = parts?.optJSONObject(0)?.optString("text") ?: ""
+                var text = ""
+                if (parts != null) {
+                    for (p in 0 until parts.length()) {
+                        val partObj = parts.optJSONObject(p) ?: continue
+                        val t = partObj.optString("text", "")
+                        if (t.isNotBlank() && !partObj.optBoolean("thought", false)) {
+                            text = t
+                            break
+                        }
+                    }
+                    if (text.isBlank() && parts.length() > 0) {
+                        text = parts.optJSONObject(0)?.optString("text", "") ?: ""
+                    }
+                }
                 val jsonClean = text.replace("```json", "").replace("```", "").trim()
                 val jsonObj = JSONObject(jsonClean)
                 val title = jsonObj.optString("title", "Voice Entry")
@@ -388,7 +401,7 @@ object GeminiAiService {
     }
 
     private fun callGeminiApi(apiKey: String, systemInstruction: String, promptText: String): String {
-        val candidateModels = listOf("gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash")
+        val candidateModels = listOf("gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash")
         var lastError: Exception? = null
 
         for (model in candidateModels) {
@@ -428,8 +441,21 @@ object GeminiAiService {
                     val firstCandidate = candidates?.optJSONObject(0)
                     val content = firstCandidate?.optJSONObject("content")
                     val parts = content?.optJSONArray("parts")
-                    val firstPart = parts?.optJSONObject(0)
-                    return firstPart?.optString("text") ?: ""
+                    var textResult = ""
+                    if (parts != null) {
+                        for (p in 0 until parts.length()) {
+                            val partObj = parts.optJSONObject(p) ?: continue
+                            val t = partObj.optString("text", "")
+                            if (t.isNotBlank() && !partObj.optBoolean("thought", false)) {
+                                textResult = t
+                                break
+                            }
+                        }
+                        if (textResult.isBlank() && parts.length() > 0) {
+                            textResult = parts.optJSONObject(0)?.optString("text", "") ?: ""
+                        }
+                    }
+                    return textResult
                 } else if (conn.responseCode == 404) {
                     continue
                 } else {
