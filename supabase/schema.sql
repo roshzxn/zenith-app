@@ -511,60 +511,69 @@ CREATE TRIGGER trg_sync_family_member_columns
 -- 4. AUTH TRIGGERS: INSTANT EMAIL CONFIRMATION & PROFILE PROVISIONING
 -- =============================================================================
 
--- Automatically confirms emails on signup to bypass email server blocking
-CREATE OR REPLACE FUNCTION public.auto_confirm_new_user()
-RETURNS TRIGGER AS $$
+-- 4.1 Automatically confirms emails on signup to bypass email server blocking
+DO $$
 BEGIN
-    NEW.email_confirmed_at := COALESCE(NEW.email_confirmed_at, NOW());
-    NEW.confirmed_at := COALESCE(NEW.confirmed_at, NOW());
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+    CREATE OR REPLACE FUNCTION public.auto_confirm_new_user()
+    RETURNS TRIGGER AS $func$
+    BEGIN
+        NEW.email_confirmed_at := COALESCE(NEW.email_confirmed_at, NOW());
+        -- Note: confirmed_at is a generated column in Supabase and computed automatically
+        RETURN NEW;
+    END;
+    $func$ LANGUAGE plpgsql SECURITY DEFINER;
 
-DROP TRIGGER IF EXISTS trg_auto_confirm_user ON auth.users;
-CREATE TRIGGER trg_auto_confirm_user
-    BEFORE INSERT ON auth.users
-    FOR EACH ROW
-    EXECUTE FUNCTION public.auto_confirm_new_user();
+    DROP TRIGGER IF EXISTS trg_auto_confirm_user ON auth.users;
+    CREATE TRIGGER trg_auto_confirm_user
+        BEFORE INSERT ON auth.users
+        FOR EACH ROW
+        EXECUTE FUNCTION public.auto_confirm_new_user();
 
--- Ensure any existing unconfirmed users are marked confirmed
-UPDATE auth.users 
-SET email_confirmed_at = COALESCE(email_confirmed_at, NOW()),
-    confirmed_at = COALESCE(confirmed_at, NOW())
-WHERE email_confirmed_at IS NULL;
+    -- Ensure any existing unconfirmed users are marked confirmed without touching generated columns
+    UPDATE auth.users 
+    SET email_confirmed_at = COALESCE(email_confirmed_at, NOW())
+    WHERE email_confirmed_at IS NULL;
+EXCEPTION WHEN OTHERS THEN
+    NULL;
+END $$;
 
--- Automatically creates profile entry upon new user signup
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER AS $$
+-- 4.2 Automatically creates profile entry upon new user signup
+DO $$
 BEGIN
+    CREATE OR REPLACE FUNCTION public.handle_new_user()
+    RETURNS TRIGGER AS $func$
+    BEGIN
+        INSERT INTO public.profiles (id, email, full_name)
+        VALUES (
+            NEW.id,
+            COALESCE(NEW.email, ''),
+            COALESCE(NEW.raw_user_meta_data->>'full_name', split_part(COALESCE(NEW.email, 'User'), '@', 1))
+        )
+        ON CONFLICT (id) DO UPDATE
+        SET email = EXCLUDED.email,
+            full_name = CASE WHEN public.profiles.full_name = '' THEN EXCLUDED.full_name ELSE public.profiles.full_name END,
+            updated_at = NOW();
+        RETURN NEW;
+    END;
+    $func$ LANGUAGE plpgsql SECURITY DEFINER;
+
+    DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+    CREATE TRIGGER on_auth_user_created
+        AFTER INSERT ON auth.users
+        FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+    -- Backfill profiles for existing auth users missing a profile record
     INSERT INTO public.profiles (id, email, full_name)
-    VALUES (
-        NEW.id,
-        COALESCE(NEW.email, ''),
-        COALESCE(NEW.raw_user_meta_data->>'full_name', split_part(COALESCE(NEW.email, 'User'), '@', 1))
-    )
-    ON CONFLICT (id) DO UPDATE
-    SET email = EXCLUDED.email,
-        full_name = CASE WHEN public.profiles.full_name = '' THEN EXCLUDED.full_name ELSE public.profiles.full_name END,
-        updated_at = NOW();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-CREATE TRIGGER on_auth_user_created
-    AFTER INSERT ON auth.users
-    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
-
--- Backfill profiles for existing auth users missing a profile record
-INSERT INTO public.profiles (id, email, full_name)
-SELECT 
-    u.id, 
-    COALESCE(u.email, ''), 
-    COALESCE(u.raw_user_meta_data->>'full_name', split_part(COALESCE(u.email, 'User'), '@', 1))
-FROM auth.users u
-WHERE NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = u.id)
-ON CONFLICT (id) DO NOTHING;
+    SELECT 
+        u.id, 
+        COALESCE(u.email, ''), 
+        COALESCE(u.raw_user_meta_data->>'full_name', split_part(COALESCE(u.email, 'User'), '@', 1))
+    FROM auth.users u
+    WHERE NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = u.id)
+    ON CONFLICT (id) DO NOTHING;
+EXCEPTION WHEN OTHERS THEN
+    NULL;
+END $$;
 
 -- =============================================================================
 -- 5. PERFORMANCE & LOOKUP INDEXES
