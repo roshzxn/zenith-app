@@ -38,6 +38,29 @@ interface FamilyLedgerDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTransactions(transactions: List<LedgerTransaction>)
 
+    /** Updates the reactions JSON for a transaction. */
+    @Query("""
+        UPDATE ledger_transactions
+        SET reactions = :reactions, syncStatus = 'PENDING_UPDATE', updatedAt = :updatedAt
+        WHERE transactionId = :transactionId
+    """)
+    suspend fun updateTransactionReactions(
+        transactionId: String,
+        reactions: String,
+        updatedAt: Long = System.currentTimeMillis()
+    )
+
+    /** Restores a previously soft-deleted transaction (Undo support). */
+    @Query("""
+        UPDATE ledger_transactions
+        SET isDeleted = 0, syncStatus = 'PENDING_UPDATE', updatedAt = :updatedAt
+        WHERE transactionId = :transactionId
+    """)
+    suspend fun restoreTransaction(
+        transactionId: String,
+        updatedAt: Long = System.currentTimeMillis()
+    )
+
     /** Marks a transaction as pending soft-delete (still visible until cloud confirms). */
     @Query("""
         UPDATE ledger_transactions
@@ -109,6 +132,18 @@ interface FamilyLedgerDao {
     /** Batch upsert for pull operations. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertFamilyVaults(vaults: List<FamilyVault>)
+
+    /** Updates the monthly budget target for the vault. */
+    @Query("""
+        UPDATE family_vaults
+        SET monthlyBudgetLimit = :monthlyBudget, syncStatus = 'PENDING_UPDATE', updatedAt = :updatedAt
+        WHERE familyId = :familyId
+    """)
+    suspend fun updateVaultMonthlyBudget(
+        familyId: String,
+        monthlyBudget: Double,
+        updatedAt: Long = System.currentTimeMillis()
+    )
 
     /** Clears all family vaults from local Room. */
     @Query("DELETE FROM family_vaults")

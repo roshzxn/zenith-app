@@ -289,12 +289,18 @@ fun FamilyLedgerTransactionsList(
                         )
                     }
                     items(txsForDate, key = { it.transactionId }) { tx ->
-                        ModernLedgerTransactionCard(
-                            transaction = tx,
+                        SocialTransactionCard(
+                            tx = tx,
+                            currentUserName = "You",
                             currencySymbol = currencySymbol,
+                            memberGradients = listOf(
+                                androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color(0xFF6366F1), Color(0xFF8B5CF6))),
+                                androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color(0xFF06B6D4), Color(0xFF3B82F6)))
+                            ),
                             canModify = canModifyTransaction(tx),
                             onEdit = { onEditTransaction(tx) },
-                            onDelete = { onDeleteTransaction(tx) }
+                            onDelete = { onDeleteTransaction(tx) },
+                            onToggleReaction = { _ -> }
                         )
                     }
                 }

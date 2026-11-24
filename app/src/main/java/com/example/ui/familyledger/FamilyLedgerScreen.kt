@@ -323,7 +323,7 @@ fun FamilyLedgerScreen(
                                 .padding(3.dp),
                             horizontalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
-                            val tabs = listOf("Overview", "Activity", "Members", "Insights")
+                            val tabs = listOf("Overview", "Activity", "Budgets", "Members")
                             tabs.forEachIndexed { index, title ->
                                 val isSelected = state.selectedSubTab == index
                                 Box(
@@ -332,7 +332,7 @@ fun FamilyLedgerScreen(
                                         .fillMaxHeight()
                                         .clip(RoundedCornerShape(11.dp))
                                         .background(
-                                            if (isSelected) EmeraldDarkPrimary else Color.Transparent
+                                            if (isSelected) Color(0xFF38BDF8).copy(alpha = 0.25f) else Color.Transparent
                                         )
                                         .clickable { viewModel.setSubTab(index) },
                                     contentAlignment = Alignment.Center
@@ -341,7 +341,7 @@ fun FamilyLedgerScreen(
                                         text = title,
                                         fontSize = 12.sp,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) Color.White else SlateDarkTextSecondary
+                                        color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF94A3B8)
                                     )
                                 }
                             }
@@ -362,6 +362,7 @@ fun FamilyLedgerScreen(
                     when (currentTab) {
                         0 -> FamilyLedgerDashboard(
                             state = state,
+                            currentUserName = viewModel.currentUserName,
                             canModifyTransaction = { viewModel.canModifyTransaction(it) },
                             onOpenAddTransaction = { type ->
                                 transactionToEdit = null
@@ -369,57 +370,47 @@ fun FamilyLedgerScreen(
                                 showAddEditDialog = true
                             },
                             onEditTransaction = { tx ->
-                                if (viewModel.canModifyTransaction(tx)) {
-                                    transactionToEdit = tx
-                                    showAddEditDialog = true
-                                } else {
-                                    Toast.makeText(context, "Only ${tx.paidByName} can edit this entry.", Toast.LENGTH_SHORT).show()
-                                }
+                                transactionToEdit = tx
+                                showAddEditDialog = true
                             },
                             onDeleteTransaction = { tx ->
-                                if (viewModel.canModifyTransaction(tx)) {
-                                    transactionToDelete = tx
-                                } else {
-                                    Toast.makeText(context, "Only ${tx.paidByName} can delete this entry.", Toast.LENGTH_SHORT).show()
-                                }
+                                transactionToDelete = tx
                             },
-                            onNavigateToTransactions = { viewModel.setSubTab(1) },
-                            onNavigateToMembers = { viewModel.setSubTab(2) },
+                            onToggleReaction = { txId, emoji ->
+                                viewModel.toggleTransactionReaction(txId, emoji)
+                            },
+                            onNavigateToActivity = { viewModel.setSubTab(1) },
+                            onNavigateToBudgets = { viewModel.setSubTab(2) },
+                            onNavigateToMembers = { viewModel.setSubTab(3) },
                             onSyncNow = {
                                 viewModel.syncNow()
                                 Toast.makeText(context, "Syncing Family Vault...", Toast.LENGTH_SHORT).show()
+                            },
+                            onUpdateBudgetLimit = { limit ->
+                                viewModel.updateVaultMonthlyBudget(limit)
                             }
                         )
-                        1 -> FamilyLedgerTransactionsList(
-                            state = state,
-                            canModifyTransaction = { viewModel.canModifyTransaction(it) },
+                        1 -> FamilyLedgerActivityFeed(
+                            transactions = state.transactions,
+                            currentUserName = viewModel.currentUserName,
+                            searchQuery = state.searchQuery,
                             onSearchChange = { viewModel.setSearchQuery(it) },
+                            filterType = state.filterType,
                             onFilterTypeChange = { viewModel.setFilterType(it) },
-                            onFilterCategoryChange = { viewModel.setFilterCategory(it) },
-                            onFilterMemberChange = { viewModel.setFilterMemberId(it) },
-                            onSortChange = { viewModel.setSortBy(it) },
-                            onOpenAddTransaction = {
-                                transactionToEdit = null
-                                defaultTypeForDialog = TransactionType.EXPENSE
+                            canModifyTransaction = { viewModel.canModifyTransaction(it) },
+                            onEditTransaction = { tx ->
+                                transactionToEdit = tx
                                 showAddEditDialog = true
                             },
-                            onEditTransaction = { tx ->
-                                if (viewModel.canModifyTransaction(tx)) {
-                                    transactionToEdit = tx
-                                    showAddEditDialog = true
-                                } else {
-                                    Toast.makeText(context, "Only ${tx.paidByName} can edit this entry.", Toast.LENGTH_SHORT).show()
-                                }
-                            },
                             onDeleteTransaction = { tx ->
-                                if (viewModel.canModifyTransaction(tx)) {
-                                    transactionToDelete = tx
-                                } else {
-                                    Toast.makeText(context, "Only ${tx.paidByName} can delete this entry.", Toast.LENGTH_SHORT).show()
-                                }
+                                transactionToDelete = tx
+                            },
+                            onToggleReaction = { txId, emoji ->
+                                viewModel.toggleTransactionReaction(txId, emoji)
                             }
                         )
-                        2 -> FamilyLedgerMembersView(
+                        2 -> FamilyLedgerAnalyticsView(state = state)
+                        3 -> FamilyLedgerMembersView(
                             state = state,
                             onAddMember = { name, role ->
                                 viewModel.addFamilyMember(name, role) { success ->
@@ -435,16 +426,15 @@ fun FamilyLedgerScreen(
                                 }
                             }
                         )
-                        3 -> FamilyLedgerAnalyticsView(state = state)
                     }
                 }
             }
         }
     }
 
-    // --- ADD / EDIT TRANSACTION DIALOG ---
+    // --- ADD / EDIT TRANSACTION iOS SPRING BOTTOM SHEET ---
     if (showAddEditDialog) {
-        AddEditLedgerTransactionDialog(
+        AddEditLedgerTransactionSheet(
             existing = transactionToEdit,
             initialType = defaultTypeForDialog,
             members = state.members,
@@ -456,7 +446,7 @@ fun FamilyLedgerScreen(
                 showAddEditDialog = false
                 transactionToEdit = null
             },
-            onSave = { title, desc, amt, cat, type, paymentMethod, payerId, payerName, dateMillis ->
+            onSave = { title, desc, amt, cat, type, paymentMethod, payerId, payerName, dateMillis, receiptUrl ->
                 if (transactionToEdit == null) {
                     viewModel.createTransaction(
                         title = title,
@@ -467,7 +457,8 @@ fun FamilyLedgerScreen(
                         paymentMethod = paymentMethod,
                         paidByMemberId = payerId,
                         paidByName = payerName,
-                        dateMillis = dateMillis
+                        dateMillis = dateMillis,
+                        receiptUrl = receiptUrl
                     ) { success ->
                         if (success) {
                             showAddEditDialog = false
@@ -475,7 +466,7 @@ fun FamilyLedgerScreen(
                         }
                     }
                 } else {
-                    val existingTx = transactionToEdit ?: return@AddEditLedgerTransactionDialog
+                    val existingTx = transactionToEdit ?: return@AddEditLedgerTransactionSheet
                     viewModel.updateTransaction(
                         existing = existingTx,
                         title = title,
@@ -486,7 +477,8 @@ fun FamilyLedgerScreen(
                         paymentMethod = paymentMethod,
                         paidByMemberId = payerId,
                         paidByName = payerName,
-                        dateMillis = dateMillis
+                        dateMillis = dateMillis,
+                        receiptUrl = receiptUrl
                     ) { success ->
                         if (success) {
                             showAddEditDialog = false

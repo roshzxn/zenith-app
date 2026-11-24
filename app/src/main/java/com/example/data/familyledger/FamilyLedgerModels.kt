@@ -32,6 +32,8 @@ data class LedgerTransaction(
     val paymentMethod: String = "UPI",
     val paidByMemberId: String = "",
     val paidByName: String = "Member",
+    val reactions: String = "{}",
+    val receiptUrl: String? = null,
     val dateMillis: Long = System.currentTimeMillis(),
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
@@ -62,6 +64,7 @@ data class FamilyVault(
     val familyId: String,
     val familyName: String,
     val inviteCode: String = "",
+    val monthlyBudgetLimit: Double = 50000.0,
     val createdBy: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
@@ -82,6 +85,8 @@ data class FamilyVaultMember(
     val userId: String,
     val name: String,
     val role: FamilyRole = FamilyRole.MEMBER,
+    val avatarColor: String = "#10B981",
+    val status: String = "ACTIVE",
     /** Computed field: sum of expense transaction amounts paid by this member. Not persisted from cloud. */
     val totalPaid: Double = 0.0,
     /** Computed field: sum of income transaction amounts received by this member. Not persisted from cloud. */
@@ -135,6 +140,9 @@ data class CloudLedgerTransactionDto(
     @SerialName("paid_by_member_id") val paidByMemberId: String? = null,
     /** Display name of the payer (denormalised for fast rendering). */
     @SerialName("paid_by_name") val paidByName: String? = null,
+    /** Emoji reactions JSON string: {"👍": ["User1", "User2"], "❤️": ["Mom"]} */
+    @SerialName("reactions") val reactions: String? = "{}",
+    @SerialName("receipt_url") val receiptUrl: String? = null,
     /** Optimistic concurrency counter — incremented on each update. */
     @SerialName("sync_version") val syncVersion: Long = 1,
     @SerialName("transaction_date") val transactionDate: String? = null,
@@ -152,6 +160,7 @@ data class CloudFamilyVaultDto(
     @SerialName("id") val id: String,
     @SerialName("name") val name: String = "Family Vault",
     @SerialName("invite_code") val inviteCode: String? = null,
+    @SerialName("monthly_budget") val monthlyBudget: Double? = 50000.0,
     @SerialName("created_by") val createdBy: String? = null,
     @SerialName("description") val description: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
@@ -231,5 +240,52 @@ object FamilyInviteCodeUtils {
         } else {
             clean
         }
+    }
+}
+
+object LedgerReactionUtils {
+    fun parseReactions(reactionsJson: String): Map<String, List<String>> {
+        return try {
+            if (reactionsJson.isBlank() || reactionsJson == "{}") emptyMap()
+            else {
+                val json = org.json.JSONObject(reactionsJson)
+                val result = mutableMapOf<String, List<String>>()
+                val keys = json.keys()
+                while (keys.hasNext()) {
+                    val emoji = keys.next()
+                    val array = json.optJSONArray(emoji) ?: org.json.JSONArray()
+                    val users = mutableListOf<String>()
+                    for (i in 0 until array.length()) {
+                        users.add(array.getString(i))
+                    }
+                    result[emoji] = users
+                }
+                result
+            }
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    fun toggleReaction(reactionsJson: String, emoji: String, userName: String): String {
+        val current = parseReactions(reactionsJson).toMutableMap()
+        val users = current[emoji]?.toMutableList() ?: mutableListOf()
+        if (users.contains(userName)) {
+            users.remove(userName)
+        } else {
+            users.add(userName)
+        }
+        if (users.isEmpty()) {
+            current.remove(emoji)
+        } else {
+            current[emoji] = users
+        }
+        val json = org.json.JSONObject()
+        current.forEach { (k, v) ->
+            val arr = org.json.JSONArray()
+            v.forEach { arr.put(it) }
+            json.put(k, arr)
+        }
+        return json.toString()
     }
 }

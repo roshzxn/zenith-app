@@ -62,9 +62,9 @@ data class VaultImportSummary(
  */
 class FamilyVaultSyncEngine(
     private val ledgerDao: FamilyLedgerDao,
-    private val transactionDao: TransactionDao,
-    private val familyDao: FamilyDao,
-    private val memberDao: FamilyMemberDao
+    private val transactionDao: TransactionDao? = null,
+    private val familyDao: FamilyDao? = null,
+    private val memberDao: FamilyMemberDao? = null
 ) {
     private val tag = "VaultSyncEngine"
 
@@ -319,7 +319,7 @@ class FamilyVaultSyncEngine(
                 serverId = familyId,
                 syncStatus = "SYNCED"
             )
-            familyDao.insertFamily(legacyFamily)
+            familyDao?.insertFamily(legacyFamily)
 
             // 2. Import Members
             var importedMembersCount = 0
@@ -355,7 +355,7 @@ class FamilyVaultSyncEngine(
                     joinedAt = mJoinedAt,
                     syncStatus = "SYNCED"
                 )
-                memberDao.insertMember(legacyMember)
+                memberDao?.insertMember(legacyMember)
                 importedMembersCount++
             }
 
@@ -372,7 +372,7 @@ class FamilyVaultSyncEngine(
                     syncStatus = "SYNCED"
                 )
                 ledgerDao.upsertMember(curMember)
-                memberDao.insertMember(
+                memberDao?.insertMember(
                     FamilyMemberEntity(
                         id = curMember.memberId,
                         familyId = familyId,
@@ -426,30 +426,32 @@ class FamilyVaultSyncEngine(
                 )
                 ledgerDao.upsertTransaction(domainTx)
 
-                // Mirror to legacy transactions table
-                val existingLegacy = transactionDao.getTransactionByServerId(txId)
-                val legacyEntity = TransactionEntity(
-                    id = existingLegacy?.id ?: 0L,
-                    title = title,
-                    amount = amt,
-                    type = type,
-                    category = cat,
-                    categoryIconName = "Receipt",
-                    paymentMethod = paymentMethod,
-                    note = desc,
-                    financeScope = FinanceScope.FAMILY,
-                    familyId = familyId,
-                    createdByUserId = payerId,
-                    dateMillis = dateMillis,
-                    serverId = txId,
-                    syncStatus = "SYNCED",
-                    updatedAt = txUpdatedAt,
-                    isDeleted = false
-                )
-                if (existingLegacy == null) {
-                    transactionDao.insertTransaction(legacyEntity)
-                } else {
-                    transactionDao.updateTransaction(legacyEntity)
+                // Optionally mirror to legacy transactions table if configured
+                val existingLegacy = transactionDao?.getTransactionByServerId(txId)
+                if (transactionDao != null) {
+                    val legacyEntity = TransactionEntity(
+                        id = existingLegacy?.id ?: 0L,
+                        title = title,
+                        amount = amt,
+                        type = type,
+                        category = cat,
+                        categoryIconName = "Receipt",
+                        paymentMethod = paymentMethod,
+                        note = desc,
+                        financeScope = FinanceScope.FAMILY,
+                        familyId = familyId,
+                        createdByUserId = payerId,
+                        dateMillis = dateMillis,
+                        serverId = txId,
+                        syncStatus = "SYNCED",
+                        updatedAt = txUpdatedAt,
+                        isDeleted = false
+                    )
+                    if (existingLegacy == null) {
+                        transactionDao.insertTransaction(legacyEntity)
+                    } else {
+                        transactionDao.updateTransaction(legacyEntity)
+                    }
                 }
                 importedTxCount++
             }

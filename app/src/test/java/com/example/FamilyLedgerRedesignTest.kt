@@ -512,9 +512,8 @@ class FamilyLedgerRedesignTest {
         assertTrue(titles.contains("Popcorn"))
         assertEquals(1, remainingTxs.count { it.title == "Movie Night" })
 
-        // Verify Room legacy transaction table was also deduplicated
+        // Verify decoupled architecture: no leakage into personal legacy transactions
         val legacyTxs = db.transactionDao().getFamilyTransactionsOnce(familyId)
-        assertEquals(2, legacyTxs.size)
-        assertEquals(1, legacyTxs.count { it.title == "Movie Night" })
+        assertTrue("Legacy personal transactions table must remain clean and unpolluted", legacyTxs.isEmpty())
     }
 }

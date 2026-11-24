@@ -239,6 +239,7 @@ class FamilyLedgerViewModel(application: Application) : AndroidViewModel(applica
         paidByMemberId: String,
         paidByName: String,
         dateMillis: Long,
+        receiptUrl: String? = null,
         onComplete: (Boolean) -> Unit
     ) {
         if (amount <= 0.0) {
@@ -267,7 +268,8 @@ class FamilyLedgerViewModel(application: Application) : AndroidViewModel(applica
                     paidByMemberId = paidByMemberId,
                     paidByName = paidByName.ifBlank { currentUserName },
                     dateMillis = dateMillis,
-                    currentUserId = currentUserId
+                    currentUserId = currentUserId,
+                    receiptUrl = receiptUrl
                 )
                 _transactionSaveResult.value = "Saved!"
                 onComplete(true)
@@ -292,6 +294,7 @@ class FamilyLedgerViewModel(application: Application) : AndroidViewModel(applica
         paidByMemberId: String,
         paidByName: String,
         dateMillis: Long,
+        receiptUrl: String? = null,
         onComplete: (Boolean) -> Unit
     ) {
         if (amount <= 0.0) {
@@ -320,7 +323,8 @@ class FamilyLedgerViewModel(application: Application) : AndroidViewModel(applica
                     paidByMemberId = paidByMemberId,
                     paidByName = paidByName,
                     dateMillis = dateMillis,
-                    currentUserId = currentUserId
+                    currentUserId = currentUserId,
+                    receiptUrl = receiptUrl
                 )
                 _transactionSaveResult.value = "Updated!"
                 onComplete(true)
@@ -330,6 +334,26 @@ class FamilyLedgerViewModel(application: Application) : AndroidViewModel(applica
                 onComplete(false)
             } finally {
                 _isSavingTransaction.value = false
+            }
+        }
+    }
+
+    fun toggleTransactionReaction(transactionId: String, emoji: String) {
+        viewModelScope.launch {
+            try {
+                repository.toggleTransactionReaction(transactionId, emoji, currentUserName)
+            } catch (e: Exception) {
+                // Ignore reaction failures
+            }
+        }
+    }
+
+    fun updateVaultMonthlyBudget(monthlyBudget: Double) {
+        viewModelScope.launch {
+            try {
+                repository.updateVaultMonthlyBudget(_activeFamilyId.value, monthlyBudget)
+            } catch (e: Exception) {
+                _userErrorMessage.value = "Failed to update monthly budget: ${e.localizedMessage}"
             }
         }
     }

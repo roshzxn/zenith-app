@@ -8,21 +8,16 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.ReceiptLong
-import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -40,14 +35,18 @@ import java.util.*
 @Composable
 fun FamilyLedgerDashboard(
     state: FamilyLedgerUiState,
+    currentUserName: String,
     currencySymbol: String = "₹",
     canModifyTransaction: (LedgerTransaction) -> Boolean = { true },
     onOpenAddTransaction: (TransactionType) -> Unit,
     onEditTransaction: (LedgerTransaction) -> Unit,
     onDeleteTransaction: (LedgerTransaction) -> Unit,
-    onNavigateToTransactions: () -> Unit,
+    onToggleReaction: (String, String) -> Unit,
+    onNavigateToActivity: () -> Unit,
     onNavigateToMembers: () -> Unit,
-    onSyncNow: () -> Unit
+    onNavigateToBudgets: () -> Unit,
+    onSyncNow: () -> Unit,
+    onUpdateBudgetLimit: (Double) -> Unit
 ) {
     val totalIncome = remember(state.transactions) {
         state.transactions.filter { it.type == TransactionType.INCOME }.sumOf { it.amount }
@@ -56,59 +55,67 @@ fun FamilyLedgerDashboard(
         state.transactions.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
     }
     val netBalance = totalIncome - totalExpense
-    val expenseRatio = remember(totalIncome, totalExpense) {
-        if (totalIncome + totalExpense > 0) (totalExpense / (totalIncome + totalExpense)).toFloat() else 0.5f
-    }
+    val monthlyLimit = state.activeVault?.monthlyBudgetLimit ?: 50000.0
 
     var isBalanceHidden by remember { mutableStateOf(false) }
+    var showBudgetLimitDialog by remember { mutableStateOf(false) }
+    var tempBudgetInput by remember { mutableStateOf(monthlyLimit.toInt().toString()) }
+
+    val daysInMonth = remember {
+        val cal = Calendar.getInstance()
+        cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+    }
+    val dayOfMonth = remember {
+        val cal = Calendar.getInstance()
+        cal.get(Calendar.DAY_OF_MONTH)
+    }
+    val daysRemaining = (daysInMonth - dayOfMonth + 1).coerceAtLeast(1)
+    val remainingBudget = (monthlyLimit - totalExpense).coerceAtLeast(0.0)
+    val dailyBurnAllowance = remainingBudget / daysRemaining
 
     val recentTransactions = remember(state.transactions) {
-        state.transactions.take(8)
+        state.transactions.take(5)
     }
 
-    val groupedRecentTransactions = remember(recentTransactions) {
-        recentTransactions.groupBy { tx ->
-            val date = Date(tx.dateMillis)
-            val now = Calendar.getInstance()
-            val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
-            val txCal = Calendar.getInstance().apply { time = date }
-            when {
-                now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
-                        now.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Today"
-                yesterday.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
-                        yesterday.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
-                else -> SimpleDateFormat("EEEE, dd MMMM yyyy", Locale.getDefault()).format(date)
-            }
-        }
+    val memberGradients = remember {
+        listOf(
+            Brush.linearGradient(listOf(Color(0xFF6366F1), Color(0xFF8B5CF6))),
+            Brush.linearGradient(listOf(Color(0xFF06B6D4), Color(0xFF3B82F6))),
+            Brush.linearGradient(listOf(Color(0xFFF59E0B), Color(0xFFEF4444))),
+            Brush.linearGradient(listOf(Color(0xFF10B981), Color(0xFF059669))),
+            Brush.linearGradient(listOf(Color(0xFFEC4899), Color(0xFF8B5CF6)))
+        )
     }
 
-    val memberAvatarGradients = listOf(
-        Brush.linearGradient(listOf(Color(0xFF6366F1), Color(0xFF8B5CF6))),
-        Brush.linearGradient(listOf(Color(0xFF06B6D4), Color(0xFF3B82F6))),
-        Brush.linearGradient(listOf(Color(0xFFF59E0B), Color(0xFFEF4444))),
-        Brush.linearGradient(listOf(Color(0xFF10B981), Color(0xFF059669))),
-        Brush.linearGradient(listOf(Color(0xFFEC4899), Color(0xFF8B5CF6)))
-    )
+    // Top categories calculation
+    val topCategories = remember(state.transactions) {
+        state.transactions
+            .filter { it.type == TransactionType.EXPENSE }
+            .groupBy { it.category }
+            .mapValues { entry -> entry.value.sumOf { it.amount } }
+            .toList()
+            .sortedByDescending { it.second }
+            .take(4)
+    }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 120.dp),
+        contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // --- 1. PREMIUM HERO VAULT CARD ---
+        // --- 1. APPLE-STYLE UNIFIED HOUSEHOLD BUDGET HERO CARD ---
         item {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
+                    .clip(RoundedCornerShape(26.dp))
                     .background(
                         Brush.linearGradient(
                             colors = listOf(
-                                Color(0xFF1E1B4B), // Deep Indigo
-                                Color(0xFF0F172A), // Slate Dark
-                                Color(0xFF090D16)  // Base carbon
+                                Color(0xFF0F1524),
+                                Color(0xFF090D16)
                             )
                         )
                     )
@@ -117,13 +124,13 @@ fun FamilyLedgerDashboard(
                             1.dp,
                             Brush.linearGradient(
                                 listOf(
-                                    Color(0xFF818CF8).copy(alpha = 0.5f),
-                                    Color(0xFF22D3EE).copy(alpha = 0.2f),
+                                    Color(0xFF38BDF8).copy(alpha = 0.35f),
+                                    Color(0xFF818CF8).copy(alpha = 0.15f),
                                     Color.Transparent
                                 )
                             )
                         ),
-                        RoundedCornerShape(24.dp)
+                        RoundedCornerShape(26.dp)
                     )
             ) {
                 Column(
@@ -131,7 +138,7 @@ fun FamilyLedgerDashboard(
                         .fillMaxWidth()
                         .padding(20.dp)
                 ) {
-                    // Header row: Vault Name + Member Pill
+                    // Header: Vault Name + Members Pill
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -140,172 +147,204 @@ fun FamilyLedgerDashboard(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 modifier = Modifier
-                                    .size(32.dp)
+                                    .size(34.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF818CF8).copy(alpha = 0.2f)),
+                                    .background(Color(0xFF38BDF8).copy(alpha = 0.15f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.AccountBalanceWallet,
+                                    imageVector = Icons.Default.AllInclusive,
                                     contentDescription = null,
-                                    tint = PastelIndigo,
+                                    tint = Color(0xFF38BDF8),
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = state.activeVault?.familyName ?: "Family Vault",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = SlateDarkTextSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Column {
+                                Text(
+                                    text = state.activeVault?.familyName ?: "Family Vault",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "Unified Household Pool",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF64748B),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
 
                         Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = GlassCardBgElevated,
-                            border = BorderStroke(1.dp, GlassBorderColor),
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0xFF1E293B),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                             modifier = Modifier.clickable { onNavigateToMembers() }
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.People,
-                                    contentDescription = null,
-                                    tint = PastelCyan,
-                                    modifier = Modifier.size(13.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF10B981))
                                 )
-                                Spacer(modifier = Modifier.width(5.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "${state.members.size} Members",
+                                    text = "${state.members.size} Active",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = PastelCyan
+                                    color = Color(0xFF38BDF8)
                                 )
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(18.dp))
 
-                    // Main Balance Display with Eye Privacy Toggle
+                    // Ring & Stats Side-by-Side
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = "TOTAL NET BALANCE",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextMuted,
-                            letterSpacing = 1.2.sp
+                        // Left: Circular Progress Ring
+                        HouseholdBudgetRing(
+                            totalSpent = totalExpense,
+                            budgetLimit = monthlyLimit,
+                            currencySymbol = currencySymbol
                         )
-                        IconButton(
-                            onClick = { isBalanceHidden = !isBalanceHidden },
-                            modifier = Modifier.size(20.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isBalanceHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = "Toggle Balance Privacy",
-                                tint = SlateDarkTextMuted,
-                                modifier = Modifier.size(14.dp)
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        // Right: Net Pool & Daily Burn Details
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "NET POOL BALANCE",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF64748B),
+                                    letterSpacing = 1.1.sp
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = { isBalanceHidden = !isBalanceHidden },
+                                    modifier = Modifier.size(16.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isBalanceHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = null,
+                                        tint = Color(0xFF64748B),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = if (isBalanceHidden) "••••••" else "$currencySymbol%,.0f".format(netBalance),
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color.White
                             )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Daily Burn Allowance Pill
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF131A26),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f))
+                            ) {
+                                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                    Text(
+                                        text = "DAILY BURN RATE",
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF94A3B8)
+                                    )
+                                    Text(
+                                        text = "$currencySymbol%,.0f / day".format(dailyBurnAllowance),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF38BDF8)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Edit Limit Button
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        tempBudgetInput = monthlyLimit.toInt().toString()
+                                        showBudgetLimitDialog = true
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = null,
+                                    tint = Color(0xFF818CF8),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Adjust Limit",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF818CF8)
+                                )
+                            }
                         }
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (isBalanceHidden) "••••••" else "$currencySymbol%,.2f".format(netBalance),
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Black,
-                        color = SlateDarkTextPrimary,
-                        letterSpacing = (-0.5).sp
-                    )
 
                     Spacer(modifier = Modifier.height(18.dp))
 
-                    // Inflow vs Outflow Metric Pills
+                    // Inflow vs Outflow Mini-Pills
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        // Income Pill
                         Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = IncomeGreenContainer.copy(alpha = 0.25f),
-                            border = BorderStroke(1.dp, IncomeGreen.copy(alpha = 0.3f)),
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color(0xFF10B981).copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.25f)),
                             modifier = Modifier.weight(1f)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .clip(CircleShape)
-                                        .background(IncomeGreen.copy(alpha = 0.2f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowDownward,
-                                        contentDescription = null,
-                                        tint = IncomeGreen,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Column {
-                                    Text("Income", fontSize = 10.sp, color = SlateDarkTextSecondary)
-                                    Text(
-                                        text = if (isBalanceHidden) "+••••" else "+$currencySymbol%,.0f".format(totalIncome),
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = IncomeGreen,
-                                        maxLines = 1
-                                    )
+                                    Text("Deposits", fontSize = 9.sp, color = Color(0xFF94A3B8))
+                                    Text("+$currencySymbol%,.0f".format(totalIncome), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
                                 }
                             }
                         }
 
-                        // Expense Pill
                         Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = ExpenseRedContainer.copy(alpha = 0.25f),
-                            border = BorderStroke(1.dp, ExpenseRed.copy(alpha = 0.3f)),
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color(0xFFEF4444).copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.25f)),
                             modifier = Modifier.weight(1f)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .clip(CircleShape)
-                                        .background(ExpenseRed.copy(alpha = 0.2f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowUpward,
-                                        contentDescription = null,
-                                        tint = ExpenseRed,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Column {
-                                    Text("Expenses", fontSize = 10.sp, color = SlateDarkTextSecondary)
-                                    Text(
-                                        text = if (isBalanceHidden) "-••••" else "-$currencySymbol%,.0f".format(totalExpense),
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = ExpenseRed,
-                                        maxLines = 1
-                                    )
+                                    Text("Spent", fontSize = 9.sp, color = Color(0xFF94A3B8))
+                                    Text("-$currencySymbol%,.0f".format(totalExpense), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFEF4444))
                                 }
                             }
                         }
@@ -321,145 +360,211 @@ fun FamilyLedgerDashboard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Add Expense Button
-                QuickActionButton(
-                    icon = Icons.Default.RemoveCircleOutline,
+                QuickActionPill(
+                    icon = Icons.Default.Remove,
                     label = "Expense",
-                    gradient = Brush.linearGradient(listOf(Color(0xFFFB7185), Color(0xFFF43F5E))),
+                    accentColor = Color(0xFFF43F5E),
                     onClick = { onOpenAddTransaction(TransactionType.EXPENSE) }
                 )
-
-                // Add Income Button
-                QuickActionButton(
-                    icon = Icons.Default.AddCircleOutline,
-                    label = "Income",
-                    gradient = Brush.linearGradient(listOf(Color(0xFF34D399), Color(0xFF10B981))),
+                QuickActionPill(
+                    icon = Icons.Default.Add,
+                    label = "Deposit",
+                    accentColor = Color(0xFF10B981),
                     onClick = { onOpenAddTransaction(TransactionType.INCOME) }
                 )
-
-                // Invite / Add Member Button
-                QuickActionButton(
-                    icon = Icons.Default.PersonAddAlt1,
+                QuickActionPill(
+                    icon = Icons.Default.People,
                     label = "Members",
-                    gradient = Brush.linearGradient(listOf(Color(0xFFA78BFA), Color(0xFF818CF8))),
+                    accentColor = Color(0xFF818CF8),
                     onClick = { onNavigateToMembers() }
                 )
-
-                // Sync Now Button
-                QuickActionButton(
+                QuickActionPill(
                     icon = Icons.Default.Sync,
                     label = "Sync",
-                    gradient = Brush.linearGradient(listOf(Color(0xFF22D3EE), Color(0xFF06B6D4))),
+                    accentColor = Color(0xFF38BDF8),
                     onClick = { onSyncNow() }
                 )
             }
         }
 
-        // --- 3. MEMBER SPENDING CAROUSEL ---
-        if (state.members.isNotEmpty()) {
+        // --- 3. PROPORTIONAL MEMBER SPEND SHARE STRIP ---
+        if (state.members.isNotEmpty() && totalExpense > 0) {
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "FAMILY MEMBERS",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextMuted,
-                        letterSpacing = 1.sp
-                    )
-
-                    Text(
-                        text = "Manage →",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = PastelIndigo,
-                        modifier = Modifier.clickable { onNavigateToMembers() }
-                    )
-                }
-                Spacer(modifier = Modifier.height(2.dp))
-
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = Color(0xFF0F141F),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    items(state.members.size) { index ->
-                        val member = state.members[index]
-                        val gradient = memberAvatarGradients[index % memberAvatarGradients.size]
-                        val memberSharePct = if (totalExpense > 0) ((member.totalPaid / totalExpense) * 100).toInt() else 0
-
-                        Surface(
-                            shape = RoundedCornerShape(18.dp),
-                            color = SlateDarkSurface,
-                            border = BorderStroke(1.dp, GlassBorderColor),
-                            modifier = Modifier
-                                .width(135.dp)
-                                .clip(RoundedCornerShape(18.dp))
-                                .clickable { onNavigateToMembers() }
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                            Text(
+                                text = "MEMBER SPEND SHARE",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF64748B),
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = "Manage →",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF818CF8),
+                                modifier = Modifier.clickable { onNavigateToMembers() }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Segmented Multi-Color Progress Bar
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                        ) {
+                            state.members.forEachIndexed { idx, mem ->
+                                val shareWeight = (mem.totalPaid / totalExpense).toFloat().coerceAtLeast(0.01f)
+                                val color = when (idx % 5) {
+                                    0 -> Color(0xFF6366F1)
+                                    1 -> Color(0xFF06B6D4)
+                                    2 -> Color(0xFFF59E0B)
+                                    3 -> Color(0xFF10B981)
+                                    else -> Color(0xFFEC4899)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(shareWeight)
+                                        .fillMaxHeight()
+                                        .background(color)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Member Mini Cards Row
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(state.members.size) { idx ->
+                                val mem = state.members[idx]
+                                val gradient = memberGradients[idx % memberGradients.size]
+                                val sharePct = ((mem.totalPaid / totalExpense) * 100).toInt()
+
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = Color(0xFF141926),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                                    modifier = Modifier.width(130.dp)
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clip(CircleShape)
-                                            .background(gradient),
-                                        contentAlignment = Alignment.Center
-                                    ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .clip(CircleShape)
+                                                    .background(gradient),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = mem.name.take(1).uppercase(),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = mem.name,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color.White,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
                                         Text(
-                                            text = member.name.take(1).uppercase(),
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Black,
+                                            text = "$currencySymbol%,.0f".format(mem.totalPaid),
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
                                             color = Color.White
                                         )
-                                    }
-
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = GlassCardBgElevated
-                                    ) {
                                         Text(
-                                            text = "$memberSharePct%",
+                                            text = "$sharePct% of pool",
                                             fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = SlateDarkTextSecondary,
-                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            color = Color(0xFF94A3B8)
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-                                Spacer(modifier = Modifier.height(10.dp))
+        // --- 4. TOP CATEGORIES BENTO GRID ---
+        if (topCategories.isNotEmpty()) {
+            item {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "TOP EXPENSE CATEGORIES",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF64748B),
+                            letterSpacing = 1.sp
+                        )
+                        Text(
+                            text = "Budgets →",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF818CF8),
+                            modifier = Modifier.clickable { onNavigateToBudgets() }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                                Text(
-                                    text = member.name,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-
-                                Spacer(modifier = Modifier.height(2.dp))
-
-                                Text(
-                                    text = "$currencySymbol%,.0f".format(member.totalPaid),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = SlateDarkTextPrimary
-                                )
-
-                                Text(
-                                    text = "${member.transactionCount} entries",
-                                    fontSize = 10.sp,
-                                    color = SlateDarkTextMuted
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        topCategories.take(2).forEach { (catName, amt) ->
+                            val pct = if (totalExpense > 0) ((amt / totalExpense) * 100).toInt() else 0
+                            BentoCategoryCard(
+                                name = catName,
+                                amount = amt,
+                                pct = pct,
+                                currencySymbol = currencySymbol,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    if (topCategories.size > 2) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            topCategories.drop(2).take(2).forEach { (catName, amt) ->
+                                val pct = if (totalExpense > 0) ((amt / totalExpense) * 100).toInt() else 0
+                                BentoCategoryCard(
+                                    name = catName,
+                                    amount = amt,
+                                    pct = pct,
+                                    currencySymbol = currencySymbol,
+                                    modifier = Modifier.weight(1f)
                                 )
                             }
                         }
@@ -468,7 +573,7 @@ fun FamilyLedgerDashboard(
             }
         }
 
-        // --- 4. RECENT ACTIVITY LIST ---
+        // --- 5. RECENT ACTIVITY STREAM ---
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -479,16 +584,15 @@ fun FamilyLedgerDashboard(
                     text = "RECENT ACTIVITY",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = SlateDarkTextMuted,
+                    color = Color(0xFF64748B),
                     letterSpacing = 1.sp
                 )
-
                 Text(
-                    text = "View All (${state.transactions.size}) →",
+                    text = "See all (${state.transactions.size}) →",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = PastelIndigo,
-                    modifier = Modifier.clickable { onNavigateToTransactions() }
+                    color = Color(0xFF38BDF8),
+                    modifier = Modifier.clickable { onNavigateToActivity() }
                 )
             }
         }
@@ -496,270 +600,196 @@ fun FamilyLedgerDashboard(
         if (recentTransactions.isEmpty()) {
             item {
                 Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = SlateDarkSurface,
-                    border = BorderStroke(1.dp, GlassBorderColor),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(140.dp)
+                    shape = RoundedCornerShape(18.dp),
+                    color = Color(0xFF0F141F),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
-                                contentDescription = null,
-                                tint = SlateDarkTextMuted,
-                                modifier = Modifier.size(36.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "No entries yet. Tap + Expense to record one.",
-                                fontSize = 13.sp,
-                                color = SlateDarkTextSecondary
-                            )
-                        }
+                    Box(
+                        modifier = Modifier.padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No transactions yet. Tap '+ Expense' to add one.",
+                            fontSize = 13.sp,
+                            color = Color(0xFF64748B)
+                        )
                     }
                 }
             }
         } else {
-            groupedRecentTransactions.forEach { (dateHeader, txsForDate) ->
-                item(key = "header_$dateHeader") {
-                    Text(
-                        text = dateHeader,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextMuted,
-                        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
-                    )
-                }
-                items(txsForDate, key = { it.transactionId }) { tx ->
-                    val canModify = canModifyTransaction(tx)
-                    ModernLedgerTransactionCard(
-                        transaction = tx,
-                        currencySymbol = currencySymbol,
-                        canModify = canModify,
-                        onEdit = { onEditTransaction(tx) },
-                        onDelete = { onDeleteTransaction(tx) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun QuickActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    gradient: Brush,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable { onClick() }
-    ) {
-        Box(
-            modifier = Modifier
-                .size(54.dp)
-                .clip(CircleShape)
-                .background(gradient)
-                .padding(1.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(CircleShape)
-                    .background(Color(0xFF0F172A).copy(alpha = 0.45f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = label,
-                    tint = Color.White,
-                    modifier = Modifier.size(24.dp)
+            items(recentTransactions.size) { idx ->
+                val tx = recentTransactions[idx]
+                SocialTransactionCard(
+                    tx = tx,
+                    currentUserName = currentUserName,
+                    currencySymbol = currencySymbol,
+                    memberGradients = memberGradients,
+                    canModify = canModifyTransaction(tx),
+                    onEdit = { onEditTransaction(tx) },
+                    onDelete = { onDeleteTransaction(tx) },
+                    onToggleReaction = { emoji -> onToggleReaction(tx.transactionId, emoji) }
                 )
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = label,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = SlateDarkTextSecondary
+    }
+
+    // Adjust Budget Limit Dialog
+    if (showBudgetLimitDialog) {
+        AlertDialog(
+            onDismissRequest = { showBudgetLimitDialog = false },
+            containerColor = Color(0xFF161B26),
+            title = {
+                Text("Monthly Household Budget", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            },
+            text = {
+                Column {
+                    Text(
+                        "Set the target monthly spending ceiling for your family vault:",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = tempBudgetInput,
+                        onValueChange = { tempBudgetInput = it },
+                        prefix = { Text(currencySymbol, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color(0xFF38BDF8),
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.15f)
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val parsed = tempBudgetInput.toDoubleOrNull()
+                        if (parsed != null && parsed > 0.0) {
+                            onUpdateBudgetLimit(parsed)
+                        }
+                        showBudgetLimitDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
+                ) {
+                    Text("Save Limit", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBudgetLimitDialog = false }) {
+                    Text("Cancel", color = Color(0xFF94A3B8))
+                }
+            }
         )
     }
 }
 
 @Composable
-fun ModernLedgerTransactionCard(
-    transaction: LedgerTransaction,
-    currencySymbol: String = "₹",
-    canModify: Boolean = true,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
+private fun QuickActionPill(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    accentColor: Color,
+    onClick: () -> Unit
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var showMenu by remember { mutableStateOf(false) }
-    val isExpense = transaction.type == TransactionType.EXPENSE
-    val formattedDate = remember(transaction.dateMillis) {
-        SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date(transaction.dateMillis))
-    }
-
-    val iconVector = when (transaction.category) {
-        "Food & Dining" -> Icons.Default.Restaurant
-        "Shopping" -> Icons.Default.ShoppingBag
-        "Housing & Rent" -> Icons.Default.Home
-        "Transportation" -> Icons.Default.DirectionsCar
-        "Bills & Utilities" -> Icons.Default.Receipt
-        "Entertainment" -> Icons.Default.Movie
-        "Healthcare" -> Icons.Default.MedicalServices
-        "Salary & Income" -> Icons.Default.Payments
-        "Freelance / Business" -> Icons.Default.Work
-        "Investments" -> Icons.AutoMirrored.Filled.TrendingUp
-        else -> Icons.Default.Category
-    }
-
-    val iconColor = if (isExpense) PastelRose else IncomeGreen
-    val iconBg = if (isExpense) ExpenseRedContainer.copy(alpha = 0.35f) else IncomeGreenContainer.copy(alpha = 0.35f)
-
     Surface(
         shape = RoundedCornerShape(18.dp),
-        color = SlateDarkSurface,
-        border = BorderStroke(1.dp, GlassBorderColor),
+        color = Color(0xFF0F141F),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f)),
         modifier = Modifier
-            .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .clickable {
-                if (canModify) {
-                    onEdit()
-                } else {
-                    android.widget.Toast.makeText(
-                        context,
-                        "Entry added by ${transaction.paidByName}. Only author can edit.",
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show()
-                }
-            }
+            .clickable { onClick() }
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Left: Icon + Title + Payer Badge
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(accentColor.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = accentColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = label,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun BentoCategoryCard(
+    name: String,
+    amount: Double,
+    pct: Int,
+    currencySymbol: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xFF0F141F),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f)),
+        modifier = modifier
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = name,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "$pct%",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF818CF8)
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "$currencySymbol%,.0f".format(amount),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Black,
+                color = Color.White
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            // Progress Track
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color(0xFF1E2433))
             ) {
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(iconBg)
-                        .border(1.dp, iconColor.copy(alpha = 0.3f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = iconVector,
-                        contentDescription = null,
-                        tint = iconColor,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                Column {
-                    Text(
-                        text = transaction.title,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (canModify) PastelCyan.copy(alpha = 0.15f) else GlassCardBgElevated
-                        ) {
-                            Text(
-                                text = if (canModify) "Added by You" else "Paid by ${transaction.paidByName}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (canModify) PastelCyan else SlateDarkTextSecondary,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = formattedDate,
-                            fontSize = 10.sp,
-                            color = SlateDarkTextMuted
-                        )
-                    }
-                }
-            }
-
-            // Right: Amount + Options Menu
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "${if (isExpense) "-" else "+"}$currencySymbol%,.2f".format(transaction.amount),
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = if (isExpense) SlateDarkTextPrimary else IncomeGreen
+                        .fillMaxWidth(pct / 100f)
+                        .fillMaxHeight()
+                        .background(Color(0xFF818CF8))
                 )
-
-                Box {
-                    IconButton(
-                        onClick = { showMenu = true },
-                        modifier = Modifier.size(30.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Options",
-                            tint = SlateDarkTextMuted,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        if (canModify) {
-                            DropdownMenuItem(
-                                text = { Text("Edit Entry") },
-                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                                onClick = {
-                                    showMenu = false
-                                    onEdit()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete", color = PastelRose) },
-                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = PastelRose) },
-                                onClick = {
-                                    showMenu = false
-                                    onDelete()
-                                }
-                            )
-                        } else {
-                            DropdownMenuItem(
-                                text = { Text("Added by ${transaction.paidByName} (Protected)", fontSize = 12.sp, color = SlateDarkTextMuted) },
-                                leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = SlateDarkTextMuted) },
-                                enabled = false,
-                                onClick = {}
-                            )
-                        }
-                    }
-                }
             }
         }
     }

@@ -13,6 +13,36 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        try {
+            db.execSQL("ALTER TABLE `ledger_transactions` ADD COLUMN `reactions` TEXT NOT NULL DEFAULT '{}'")
+        } catch (e: Exception) {
+            // Ignore if column already exists
+        }
+        try {
+            db.execSQL("ALTER TABLE `ledger_transactions` ADD COLUMN `receiptUrl` TEXT")
+        } catch (e: Exception) {
+            // Ignore if column already exists
+        }
+        try {
+            db.execSQL("ALTER TABLE `family_vaults` ADD COLUMN `monthlyBudgetLimit` REAL NOT NULL DEFAULT 50000.0")
+        } catch (e: Exception) {
+            // Ignore if column already exists
+        }
+        try {
+            db.execSQL("ALTER TABLE `family_vault_members` ADD COLUMN `avatarColor` TEXT NOT NULL DEFAULT '#10B981'")
+        } catch (e: Exception) {
+            // Ignore if column already exists
+        }
+        try {
+            db.execSQL("ALTER TABLE `family_vault_members` ADD COLUMN `status` TEXT NOT NULL DEFAULT 'ACTIVE'")
+        } catch (e: Exception) {
+            // Ignore if column already exists
+        }
+    }
+}
+
 val MIGRATION_13_14 = object : Migration(13, 14) {
     override fun migrate(db: SupportSQLiteDatabase) {
         try {
@@ -229,7 +259,7 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         com.example.data.familyledger.FamilyVault::class,
         com.example.data.familyledger.FamilyVaultMember::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 abstract class CashFlowDatabase : RoomDatabase() {
@@ -256,7 +286,7 @@ abstract class CashFlowDatabase : RoomDatabase() {
                     CashFlowDatabase::class.java,
                     "cashflow_database"
                 )
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
                     .fallbackToDestructiveMigration(true)
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .addCallback(DatabaseCallback(context.applicationContext))

@@ -33,9 +33,9 @@ import java.util.UUID
  */
 class FamilyLedgerRepository(
     private val ledgerDao: FamilyLedgerDao,
-    private val legacyTransactionDao: TransactionDao,
-    private val legacyFamilyDao: FamilyDao,
-    private val legacyMemberDao: FamilyMemberDao,
+    private val legacyTransactionDao: TransactionDao? = null,
+    private val legacyFamilyDao: FamilyDao? = null,
+    private val legacyMemberDao: FamilyMemberDao? = null,
     private val cloudDataSource: FamilyLedgerCloudDataSource = SupabaseFamilyLedgerDataSource()
 ) {
     private val tag = "FamilyLedgerRepo"
@@ -400,7 +400,8 @@ class FamilyLedgerRepository(
         paidByMemberId: String,
         paidByName: String,
         dateMillis: Long,
-        currentUserId: String
+        currentUserId: String,
+        receiptUrl: String? = null
     ): LedgerTransaction = withContext(Dispatchers.IO) {
         val txId = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
@@ -418,6 +419,8 @@ class FamilyLedgerRepository(
             paymentMethod = paymentMethod,
             paidByMemberId = paidByMemberId,
             paidByName = paidByName,
+            reactions = "{}",
+            receiptUrl = receiptUrl,
             dateMillis = dateMillis,
             createdAt = now,
             updatedAt = now,
@@ -467,7 +470,8 @@ class FamilyLedgerRepository(
         paidByMemberId: String,
         paidByName: String,
         dateMillis: Long,
-        currentUserId: String
+        currentUserId: String,
+        receiptUrl: String? = null
     ): LedgerTransaction = withContext(Dispatchers.IO) {
         if (existing.createdBy.isNotBlank() && existing.createdBy != currentUserId) {
             val members = ledgerDao.getMembersForFamily(existing.familyId).first()
@@ -492,6 +496,7 @@ class FamilyLedgerRepository(
             paymentMethod = paymentMethod,
             paidByMemberId = paidByMemberId,
             paidByName = paidByName,
+            receiptUrl = receiptUrl ?: existing.receiptUrl,
             dateMillis = dateMillis,
             updatedAt = now,
             lastModifiedBy = currentUserId,
@@ -517,6 +522,55 @@ class FamilyLedgerRepository(
             }
         }
 
+        updated
+    }
+
+    suspend fun toggleTransactionReaction(
+        transactionId: String,
+        emoji: String,
+        userName: String
+    ): LedgerTransaction? = withContext(Dispatchers.IO) {
+        val existing = ledgerDao.getTransactionById(transactionId) ?: return@withContext null
+        val updatedReactions = LedgerReactionUtils.toggleReaction(existing.reactions, emoji, userName)
+        val now = System.currentTimeMillis()
+        val updated = existing.copy(
+            reactions = updatedReactions,
+            updatedAt = now,
+            syncVersion = existing.syncVersion + 1L,
+            syncStatus = if (cloudDataSource.isAvailable) "PENDING_UPDATE" else "OFFLINE"
+        )
+        ledgerDao.upsertTransaction(updated)
+        repositoryScope.launch {
+            if (cloudDataSource.isAvailable) {
+                val success = cloudDataSource.upsertTransaction(updated)
+                if (success) {
+                    ledgerDao.upsertTransaction(updated.copy(syncStatus = "SYNCED"))
+                }
+            }
+        }
+        updated
+    }
+
+    suspend fun updateVaultMonthlyBudget(
+        familyId: String,
+        monthlyBudget: Double
+    ): FamilyVault? = withContext(Dispatchers.IO) {
+        val existing = ledgerDao.getFamilyVault(familyId) ?: return@withContext null
+        val now = System.currentTimeMillis()
+        val updated = existing.copy(
+            monthlyBudgetLimit = monthlyBudget,
+            updatedAt = now,
+            syncStatus = if (cloudDataSource.isAvailable) "PENDING_UPDATE" else "OFFLINE"
+        )
+        ledgerDao.upsertFamilyVault(updated)
+        repositoryScope.launch {
+            if (cloudDataSource.isAvailable) {
+                val success = cloudDataSource.upsertFamilyVault(updated)
+                if (success) {
+                    ledgerDao.upsertFamilyVault(updated.copy(syncStatus = "SYNCED"))
+                }
+            }
+        }
         updated
     }
 
@@ -557,7 +611,7 @@ class FamilyLedgerRepository(
         if (existing != null) {
             ledgerDao.upsertTransaction(existing.copy(isDeleted = false, syncStatus = "PENDING_UPDATE", updatedAt = now))
         }
-        legacyTransactionDao.restoreTransactionByServerId(transactionId, now)
+        legacyTransactionDao?.restoreTransactionByServerId(transactionId, now)
         repositoryScope.launch {
             if (cloudDataSource.isAvailable && existing != null) {
                 cloudDataSource.upsertTransaction(existing.copy(isDeleted = false, syncStatus = "SYNCED", updatedAt = now))
@@ -879,7 +933,7 @@ class FamilyLedgerRepository(
      */
     private suspend fun migrateLegacyFamilyData(familyId: String) {
         try {
-            val legacyFamily = legacyFamilyDao.getFirstFamily()
+            val legacyFamily = legacyFamilyDao?.getFirstFamily()
             if (legacyFamily != null && ledgerDao.getFamilyVault(legacyFamily.id) == null) {
                 ledgerDao.upsertFamilyVault(
                     FamilyVault(
@@ -894,7 +948,7 @@ class FamilyLedgerRepository(
                 Log.d(tag, "MIGRATION: Family ${legacyFamily.id} migrated to vault")
             }
 
-            val legacyMembers = legacyMemberDao.getPendingCreates() + legacyMemberDao.getPendingUpdates()
+            val legacyMembers = (legacyMemberDao?.getPendingCreates() ?: emptyList()) + (legacyMemberDao?.getPendingUpdates() ?: emptyList())
             legacyMembers.forEach { m ->
                 if (ledgerDao.getMemberById(m.id) == null) {
                     ledgerDao.upsertMember(
@@ -934,69 +988,15 @@ class FamilyLedgerRepository(
     }
 
     // =========================================================================
-    // LEGACY DAO MIRRORING HELPERS
+    // LEGACY DAO MIRRORING (Decoupled for clean separation without duplicate entries)
     // =========================================================================
 
     private suspend fun mirrorTransactionToLegacy(tx: LedgerTransaction) {
-        try {
-            var existing = legacyTransactionDao.getTransactionByServerId(tx.transactionId)
-            val creator = tx.paidByName.takeIf { it.isNotBlank() } ?: tx.paidByMemberId.ifBlank { tx.createdBy }
-            
-            // Deduplication guard: check local transactions with matching content within 60s
-            if (existing == null && !tx.isDeleted) {
-                val dupes = legacyTransactionDao.findPotentialDuplicates(
-                    amount = tx.amount,
-                    type = tx.type,
-                    scope = com.example.data.models.FinanceScope.FAMILY,
-                    startMillis = tx.dateMillis - 60_000L,
-                    endMillis = tx.dateMillis + 60_000L
-                )
-                val match = dupes.firstOrNull { it.serverId.isNullOrBlank() || it.serverId == tx.transactionId }
-                if (match != null) {
-                    existing = match
-                }
-            }
-
-            val entity = com.example.data.models.TransactionEntity(
-                id = existing?.id ?: 0L,
-                title = tx.title,
-                amount = tx.amount,
-                type = tx.type,
-                category = tx.category,
-                categoryIconName = categoryToIcon(tx.category),
-                paymentMethod = tx.paymentMethod,
-                note = tx.description,
-                financeScope = com.example.data.models.FinanceScope.FAMILY,
-                familyId = tx.familyId,
-                createdByUserId = creator,
-                dateMillis = tx.dateMillis,
-                serverId = tx.transactionId,
-                syncStatus = "SYNCED",
-                updatedAt = tx.updatedAt,
-                isDeleted = tx.isDeleted
-            )
-            if (existing == null) {
-                legacyTransactionDao.insertTransaction(entity)
-            } else {
-                legacyTransactionDao.updateTransaction(entity)
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "mirrorTransactionToLegacy error: ${e.message}")
-        }
+        // Pure Family Vault architecture: no writes into personal transactions table
     }
 
     private suspend fun mirrorDeleteToLegacy(txId: String) {
-        try {
-            val existing = legacyTransactionDao.getTransactionByServerId(txId)
-            val now = System.currentTimeMillis()
-            if (existing != null) {
-                legacyTransactionDao.markTransactionDeleted(existing.id, now)
-            } else {
-                legacyTransactionDao.markTransactionDeletedByServerId(txId, now)
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "mirrorDeleteToLegacy error: ${e.message}")
-        }
+        // Pure Family Vault architecture
     }
 
     /**
@@ -1034,7 +1034,7 @@ class FamilyLedgerRepository(
             }
 
             // 2. Deduplicate legacy transactions table in Room
-            val legacyTxs = legacyTransactionDao.getFamilyTransactionsOnce(familyId).filter { !it.isDeleted }
+            val legacyTxs = legacyTransactionDao?.getFamilyTransactionsOnce(familyId)?.filter { !it.isDeleted } ?: emptyList()
             val groupedLegacy = legacyTxs.groupBy { "${it.title.trim().lowercase()}_${it.amount}_${it.type}" }
             for ((_, group) in groupedLegacy) {
                 if (group.size <= 1) continue
@@ -1049,7 +1049,7 @@ class FamilyLedgerRepository(
                 }
                 for (dup in duplicates) {
                     Log.i(tag, "Deduplicating legacy transaction id: ${dup.id} serverId: ${dup.serverId} for '${dup.title}' ₹${dup.amount}")
-                    legacyTransactionDao.deleteTransaction(dup)
+                    legacyTransactionDao?.deleteTransaction(dup)
                     val sId = dup.serverId
                     if (!sId.isNullOrBlank() && sId != keep.serverId && cloudDataSource.isAvailable) {
                         try {
@@ -1066,60 +1066,15 @@ class FamilyLedgerRepository(
     }
 
     private suspend fun mirrorMemberToLegacy(member: FamilyVaultMember) {
-        try {
-            val existing = legacyMemberDao.getMemberById(member.memberId)
-            val entity = com.example.data.models.FamilyMemberEntity(
-                id = member.memberId,
-                familyId = member.familyId,
-                userId = member.userId,
-                name = member.name,
-                role = member.role,
-                joinedAt = member.joinedAt,
-                syncStatus = "SYNCED",
-                isDeleted = member.isDeleted
-            )
-            if (existing == null) {
-                legacyMemberDao.insertMember(entity)
-            } else {
-                legacyMemberDao.updateMember(entity)
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "mirrorMemberToLegacy error: ${e.message}")
-        }
+        // Pure Family Vault separation
     }
 
     private suspend fun mirrorDeleteMemberToLegacy(memberId: String) {
-        try {
-            val existing = legacyMemberDao.getMemberById(memberId)
-            if (existing != null) {
-                legacyMemberDao.updateMember(existing.copy(isDeleted = true, syncStatus = "PENDING_DELETE"))
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "mirrorDeleteMemberToLegacy error: ${e.message}")
-        }
+        // Pure Family Vault separation
     }
 
     private suspend fun mirrorVaultToLegacy(vault: FamilyVault) {
-        try {
-            val existing = legacyFamilyDao.getFamilyById(vault.familyId)
-            val entity = com.example.data.models.FamilyEntity(
-                id = vault.familyId,
-                name = vault.familyName,
-                createdByUserId = vault.createdBy,
-                createdAt = vault.createdAt,
-                updatedAt = vault.updatedAt,
-                inviteCode = vault.inviteCode,
-                serverId = vault.familyId,
-                syncStatus = "SYNCED"
-            )
-            if (existing == null) {
-                legacyFamilyDao.insertFamily(entity)
-            } else {
-                legacyFamilyDao.updateFamily(entity)
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "mirrorVaultToLegacy error: ${e.message}")
-        }
+        // Pure Family Vault separation
     }
 
     suspend fun getFamilyVault(familyId: String): FamilyVault? = withContext(Dispatchers.IO) {
@@ -1152,8 +1107,8 @@ class FamilyLedgerRepository(
         ledgerDao.clearAllLedgerTransactions()
         ledgerDao.clearAllFamilyVaultMembers()
         ledgerDao.clearAllFamilyVaults()
-        legacyFamilyDao.deleteAllFamilies()
-        legacyMemberDao.deleteAllFamilyMembers()
+        legacyFamilyDao?.deleteAllFamilies()
+        legacyMemberDao?.deleteAllFamilyMembers()
     }
 
     private fun isValidUuid(str: String?): Boolean = if (str.isNullOrBlank()) false else try {
