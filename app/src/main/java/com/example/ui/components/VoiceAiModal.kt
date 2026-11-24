@@ -41,7 +41,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -83,6 +85,7 @@ fun VoiceAiModal(
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val haptic = LocalHapticFeedback.current
 
     var modalState by remember { mutableStateOf(VoiceModalState.IDLE) }
     var recognizedSpokenText by remember { mutableStateOf("") }
@@ -138,6 +141,7 @@ fun VoiceAiModal(
     fun handleProcessQuery(query: String) {
         if (query.isBlank()) return
         stopListeningSafely()
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         modalState = VoiceModalState.PROCESSING
         onProcessPrompt(query)
     }
@@ -186,13 +190,15 @@ fun VoiceAiModal(
         }
     }
 
+    var triggerStartListening by remember { mutableStateOf(false) }
+
     // Permission launcher
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
             errorMessage = null
-            modalState = VoiceModalState.IDLE
+            triggerStartListening = true
         } else {
             errorMessage = "Microphone permission is required for voice entry."
             modalState = VoiceModalState.ERROR
@@ -219,6 +225,13 @@ fun VoiceAiModal(
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             launchSystemVoiceIntent()
             return
+        }
+
+        // Tactile buzz on speech recording startup
+        try {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
         // Request exclusive audio focus to silence ambient background media during speech capture
@@ -257,10 +270,10 @@ fun VoiceAiModal(
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-IN")
                 putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", additionalLangs)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                // Extended listening window to give user plenty of time to formulate words without being cut off
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 7000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
+                // Ultra-snappy silence detection window (1.2s complete silence / 1.0s possible silence)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 800L)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
                 putExtra("android.speech.extra.DICTATION_MODE", true)
@@ -277,8 +290,18 @@ fun VoiceAiModal(
                 }
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {
-                    // Do not prematurely cut off on brief silence or breath pause;
-                    // Keep listening until either onResults is delivered or user taps manual Stop.
+                    // Snappy silence debounce: if speech was captured, process within 600ms if onResults is delayed
+                    val candidate = bufferedSpeechText.ifBlank { recognizedSpokenText }
+                    if (candidate.isNotBlank()) {
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            if (modalState == VoiceModalState.LISTENING) {
+                                val current = bufferedSpeechText.ifBlank { recognizedSpokenText }
+                                if (current.isNotBlank()) {
+                                    handleProcessQuery(current)
+                                }
+                            }
+                        }, 600L)
+                    }
                 }
                 override fun onError(error: Int) {
                     // Resilient error handling: if speech was already buffered, recover it instead of dropping!
@@ -304,6 +327,11 @@ fun VoiceAiModal(
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     val text = matches?.firstOrNull()?.ifBlank { null } ?: bufferedSpeechText
                     if (text.isNotBlank()) {
+                        try {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                         recognizedSpokenText = text
                         bufferedSpeechText = text
                         handleProcessQuery(text)
@@ -329,6 +357,26 @@ fun VoiceAiModal(
         } catch (e: Exception) {
             e.printStackTrace()
             launchSystemVoiceIntent()
+        }
+    }
+
+    // Auto-start listening immediately on modal launch
+    LaunchedEffect(Unit) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startListening()
+        } else {
+            try {
+                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    LaunchedEffect(triggerStartListening) {
+        if (triggerStartListening) {
+            triggerStartListening = false
+            startListening()
         }
     }
 
@@ -484,6 +532,52 @@ fun VoiceAiModal(
                     var editCategory by remember(parsedExpense) { mutableStateOf(parsedExpense.category) }
                     var editPaymentMethod by remember(parsedExpense) { mutableStateOf(parsedExpense.paymentMethod) }
 
+                    // Auto-Save Countdown State (3-second timer with tap-to-pause and instant Save Now)
+                    var isAutoSavePaused by remember(parsedExpense) { mutableStateOf(false) }
+                    var autoSaveProgress by remember(parsedExpense) { mutableFloatStateOf(1f) }
+                    var remainingSeconds by remember(parsedExpense) { mutableIntStateOf(3) }
+
+                    val executeSave: () -> Unit = {
+                        val amt = editAmount.toDoubleOrNull() ?: parsedExpense.amount
+                        val finalTitle = editTitle.ifBlank { parsedExpense.title }
+                        val finalCat = editCategory.ifBlank { parsedExpense.category }
+                        val finalMethod = editPaymentMethod.ifBlank { parsedExpense.paymentMethod }
+
+                        try {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+
+                        if (onConfirmSaveWithScope != null) {
+                            onConfirmSaveWithScope(finalTitle, amt, editType, finalCat, finalMethod, editScope)
+                        } else if (onConfirmSaveWithType != null) {
+                            onConfirmSaveWithType(finalTitle, amt, editType, finalCat, finalMethod)
+                        } else {
+                            onConfirmSave(finalTitle, amt, finalCat, finalMethod)
+                        }
+                        Toast.makeText(context, "Saved $currencySymbol$amt for $finalTitle", Toast.LENGTH_SHORT).show()
+                    }
+
+                    // 3-second Auto-Save Countdown Effect
+                    LaunchedEffect(parsedExpense, isAutoSavePaused) {
+                        if (parsedExpense.amount > 0 && !isAutoSavePaused) {
+                            val totalDurationMs = 3000L
+                            val startEpoch = System.currentTimeMillis()
+                            while (!isAutoSavePaused) {
+                                val elapsed = System.currentTimeMillis() - startEpoch
+                                val remaining = (totalDurationMs - elapsed).coerceAtLeast(0L)
+                                autoSaveProgress = (remaining.toFloat() / totalDurationMs.toFloat()).coerceIn(0f, 1f)
+                                remainingSeconds = ((remaining + 999L) / 1000L).toInt()
+                                if (remaining <= 0L) {
+                                    executeSave()
+                                    break
+                                }
+                                kotlinx.coroutines.delay(40L)
+                            }
+                        }
+                    }
+
                     Surface(
                         shape = RoundedCornerShape(18.dp),
                         color = SlateDarkSurfaceVariant,
@@ -491,6 +585,86 @@ fun VoiceAiModal(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
+                            // ⚡ Auto-Save Countdown Banner (iOS-Luxury Pill)
+                            if (!isAutoSavePaused && remainingSeconds > 0 && (parsedExpense.amount > 0 || (editAmount.toDoubleOrNull() ?: 0.0) > 0.0)) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = EmeraldDarkPrimary.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.5f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 12.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    Icons.Default.Bolt,
+                                                    contentDescription = null,
+                                                    tint = EmeraldDarkPrimary,
+                                                    modifier = Modifier.size(17.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "Auto-saving in ${remainingSeconds}s...",
+                                                    fontSize = 12.5.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White
+                                                )
+                                            }
+
+                                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = SlateDarkSurface.copy(alpha = 0.8f),
+                                                    border = BorderStroke(1.dp, GlassBorderColor),
+                                                    modifier = Modifier.clickable { isAutoSavePaused = true }
+                                                ) {
+                                                    Text(
+                                                        text = "Edit Details",
+                                                        fontSize = 10.5.sp,
+                                                        color = SlateDarkTextSecondary,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                    )
+                                                }
+
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = EmeraldDarkPrimary,
+                                                    modifier = Modifier.clickable {
+                                                        isAutoSavePaused = true
+                                                        executeSave()
+                                                    }
+                                                ) {
+                                                    Text(
+                                                        text = "Save Now",
+                                                        fontSize = 10.5.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color.White,
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(7.dp))
+                                        LinearProgressIndicator(
+                                            progress = { autoSaveProgress },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(3.dp)
+                                                .clip(RoundedCornerShape(2.dp)),
+                                            color = EmeraldDarkPrimary,
+                                            trackColor = EmeraldDarkPrimary.copy(alpha = 0.2f)
+                                        )
+                                    }
+                                }
+                            }
                             // Header & Type Selector Toggle
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -693,6 +867,7 @@ fun VoiceAiModal(
                             ) {
                                 OutlinedButton(
                                     onClick = {
+                                        isAutoSavePaused = true
                                         startListening()
                                     },
                                     shape = RoundedCornerShape(10.dp),
@@ -708,19 +883,8 @@ fun VoiceAiModal(
 
                                 Button(
                                     onClick = {
-                                        val amt = editAmount.toDoubleOrNull() ?: parsedExpense.amount
-                                        val finalTitle = editTitle.ifBlank { parsedExpense.title }
-                                        val finalCat = editCategory.ifBlank { parsedExpense.category }
-                                        val finalMethod = editPaymentMethod.ifBlank { parsedExpense.paymentMethod }
-
-                                        if (onConfirmSaveWithScope != null) {
-                                            onConfirmSaveWithScope(finalTitle, amt, editType, finalCat, finalMethod, editScope)
-                                        } else if (onConfirmSaveWithType != null) {
-                                            onConfirmSaveWithType(finalTitle, amt, editType, finalCat, finalMethod)
-                                        } else {
-                                            onConfirmSave(finalTitle, amt, finalCat, finalMethod)
-                                        }
-                                        Toast.makeText(context, "Saved $currencySymbol$amt for $finalTitle", Toast.LENGTH_SHORT).show()
+                                        isAutoSavePaused = true
+                                        executeSave()
                                     },
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.buttonColors(
@@ -805,8 +969,8 @@ fun VoiceAiModal(
                             VoiceModalState.LISTENING -> {
                                 Surface(
                                     shape = RoundedCornerShape(14.dp),
-                                    color = PastelRose.copy(alpha = 0.15f),
-                                    border = BorderStroke(1.dp, PastelRose.copy(alpha = 0.45f))
+                                    color = EmeraldDarkPrimary.copy(alpha = 0.15f),
+                                    border = BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.45f))
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
@@ -817,14 +981,14 @@ fun VoiceAiModal(
                                                 .size(10.dp)
                                                 .scale(pulseScale)
                                                 .clip(CircleShape)
-                                                .background(PastelRose)
+                                                .background(EmeraldDarkPrimary)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = "RECORDING ACTIVE • 10s Window",
+                                            text = "LISTENING • Speak naturally",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = PastelRose
+                                            color = EmeraldDarkPrimary
                                         )
                                     }
                                 }

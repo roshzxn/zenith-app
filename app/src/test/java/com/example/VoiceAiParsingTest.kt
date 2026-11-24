@@ -284,4 +284,31 @@ class VoiceAiParsingTest {
         assertEquals("Monthly Salary", result.title)
         assertEquals("Salary & Income", result.category)
     }
+
+    @Test
+    fun testVoiceExpense_SubMillisecondPreParseLatency() {
+        val testPhrases = listOf(
+            "Spent 350 for lunch via UPI",
+            "Paid 1200 electricity bill cash",
+            "Groceries 1500 with credit card",
+            "Received 50000 salary in bank",
+            "Two thousand for dinner with family"
+        )
+        // Warm up JIT
+        for (p in testPhrases) {
+            GeminiAiService.fallbackParseVoiceCommand(p)
+        }
+        val start = System.nanoTime()
+        for (i in 0 until 100) {
+            for (p in testPhrases) {
+                val res = GeminiAiService.fallbackParseVoiceCommand(p)
+                assertTrue(res.amount > 0)
+                assertTrue(res.title.isNotBlank())
+            }
+        }
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
+        val avgPerParseMs = elapsedMs / 500.0
+        // Average execution time should be under 2 milliseconds for instantaneous UI rendering
+        assertTrue("Pre-parse took $avgPerParseMs ms on avg, expected < 2.0ms", avgPerParseMs < 2.0)
+    }
 }

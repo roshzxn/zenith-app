@@ -1474,11 +1474,22 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     fun processVoicePrompt(promptText: String) {
         val trimmed = promptText.trim()
         if (trimmed.isBlank()) return
-        _voiceProcessing.value = true
+        
+        // 1. Instant local pre-parse (< 2ms) so UI populates immediately with zero perceived latency
+        val instantPreParsed = GeminiAiService.fallbackParseVoiceCommand(trimmed)
+        _parsedVoice.value = instantPreParsed
+        _voiceProcessing.value = false
+
+        // 2. Background coroutine for parallel AI semantic enrichment
         viewModelScope.launch {
-            val parsed = GeminiAiService.parseVoiceCommand(trimmed)
-            _parsedVoice.value = parsed
-            _voiceProcessing.value = false
+            try {
+                val parsed = GeminiAiService.parseVoiceCommand(trimmed)
+                if (parsed.amount > 0) {
+                    _parsedVoice.value = parsed
+                }
+            } catch (e: Exception) {
+                // Local pre-parse already set; gracefully ignore network timeouts
+            }
         }
     }
 

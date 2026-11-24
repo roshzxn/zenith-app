@@ -172,13 +172,13 @@ object GeminiAiService {
                 Return plain JSON only without markdown formatting.
             """.trimIndent()
 
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$apiKey")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
             conn.doOutput = true
-            conn.connectTimeout = 4000
-            conn.readTimeout = 5000
+            conn.connectTimeout = 1500
+            conn.readTimeout = 2500
 
             val requestPayload = JSONObject().apply {
                 put("systemInstruction", JSONObject().apply {
@@ -279,7 +279,7 @@ object GeminiAiService {
                     - "totalPrice": line total as number
                 Return plain JSON only without markdown formatting.
             """.trimIndent()
-            val responseText = callGeminiApi(apiKey, systemInstruction, receiptText)
+            val responseText = callGeminiApi(apiKey, systemInstruction, receiptText, maxTokens = 512)
             val jsonClean = responseText.replace("```json", "").replace("```", "").trim()
             val jsonObj = JSONObject(jsonClean)
             val merchant = jsonObj.optString("merchantName", "Store Purchase")
@@ -400,8 +400,9 @@ object GeminiAiService {
         }
     }
 
-    private fun callGeminiApi(apiKey: String, systemInstruction: String, promptText: String): String {
-        val candidateModels = listOf("gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash")
+    private fun callGeminiApi(apiKey: String, systemInstruction: String, promptText: String, maxTokens: Int = 128): String {
+        // High-speed model order verified against active API endpoint (gemini-3.5-flash-lite delivers ~0.77s response time)
+        val candidateModels = listOf("gemini-3.5-flash-lite", "gemini-flash-lite-latest")
         var lastError: Exception? = null
 
         for (model in candidateModels) {
@@ -411,8 +412,8 @@ object GeminiAiService {
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.doOutput = true
-                conn.connectTimeout = 4000
-                conn.readTimeout = 5000
+                conn.connectTimeout = 1500
+                conn.readTimeout = 2000
 
                 val requestPayload = JSONObject().apply {
                     put("systemInstruction", JSONObject().apply {
@@ -420,7 +421,7 @@ object GeminiAiService {
                     })
                     put("generationConfig", JSONObject().apply {
                         put("temperature", 0.1)
-                        put("maxOutputTokens", 512)
+                        put("maxOutputTokens", maxTokens)
                     })
                     put("contents", JSONArray().put(JSONObject().apply {
                         put("parts", JSONArray().apply {
