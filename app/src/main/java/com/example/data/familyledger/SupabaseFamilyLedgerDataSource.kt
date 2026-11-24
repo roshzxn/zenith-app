@@ -485,11 +485,17 @@ class SupabaseFamilyLedgerDataSource : FamilyLedgerCloudDataSource {
     override suspend fun softDeleteTransaction(transactionId: String): Boolean = withContext(Dispatchers.IO) {
         if (!isAvailable) return@withContext false
         try {
-            SupabaseClientConfig.supabase.postgrest["transactions"].update({
-                set("is_deleted", true)
-                set("updated_at", Instant.now().toString())
-            }) {
-                filter { eq("id", transactionId) }
+            try {
+                SupabaseClientConfig.supabase.postgrest["transactions"].delete {
+                    filter { eq("id", transactionId) }
+                }
+            } catch (e: Exception) {
+                SupabaseClientConfig.supabase.postgrest["transactions"].update({
+                    set("is_deleted", true)
+                    set("updated_at", Instant.now().toString())
+                }) {
+                    filter { eq("id", transactionId) }
+                }
             }
             true
         } catch (e: Exception) {

@@ -16,6 +16,9 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE syncStatus = 'PENDING_DELETE' OR isDeleted = 1")
     suspend fun getPendingDeletes(): List<TransactionEntity>
 
+    @Query("SELECT serverId FROM transactions WHERE isDeleted = 1 AND serverId IS NOT NULL")
+    suspend fun getDeletedServerIds(): List<String>
+
     @Query("SELECT * FROM transactions WHERE serverId = :serverId LIMIT 1")
     suspend fun getTransactionByServerId(serverId: String): TransactionEntity?
 
@@ -69,6 +72,15 @@ interface TransactionDao {
 
     @Query("UPDATE transactions SET isDeleted = 1, syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE id = :id")
     suspend fun markTransactionDeleted(id: Long, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET isDeleted = 1, syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE serverId = :serverId")
+    suspend fun markTransactionDeletedByServerId(serverId: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET isDeleted = 0, syncStatus = 'PENDING_UPDATE', updatedAt = :updatedAt WHERE id = :id")
+    suspend fun restoreTransaction(id: Long, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET isDeleted = 0, syncStatus = 'PENDING_UPDATE', updatedAt = :updatedAt WHERE serverId = :serverId")
+    suspend fun restoreTransactionByServerId(serverId: String, updatedAt: Long = System.currentTimeMillis())
 
     @Query("UPDATE transactions SET createdByUserId = :newUserId, syncStatus = 'PENDING_CREATE', updatedAt = :updatedAt WHERE (createdByUserId = 'local_user_1' OR createdByUserId IS NULL OR createdByUserId != :newUserId) AND financeScope = 'PERSONAL' AND isDeleted = 0")
     suspend fun reassignPersonalTransactionsToUser(newUserId: String, updatedAt: Long = System.currentTimeMillis()): Int

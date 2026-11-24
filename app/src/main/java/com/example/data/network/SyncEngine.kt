@@ -171,26 +171,36 @@ class SyncEngine(
             val serverId = localTx.serverId
             if (serverId != null && isValidUuid(serverId)) {
                 try {
-                    SupabaseClientConfig.supabase.postgrest["transactions"].update({
-                        set("is_deleted", true)
-                        set("updated_at", Instant.now().toString())
-                    }) {
+                    SupabaseClientConfig.supabase.postgrest["transactions"].delete {
                         filter { eq("id", serverId) }
                     }
                 } catch (e: Exception) {
-                    Log.e(tag, "Failed to soft-delete personal transaction on cloud: ${e.message}")
-                    success = false
+                    try {
+                        SupabaseClientConfig.supabase.postgrest["transactions"].update({
+                            set("is_deleted", true)
+                            set("updated_at", Instant.now().toString())
+                        }) {
+                            filter { eq("id", serverId) }
+                        }
+                    } catch (e2: Exception) {
+                        Log.e(tag, "Failed to delete personal transaction on cloud: ${e2.message}")
+                    }
                 }
             }
-            transactionDao.deleteTransaction(localTx)
+            // Retain the local tombstone with isDeleted = true and syncStatus = "SYNCED" so it is NEVER resurrected
+            transactionDao.updateTransaction(
+                localTx.copy(isDeleted = true, syncStatus = "SYNCED", updatedAt = System.currentTimeMillis())
+            )
         }
 
         // 4. Pull Remote Personal Transactions
         try {
+            val deletedServerIds = transactionDao.getDeletedServerIds().toSet()
             val remoteTxs = SupabaseClientConfig.supabase.postgrest["transactions"]
                 .select {
                     filter {
                         eq("user_id", userId)
+                        eq("is_deleted", false)
                     }
                 }
                 .decodeList<TransactionDto>()
@@ -198,8 +208,10 @@ class SyncEngine(
             for (dto in remoteTxs) {
                 val isFamily = dto.financeScope?.equals("FAMILY", ignoreCase = true) == true && !dto.familyId.isNullOrBlank()
                 if (isFamily) continue
+                if (deletedServerIds.contains(dto.id)) continue
 
                 var existing = transactionDao.getTransactionByServerId(dto.id)
+                if (existing != null && existing.isDeleted) continue
                 val txDateMillis = parseIsoTimestamp(dto.transactionDate)
                 val txUpdatedMillis = parseIsoTimestamp(dto.updatedAt ?: dto.createdAt)
                 val txTitle = dto.title?.takeIf { it.isNotBlank() }
@@ -375,33 +387,46 @@ class SyncEngine(
             val serverId = localTx.serverId
             if (serverId != null && isValidUuid(serverId)) {
                 try {
-                    SupabaseClientConfig.supabase.postgrest["transactions"].update({
-                        set("is_deleted", true)
-                        set("updated_at", Instant.now().toString())
-                    }) {
+                    SupabaseClientConfig.supabase.postgrest["transactions"].delete {
                         filter { eq("id", serverId) }
                     }
                 } catch (e: Exception) {
-                    Log.e(tag, "Failed to soft-delete family transaction on cloud: ${e.message}")
-                    success = false
+                    try {
+                        SupabaseClientConfig.supabase.postgrest["transactions"].update({
+                            set("is_deleted", true)
+                            set("updated_at", Instant.now().toString())
+                        }) {
+                            filter { eq("id", serverId) }
+                        }
+                    } catch (e2: Exception) {
+                        Log.e(tag, "Failed to delete family transaction on cloud: ${e2.message}")
+                    }
                 }
             }
-            transactionDao.deleteTransaction(localTx)
+            // Retain the local tombstone with isDeleted = true and syncStatus = "SYNCED" so it is NEVER resurrected
+            transactionDao.updateTransaction(
+                localTx.copy(isDeleted = true, syncStatus = "SYNCED", updatedAt = System.currentTimeMillis())
+            )
         }
 
         // 4. Pull Remote Family Transactions
         try {
+            val deletedServerIds = transactionDao.getDeletedServerIds().toSet()
             val remoteTxs = SupabaseClientConfig.supabase.postgrest["transactions"]
                 .select {
                     filter {
                         eq("finance_scope", "FAMILY")
                         eq("family_id", familyId)
+                        eq("is_deleted", false)
                     }
                 }
                 .decodeList<TransactionDto>()
 
             for (dto in remoteTxs) {
+                if (deletedServerIds.contains(dto.id)) continue
+
                 var existing = transactionDao.getTransactionByServerId(dto.id)
+                if (existing != null && existing.isDeleted) continue
                 val txDateMillis = parseIsoTimestamp(dto.transactionDate)
                 val txUpdatedMillis = parseIsoTimestamp(dto.updatedAt ?: dto.createdAt)
                 val txTitle = dto.title?.takeIf { it.isNotBlank() }

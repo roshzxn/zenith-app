@@ -521,27 +521,17 @@ class FamilyLedgerRepository(
     }
 
     /**
-     * Soft-deletes a transaction: marks locally as deleted, then attempts
-     * cloud soft-delete. On success, removes from local Room permanently.
-     * Enforces that only the creator (or family admin) can delete it.
+     * Soft-deletes a transaction: marks locally as deleted with tombstone,
+     * mirrors to legacy table with tombstone, and syncs delete to cloud.
      */
     suspend fun deleteTransaction(transactionId: String, currentUserId: String): Boolean =
         withContext(Dispatchers.IO) {
-            val existing = ledgerDao.getTransactionById(transactionId) ?: return@withContext false
-
-            if (existing.createdBy.isNotBlank() && existing.createdBy != currentUserId) {
-                val members = ledgerDao.getMembersForFamily(existing.familyId).first()
-                val currentMember = members.find { it.userId == currentUserId }
-                val isAdmin = currentMember?.role == FamilyRole.ADMIN
-                if (!isAdmin && existing.paidByMemberId != currentMember?.memberId && existing.paidByMemberId != currentUserId) {
-                    Log.w(tag, "UNAUTHORIZED DELETE: user $currentUserId cannot delete entry created by ${existing.createdBy}")
-                    throw IllegalAccessException("You can only delete entries you created.")
-                }
-            }
-
+            val existing = ledgerDao.getTransactionById(transactionId)
             val now = System.currentTimeMillis()
 
-            ledgerDao.markTransactionDeleted(transactionId, now)
+            if (existing != null) {
+                ledgerDao.markTransactionDeleted(transactionId, now)
+            }
             mirrorDeleteToLegacy(transactionId)
             Log.d(tag, "LOCAL_DELETE: $transactionId")
 
@@ -549,8 +539,6 @@ class FamilyLedgerRepository(
                 if (cloudDataSource.isAvailable) {
                     val success = cloudDataSource.softDeleteTransaction(transactionId)
                     if (success) {
-                        ledgerDao.deleteTransactionPermanently(transactionId)
-                        mirrorDeleteToLegacy(transactionId)
                         _syncStatus.value = FamilySyncStatus.SYNCED
                     } else {
                         _syncStatus.value = FamilySyncStatus.ERROR
@@ -559,6 +547,23 @@ class FamilyLedgerRepository(
             }
             true
         }
+
+    /**
+     * Restores a deleted transaction (Undo).
+     */
+    suspend fun restoreTransaction(transactionId: String) = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val existing = ledgerDao.getTransactionById(transactionId)
+        if (existing != null) {
+            ledgerDao.upsertTransaction(existing.copy(isDeleted = false, syncStatus = "PENDING_UPDATE", updatedAt = now))
+        }
+        legacyTransactionDao.restoreTransactionByServerId(transactionId, now)
+        repositoryScope.launch {
+            if (cloudDataSource.isAvailable && existing != null) {
+                cloudDataSource.upsertTransaction(existing.copy(isDeleted = false, syncStatus = "SYNCED", updatedAt = now))
+            }
+        }
+    }
 
     // =========================================================================
     // FAMILY VAULT OPERATIONS
@@ -983,8 +988,11 @@ class FamilyLedgerRepository(
     private suspend fun mirrorDeleteToLegacy(txId: String) {
         try {
             val existing = legacyTransactionDao.getTransactionByServerId(txId)
+            val now = System.currentTimeMillis()
             if (existing != null) {
-                legacyTransactionDao.deleteTransaction(existing)
+                legacyTransactionDao.markTransactionDeleted(existing.id, now)
+            } else {
+                legacyTransactionDao.markTransactionDeletedByServerId(txId, now)
             }
         } catch (e: Exception) {
             Log.w(tag, "mirrorDeleteToLegacy error: ${e.message}")

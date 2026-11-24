@@ -2,6 +2,7 @@ package com.example
 
 import android.content.Intent
 import android.os.Bundle
+import kotlinx.coroutines.launch
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -177,6 +178,8 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
     var showFullFamilyLedger by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
     val totalIncome = remember(uiState.transactions) { viewModel.getTotalIncome(uiState.transactions) }
     val totalExpense = remember(uiState.transactions) { viewModel.getTotalExpense(uiState.transactions) }
     val netBalance = remember(uiState.transactions) { viewModel.getNetBalance(uiState.transactions) }
@@ -228,6 +231,20 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                     selectedTab = uiState.selectedTab,
                     onTabSelected = { index -> viewModel.setTab(index) }
                 )
+            },
+            snackbarHost = {
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.padding(bottom = 80.dp)
+                ) { data ->
+                    Snackbar(
+                        snackbarData = data,
+                        containerColor = SlateDarkSurfaceVariant,
+                        contentColor = Color.White,
+                        actionColor = PastelCyan,
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                }
             }
         ) { innerPadding ->
             Box(
@@ -269,7 +286,19 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                         onOpenUpiScanner = { viewModel.openUpiScanDialog() },
                         familyName = activeFamily?.name ?: "Family Vault",
                         inviteCode = activeFamily?.inviteCode?.takeIf { it.isNotBlank() } ?: activeFamily?.id ?: activeFamilyId ?: "",
-                        onDeleteTransaction = { tx -> viewModel.deleteTransactionWithReceipt(tx) },
+                        onDeleteTransaction = { tx ->
+                            viewModel.deleteTransactionWithReceipt(tx)
+                            coroutineScope.launch {
+                                val res = snackbarHostState.showSnackbar(
+                                    message = "Transaction deleted",
+                                    actionLabel = "Undo",
+                                    duration = SnackbarDuration.Short
+                                )
+                                if (res == SnackbarResult.ActionPerformed) {
+                                    viewModel.undoDeleteTransaction(tx)
+                                }
+                            }
+                        },
                         onUpdateTransaction = { tx -> viewModel.updateTransaction(tx) },
                         onManageFamilyMembers = { showFamilyMembersDialog = true },
                         onNavigateToActivity = { viewModel.setTab(1) },
@@ -295,7 +324,19 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                         onFilterTypeChange = { type -> viewModel.setFilterType(type) },
                         onFilterCategoryChange = { cat -> viewModel.setFilterCategory(cat) },
                         onFilterMemberChange = { member -> viewModel.setFilterMember(member) },
-                        onDeleteTransaction = { tx -> viewModel.deleteTransactionWithReceipt(tx) },
+                        onDeleteTransaction = { tx ->
+                            viewModel.deleteTransactionWithReceipt(tx)
+                            coroutineScope.launch {
+                                val res = snackbarHostState.showSnackbar(
+                                    message = "Transaction deleted",
+                                    actionLabel = "Undo",
+                                    duration = SnackbarDuration.Short
+                                )
+                                if (res == SnackbarResult.ActionPerformed) {
+                                    viewModel.undoDeleteTransaction(tx)
+                                }
+                            }
+                        },
                         onUpdateTransaction = { tx -> viewModel.updateTransaction(tx) },
                         onOpenAddTransaction = { showAddDialog = true },
                         onOpenVoiceAssistant = { viewModel.openVoiceDialog() },

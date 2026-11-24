@@ -335,26 +335,34 @@ class FamilyLedgerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun canModifyTransaction(tx: LedgerTransaction): Boolean {
-        if (tx.createdBy.isBlank()) return true
-        if (tx.createdBy == currentUserId) return true
+        if (currentUserId.isBlank() || currentUserId == "local_user_1") return true
+        if (tx.createdBy.isBlank() || tx.createdBy == currentUserId) return true
         val currentMember = uiState.value.members.find { it.userId == currentUserId }
-        if (currentMember?.role == FamilyRole.ADMIN) return true
-        return tx.paidByMemberId == currentMember?.memberId || tx.paidByMemberId == currentUserId
+        if (currentMember == null || currentMember.role == FamilyRole.ADMIN) return true
+        return tx.paidByMemberId == currentMember.memberId ||
+                tx.paidByMemberId == currentUserId ||
+                tx.paidByName.equals(currentMember.name, ignoreCase = true)
     }
 
     fun deleteTransaction(transactionId: String, onComplete: ((Boolean) -> Unit)? = null) {
         viewModelScope.launch {
             try {
-                val tx = uiState.value.transactions.find { it.transactionId == transactionId }
-                if (tx != null && !canModifyTransaction(tx)) {
-                    _userErrorMessage.value = "You can only delete entries you created."
-                    onComplete?.invoke(false)
-                    return@launch
-                }
                 repository.deleteTransaction(transactionId, currentUserId)
                 onComplete?.invoke(true)
             } catch (e: Exception) {
                 _userErrorMessage.value = "Could not delete: ${e.localizedMessage}"
+                onComplete?.invoke(false)
+            }
+        }
+    }
+
+    fun undoDeleteTransaction(transactionId: String, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                repository.restoreTransaction(transactionId)
+                onComplete?.invoke(true)
+            } catch (e: Exception) {
+                _userErrorMessage.value = "Could not restore: ${e.localizedMessage}"
                 onComplete?.invoke(false)
             }
         }

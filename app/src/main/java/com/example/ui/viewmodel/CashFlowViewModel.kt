@@ -1703,6 +1703,22 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun undoDeleteTransaction(transaction: TransactionEntity) {
+        viewModelScope.launch {
+            repository.restoreTransaction(transaction)
+            if (transaction.financeScope == FinanceScope.FAMILY && !transaction.serverId.isNullOrBlank()) {
+                familyLedgerRepository.restoreTransaction(transaction.serverId)
+            }
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    syncEngine.syncAll(currentUserId)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
     fun confirmReceiptExpense() {
         val parsed = _parsedReceipt.value ?: return
         val itemsList = parsed.items.map { 

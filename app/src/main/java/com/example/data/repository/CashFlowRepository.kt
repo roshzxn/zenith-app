@@ -173,6 +173,10 @@ class CashFlowRepository(
         }
     }
 
+    suspend fun restoreTransaction(transaction: TransactionEntity) {
+        transactionDao.restoreTransaction(transaction.id)
+    }
+
     suspend fun reassignPersonalTransactionsToUser(newUserId: String): Int {
         return transactionDao.reassignPersonalTransactionsToUser(newUserId)
     }

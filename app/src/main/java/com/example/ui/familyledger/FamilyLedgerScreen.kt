@@ -49,6 +49,7 @@ fun FamilyLedgerScreen(
     var showCreateVaultDialog by remember { mutableStateOf(false) }
     var showVaultSwitchMenu by remember { mutableStateOf(false) }
     var showAlternativeSyncDialog by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     val infiniteTransition = rememberInfiniteTransition(label = "sync_spin")
@@ -68,6 +69,20 @@ fun FamilyLedgerScreen(
             .background(brush = AmbientBackgroundBrush),
         containerColor = Color.Transparent,
         floatingActionButtonPosition = FabPosition.End,
+        snackbarHost = {
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.padding(bottom = 80.dp)
+            ) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    containerColor = SlateDarkSurfaceVariant,
+                    contentColor = Color.White,
+                    actionColor = PastelCyan,
+                    shape = RoundedCornerShape(14.dp)
+                )
+            }
+        },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
@@ -496,8 +511,19 @@ fun FamilyLedgerScreen(
                         val toDel = transactionToDelete
                         transactionToDelete = null
                         if (toDel != null) {
-                            viewModel.deleteTransaction(toDel.transactionId) {
-                                Toast.makeText(context, "Entry deleted.", Toast.LENGTH_SHORT).show()
+                            viewModel.deleteTransaction(toDel.transactionId) { success ->
+                                if (success) {
+                                    scope.launch {
+                                        val res = snackbarHostState.showSnackbar(
+                                            message = "Entry deleted",
+                                            actionLabel = "Undo",
+                                            duration = SnackbarDuration.Short
+                                        )
+                                        if (res == SnackbarResult.ActionPerformed) {
+                                            viewModel.undoDeleteTransaction(toDel.transactionId)
+                                        }
+                                    }
+                                }
                             }
                         }
                     },
