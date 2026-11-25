@@ -165,8 +165,6 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun CashFlowMainApp(viewModel: CashFlowViewModel) {
-    val familyLedgerViewModel: com.zenith.app.ui.familyledger.FamilyLedgerViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-    val familyLedgerUiState by familyLedgerViewModel.uiState.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val currentFinanceScope by viewModel.currentFinanceScope.collectAsStateWithLifecycle()
     val syncUiState by viewModel.syncUiState.collectAsStateWithLifecycle()
@@ -175,7 +173,6 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
     val familyMembers by viewModel.familyMembers.collectAsStateWithLifecycle(initialValue = emptyList())
     var showAddDialog by remember { mutableStateOf(false) }
     var showFamilyMembersDialog by remember { mutableStateOf(false) }
-    var showFullFamilyLedger by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -185,21 +182,10 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
     val netBalance = remember(uiState.transactions) { viewModel.getNetBalance(uiState.transactions) }
     val familySettlementSummary by viewModel.familySettlementSummary.collectAsStateWithLifecycle()
 
-    BackHandler(enabled = showFullFamilyLedger) {
-        showFullFamilyLedger = false
-    }
-
-    if (showFullFamilyLedger) {
-        com.zenith.app.ui.familyledger.FamilyLedgerScreen(
-            viewModel = familyLedgerViewModel,
-            state = familyLedgerUiState,
-            onBackToPersonal = { showFullFamilyLedger = false }
-        )
-    } else {
-        Scaffold(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(brush = AmbientBackgroundBrush),
+    Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(brush = AmbientBackgroundBrush),
             containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             floatingActionButtonPosition = FabPosition.End,
@@ -315,7 +301,6 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                                 ).show()
                             }
                         },
-                        onOpenFullFamilyLedger = { showFullFamilyLedger = true },
                         onToggleHideBalance = { viewModel.toggleBalanceHidden() }
                     )
                     1 -> TransactionsScreen(
@@ -565,5 +550,4 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
             )
         }
     }
-}
 }

@@ -66,7 +66,6 @@
 
 # --- Domain & Data Models (Preserve all fields for Room / JSON) ---
 -keep class com.zenith.app.data.models.** { *; }
--keep class com.zenith.app.data.familyledger.** { *; }
 -keep class com.zenith.app.data.network.** { *; }
 -keep class com.zenith.app.data.ai.** { *; }
 -keep class com.zenith.app.data.upi.** { *; }

@@ -558,7 +558,7 @@ fun JoinFamilyDialog(
                 OutlinedTextField(
                     value = inviteCode,
                     onValueChange = { input ->
-                        val extracted = com.zenith.app.data.familyledger.FamilyInviteCodeUtils.extractInviteCode(input)
+                        val extracted = com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode(input)
                         inviteCode = if (extracted.isNotBlank() && input.length > 8) extracted else input.uppercase()
                     },
                     label = { Text("Family ID / Invite Code") },
@@ -568,7 +568,7 @@ fun JoinFamilyDialog(
                         IconButton(onClick = {
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             val clipText = clipboard?.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-                            val extracted = com.zenith.app.data.familyledger.FamilyInviteCodeUtils.extractInviteCode(clipText)
+                            val extracted = com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode(clipText)
                             if (extracted.isNotBlank()) {
                                 inviteCode = extracted
                             } else if (clipText.isNotBlank()) {

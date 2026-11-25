@@ -228,25 +228,25 @@ class VoiceAiParsingTest {
     @Test
     fun testFamilyInviteCodeUtils_WhatsAppShareText() {
         val sharedText = "Join our shared Family Ledger 'Roshan Family' on Zenith Finance!\n\nInvite Code: FAM-8F4A2B\n\nOpen Zenith > Family Ledger > Join Vault and enter FAM-8F4A2B to connect instantly."
-        val extracted = com.zenith.app.data.familyledger.FamilyInviteCodeUtils.extractInviteCode(sharedText)
+        val extracted = com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode(sharedText)
         assertEquals("FAM-8F4A2B", extracted)
     }
 
     @Test
     fun testFamilyInviteCodeUtils_DirectCode() {
-        assertEquals("FAM-X8K9L2", com.zenith.app.data.familyledger.FamilyInviteCodeUtils.extractInviteCode("FAM-X8K9L2"))
-        assertEquals("FAM-X8K9L2", com.zenith.app.data.familyledger.FamilyInviteCodeUtils.extractInviteCode("fam-x8k9l2"))
+        assertEquals("FAM-X8K9L2", com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode("FAM-X8K9L2"))
+        assertEquals("FAM-X8K9L2", com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode("fam-x8k9l2"))
     }
 
     @Test
     fun testFamilyInviteCodeUtils_ShortCode() {
-        assertEquals("FAM-8F4A2B", com.zenith.app.data.familyledger.FamilyInviteCodeUtils.extractInviteCode("8F4A2B"))
+        assertEquals("FAM-8F4A2B", com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode("8F4A2B"))
     }
 
     @Test
     fun testFamilyInviteCodeUtils_UrlDeepLink() {
         val url = "https://zenith.cashflow.app/family/join?code=FAM-7A9B3C"
-        assertEquals("FAM-7A9B3C", com.zenith.app.data.familyledger.FamilyInviteCodeUtils.extractInviteCode(url))
+        assertEquals("FAM-7A9B3C", com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode(url))
     }
 
     @Test

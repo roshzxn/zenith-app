@@ -254,10 +254,7 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         FamilyMemberEntity::class,
         UserProfileEntity::class,
         ReceiptEntity::class,
-        ReceiptItemEntity::class,
-        com.zenith.app.data.familyledger.LedgerTransaction::class,
-        com.zenith.app.data.familyledger.FamilyVault::class,
-        com.zenith.app.data.familyledger.FamilyVaultMember::class
+        ReceiptItemEntity::class
     ],
     version = 15,
     exportSchema = false
@@ -273,7 +270,6 @@ abstract class CashFlowDatabase : RoomDatabase() {
     abstract fun familyMemberDao(): FamilyMemberDao
     abstract fun userProfileDao(): UserProfileDao
     abstract fun receiptDao(): ReceiptDao
-    abstract fun familyLedgerDao(): com.zenith.app.data.familyledger.FamilyLedgerDao
 
     companion object {
         @Volatile

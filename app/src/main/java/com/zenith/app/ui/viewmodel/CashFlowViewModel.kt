@@ -11,9 +11,7 @@ import com.zenith.app.data.ai.GeminiAiService
 import com.zenith.app.data.ai.ParsedReceipt
 import com.zenith.app.data.ai.ParsedVoiceExpense
 import com.zenith.app.data.database.CashFlowDatabase
-import com.zenith.app.data.familyledger.FamilyLedgerRepository
-import com.zenith.app.data.familyledger.VaultSyncQrData
-import com.zenith.app.data.familyledger.VaultImportSummary
+import com.zenith.app.data.util.FamilyInviteCodeUtils
 import com.zenith.app.data.network.AuthResult
 import com.zenith.app.data.network.AuthUser
 import com.zenith.app.data.models.*
@@ -116,7 +114,6 @@ data class CashFlowUiState(
 class CashFlowViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: CashFlowRepository
-    val familyLedgerRepository: FamilyLedgerRepository
 
     private val _searchQuery = MutableStateFlow("")
     private val _filterType = MutableStateFlow<TransactionType?>(null)
@@ -227,12 +224,6 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             database.receiptDao(),
             database.autoPayReminderDao()
         )
-        familyLedgerRepository = FamilyLedgerRepository(
-            ledgerDao = database.familyLedgerDao(),
-            legacyTransactionDao = database.transactionDao(),
-            legacyFamilyDao = database.familyDao(),
-            legacyMemberDao = database.familyMemberDao()
-        )
         syncEngine = com.zenith.app.data.network.SyncEngine(
             transactionDao = database.transactionDao(),
             familyDao = database.familyDao(),
@@ -270,9 +261,6 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                     try {
                         val famId = _activeFamilyId.value
                         syncEngine.syncAll(uid, famId)
-                        if (!famId.isNullOrBlank()) {
-                            familyLedgerRepository.syncWithCloud(famId, uid)
-                        }
                     } catch (e: Exception) {
                         // background sync tick
                     }
@@ -287,12 +275,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             }
         }
 
-        // Auto-bind Realtime Family Ledger Sync on startup if active family exists
         viewModelScope.launch(Dispatchers.IO) {
-            val initialFamId = _activeFamilyId.value
-            if (!initialFamId.isNullOrBlank()) {
-                familyLedgerRepository.startSync(initialFamId, currentUserId)
-            }
             repository.deduplicateTransactions()
         }
     }
@@ -347,23 +330,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                 emit(legacy)
                 return@flow
             }
-            val vault = familyLedgerRepository.getFamilyVault(famId)
-            if (vault != null) {
-                val entity = FamilyEntity(
-                    id = vault.familyId,
-                    name = vault.familyName,
-                    createdByUserId = vault.createdBy,
-                    createdAt = vault.createdAt,
-                    updatedAt = vault.updatedAt,
-                    inviteCode = vault.inviteCode,
-                    serverId = vault.familyId,
-                    syncStatus = vault.syncStatus
-                )
-                repository.insertFamily(entity)
-                emit(entity)
-            } else {
-                emit(repository.getFirstFamily())
-            }
+            emit(repository.getFirstFamily())
         }
     }
     
@@ -372,30 +339,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     @OptIn(ExperimentalCoroutinesApi::class)
     val familyMembers: Flow<List<FamilyMemberEntity>> = _activeFamilyId.flatMapLatest { id ->
         val famId = id ?: getOrCreateFamilyIdSync()
-        combine(
-            repository.getMembersByFamilyId(famId),
-            familyLedgerRepository.observeMembers(famId)
-        ) { legacyList, vaultList ->
-            val map = linkedMapOf<String, FamilyMemberEntity>()
-            for (m in legacyList) {
-                if (!m.isDeleted) map[m.id] = m
-            }
-            for (vm in vaultList) {
-                if (!vm.isDeleted) {
-                    map[vm.memberId] = FamilyMemberEntity(
-                        id = vm.memberId,
-                        familyId = vm.familyId,
-                        userId = vm.userId,
-                        name = vm.name,
-                        role = vm.role,
-                        joinedAt = vm.joinedAt,
-                        syncStatus = vm.syncStatus,
-                        isDeleted = vm.isDeleted
-                    )
-                }
-            }
-            map.values.toList()
-        }
+        repository.getMembersByFamilyId(famId)
     }
 
     val familySettlementSummary: StateFlow<FamilyLedgerSettlementSummary> = combine(
@@ -664,7 +608,6 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             db.transactionDao().deleteAllTransactions()
             db.budgetDao().deleteAllBudgets()
             db.savingsGoalDao().deleteAllGoals()
-            familyLedgerRepository.clearAllLocalFamilyData()
             db.userProfileDao().deleteAllProfiles()
             Log.d("CashFlowVM", "clearLocalUserCache: Local user data purged successfully.")
         } catch (e: Exception) {
@@ -686,18 +629,6 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             // 2. Sync Personal Transactions, Budgets, Savings Goals
             val personalSyncSuccess = syncEngine.syncAll(userId)
             if (!personalSyncSuccess) success = false
-
-            // 3. Restore all Family Vaults, Members, and Family Transactions
-            val restoredFamilies = familyLedgerRepository.restoreAllFamiliesForUser(userId)
-            if (restoredFamilies.isNotEmpty()) {
-                val currentPref = prefs.getString("active_family_id", null)
-                val targetFamId = if (!currentPref.isNullOrBlank() && restoredFamilies.any { it.familyId == currentPref }) {
-                    currentPref
-                } else {
-                    restoredFamilies.first().familyId
-                }
-                setActiveFamily(targetFamId)
-            }
 
             _syncUiState.value = SyncUiState.Success(System.currentTimeMillis())
         } catch (e: Exception) {
@@ -857,51 +788,31 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             val creator = if (isFamily) (memberId ?: currentUserId) else null
             val generatedTxServerId = UUID.randomUUID().toString()
 
-            // 1. Direct write to decoupled high-reliability family ledger if in family scope
-            if (isFamily && fId != null) {
-                val payerMemberId = memberId ?: currentUserId
-                val payerName = currentUserName
-                familyLedgerRepository.createTransaction(
-                    familyId = fId,
+            repository.addTransaction(
+                TransactionEntity(
                     title = title,
-                    description = note,
                     amount = amount,
-                    category = category,
                     type = type,
+                    category = category,
+                    categoryIconName = iconName,
                     paymentMethod = paymentMethod,
-                    paidByMemberId = payerMemberId,
-                    paidByName = payerName,
+                    note = note,
+                    financeScope = if (isFamily) FinanceScope.FAMILY else FinanceScope.PERSONAL,
+                    familyId = fId,
+                    createdByUserId = creator ?: currentUserName,
                     dateMillis = dateMillis,
-                    currentUserId = currentUserId
+                    upiId = upiId,
+                    upiTransactionId = upiTransactionId,
+                    serverId = generatedTxServerId,
+                    syncStatus = "PENDING_CREATE"
                 )
-            } else {
-                // 2. Personal transaction (or fallback if family ID not yet initialized)
-                repository.addTransaction(
-                    TransactionEntity(
-                        title = title,
-                        amount = amount,
-                        type = type,
-                        category = category,
-                        categoryIconName = iconName,
-                        paymentMethod = paymentMethod,
-                        note = note,
-                        financeScope = if (isFamily) FinanceScope.FAMILY else FinanceScope.PERSONAL,
-                        familyId = fId,
-                        createdByUserId = creator ?: currentUserName,
-                        dateMillis = dateMillis,
-                        upiId = upiId,
-                        upiTransactionId = upiTransactionId,
-                        serverId = generatedTxServerId,
-                        syncStatus = "PENDING_CREATE"
-                    )
-                )
+            )
 
-                viewModelScope.launch(Dispatchers.IO) {
-                    try {
-                        syncEngine.syncAll(currentUserId)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    syncEngine.syncAll(currentUserId)
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         }
@@ -964,28 +875,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
     fun updateTransaction(transaction: TransactionEntity) {
         viewModelScope.launch {
-            if (transaction.financeScope == FinanceScope.FAMILY && !transaction.serverId.isNullOrBlank()) {
-                val existing = familyLedgerRepository.getTransactionById(transaction.serverId)
-                if (existing != null) {
-                    familyLedgerRepository.updateTransaction(
-                        existing = existing,
-                        title = transaction.title,
-                        description = transaction.note,
-                        amount = transaction.amount,
-                        category = transaction.category,
-                        type = transaction.type,
-                        paymentMethod = transaction.paymentMethod,
-                        paidByMemberId = transaction.createdByUserId ?: currentUserId,
-                        paidByName = currentUserName,
-                        dateMillis = transaction.dateMillis,
-                        currentUserId = currentUserId
-                    )
-                } else {
-                    repository.updateTransaction(transaction.copy(syncStatus = "PENDING_UPDATE"))
-                }
-            } else {
-                repository.updateTransaction(transaction.copy(syncStatus = "PENDING_UPDATE"))
-            }
+            repository.updateTransaction(transaction.copy(syncStatus = "PENDING_UPDATE"))
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     syncEngine.syncAll(currentUserId)
@@ -998,12 +888,8 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteTransaction(transaction: TransactionEntity) {
         viewModelScope.launch {
-            if (transaction.financeScope == FinanceScope.FAMILY && !transaction.serverId.isNullOrBlank()) {
-                familyLedgerRepository.deleteTransaction(transaction.serverId, currentUserId)
-            } else {
-                val toDelete = transaction.copy(syncStatus = "PENDING_DELETE", isDeleted = true)
-                repository.updateTransaction(toDelete)
-            }
+            val toDelete = transaction.copy(syncStatus = "PENDING_DELETE", isDeleted = true)
+            repository.updateTransaction(toDelete)
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     syncEngine.syncAll(currentUserId)
@@ -1274,41 +1160,80 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         val current = _activeFamilyId.value
         if (current != null && isValidUuid(current)) return current
 
-        val vault = familyLedgerRepository.getOrCreateDefaultVault(currentUserId, currentUserName)
-        _activeFamilyId.value = vault.familyId
-        prefs.edit().putString("active_family_id", vault.familyId).apply()
-        return vault.familyId
+        val existing = repository.getFirstFamily()
+        if (existing != null) {
+            _activeFamilyId.value = existing.id
+            prefs.edit().putString("active_family_id", existing.id).apply()
+            return existing.id
+        }
+
+        val newFamId = UUID.randomUUID().toString()
+        val inviteCode = "FAM-" + UUID.randomUUID().toString().take(6).uppercase()
+        val newFam = FamilyEntity(
+            id = newFamId,
+            name = "$currentUserName's Family",
+            createdByUserId = currentUserId,
+            createdAt = System.currentTimeMillis(),
+            inviteCode = inviteCode,
+            syncStatus = "PENDING_CREATE"
+        )
+        repository.insertFamily(newFam)
+        val selfMember = FamilyMemberEntity(
+            id = UUID.randomUUID().toString(),
+            familyId = newFamId,
+            userId = currentUserId,
+            name = currentUserName,
+            role = FamilyRole.ADMIN,
+            joinedAt = System.currentTimeMillis(),
+            syncStatus = "PENDING_CREATE"
+        )
+        repository.insertMember(selfMember)
+        _activeFamilyId.value = newFamId
+        prefs.edit().putString("active_family_id", newFamId).apply()
+        return newFamId
     }
 
     fun setFinanceScope(scope: FinanceScope) {
         _currentFinanceScope.value = scope
-        if (scope == FinanceScope.FAMILY) {
-            ensureFamilyLedger()
-        }
     }
 
     fun ensureFamilyLedger() {
-        viewModelScope.launch {
-            val famId = getOrCreateFamilyIdSync()
-            familyLedgerRepository.startSync(famId, currentUserId)
-        }
+        // Family ledger overlay removed - managed via CashFlowRepository & SyncEngine
     }
 
     fun setActiveFamily(familyId: String?) {
         _activeFamilyId.value = familyId
         if (familyId != null) {
             prefs.edit().putString("active_family_id", familyId).apply()
-            familyLedgerRepository.startSync(familyId, currentUserId)
         } else {
             prefs.edit().remove("active_family_id").apply()
-            familyLedgerRepository.stopSync()
         }
     }
 
     fun createFamily(name: String) {
         viewModelScope.launch {
-            val vault = familyLedgerRepository.createFamilyVault(name, currentUserId, currentUserName)
-            setActiveFamily(vault.familyId)
+            val newFamId = UUID.randomUUID().toString()
+            val inviteCode = "FAM-" + UUID.randomUUID().toString().take(6).uppercase()
+            val newFam = FamilyEntity(
+                id = newFamId,
+                name = name.ifBlank { "$currentUserName's Family" },
+                createdByUserId = currentUserId,
+                createdAt = System.currentTimeMillis(),
+                inviteCode = inviteCode,
+                syncStatus = "PENDING_CREATE"
+            )
+            repository.insertFamily(newFam)
+            val selfMember = FamilyMemberEntity(
+                id = UUID.randomUUID().toString(),
+                familyId = newFamId,
+                userId = currentUserId,
+                name = currentUserName,
+                role = FamilyRole.ADMIN,
+                joinedAt = System.currentTimeMillis(),
+                syncStatus = "PENDING_CREATE"
+            )
+            repository.insertMember(selfMember)
+            setActiveFamily(newFamId)
             setFinanceScope(FinanceScope.FAMILY)
             syncFamilyLedgerNow()
         }
@@ -1317,15 +1242,14 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     fun addFamilyMember(name: String, role: FamilyRole) {
         viewModelScope.launch {
             val fId = _activeFamilyId.value ?: getOrCreateFamilyIdSync()
-            val vaultMember = familyLedgerRepository.addMember(fId, name, role, currentUserId)
             val legacyMember = FamilyMemberEntity(
-                id = vaultMember.memberId,
+                id = UUID.randomUUID().toString(),
                 familyId = fId,
-                userId = vaultMember.userId,
-                name = vaultMember.name,
-                role = vaultMember.role,
-                joinedAt = vaultMember.joinedAt,
-                syncStatus = "SYNCED"
+                userId = UUID.randomUUID().toString(),
+                name = name,
+                role = role,
+                joinedAt = System.currentTimeMillis(),
+                syncStatus = "PENDING_CREATE"
             )
             repository.insertMember(legacyMember)
         }
@@ -1333,55 +1257,52 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteFamilyMember(member: FamilyMemberEntity) {
         viewModelScope.launch {
-            familyLedgerRepository.removeMember(member.id)
             repository.updateMember(member.copy(syncStatus = "PENDING_DELETE", isDeleted = true))
         }
     }
 
     fun joinFamily(inviteCode: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
-            val cleanCode = com.zenith.app.data.familyledger.FamilyInviteCodeUtils.extractInviteCode(inviteCode)
+            val cleanCode = com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode(inviteCode)
                 .ifBlank { inviteCode.trim().uppercase() }
             if (cleanCode.isBlank()) {
                 onResult(false, "Please enter a valid Family ID or Invite Code")
                 return@launch
             }
 
-            // 1. Decoupled Family Vault Join via FamilyLedgerRepository
-            val ledgerJoinResult = familyLedgerRepository.joinFamilyByInviteCode(cleanCode, currentUserId, currentUserName)
-            if (ledgerJoinResult.isSuccess) {
-                val joinedVault = ledgerJoinResult.getOrThrow()
-                setActiveFamily(joinedVault.familyId)
-                setFinanceScope(FinanceScope.FAMILY)
-                onResult(true, "Successfully linked with ${joinedVault.familyName}!")
-                return@launch
-            }
-
-            // 2. Fallback: Fetch remote family and transactions (legacy sync engine)
+            // Fetch remote family and transactions (legacy/cloud sync engine)
             val (remoteFamily, _) = withContext(Dispatchers.IO) {
                 syncEngine.fetchRemoteFamilyByInviteCode(cleanCode)
             }
 
             if (remoteFamily != null) {
                 val canonicalFamId = if (isValidUuid(remoteFamily.id)) remoteFamily.id else UUID.nameUUIDFromBytes(remoteFamily.id.toByteArray()).toString()
-                val directResult = familyLedgerRepository.joinFamilyVaultDirect(
-                    familyId = canonicalFamId,
-                    familyName = remoteFamily.name,
+                val family = FamilyEntity(
+                    id = canonicalFamId,
+                    name = remoteFamily.name,
+                    createdByUserId = remoteFamily.createdBy ?: currentUserId,
+                    createdAt = System.currentTimeMillis(),
                     inviteCode = remoteFamily.inviteCode ?: cleanCode,
-                    currentUserId = currentUserId,
-                    currentUserName = currentUserName
+                    syncStatus = "SYNCED"
                 )
-                if (directResult.isSuccess) {
-                    val v = directResult.getOrThrow()
-                    setActiveFamily(v.familyId)
-                    setFinanceScope(FinanceScope.FAMILY)
-                    onResult(true, "Successfully linked with ${v.familyName}!")
-                    return@launch
-                }
+                repository.insertFamily(family)
+                val member = FamilyMemberEntity(
+                    id = UUID.randomUUID().toString(),
+                    familyId = canonicalFamId,
+                    userId = currentUserId,
+                    name = currentUserName,
+                    role = FamilyRole.MEMBER,
+                    joinedAt = System.currentTimeMillis(),
+                    syncStatus = "PENDING_SYNC"
+                )
+                repository.insertMember(member)
+                setActiveFamily(canonicalFamId)
+                setFinanceScope(FinanceScope.FAMILY)
+                onResult(true, "Successfully linked with ${remoteFamily.name}!")
+                return@launch
             }
 
-            val errorMsg = ledgerJoinResult.exceptionOrNull()?.message
-                ?: "Family Vault with code '$cleanCode' was not found. Please ensure the other device is online or scan the Family QR code."
+            val errorMsg = "Family with code '$cleanCode' was not found. Please ensure the code is correct or scan the Family QR code."
             onResult(false, errorMsg)
         }
     }
@@ -1391,10 +1312,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             val success = try {
                 withContext(Dispatchers.IO) {
                     val famId = _activeFamilyId.value ?: getOrCreateFamilyIdSync()
-                    val cloudSuccess = familyLedgerRepository.syncWithCloud(famId, currentUserId)
-                    val syncAllSuccess = syncEngine.syncAll(currentUserId, famId)
-                    familyLedgerRepository.deduplicateFamilyTransactions(famId)
-                    cloudSuccess || syncAllSuccess
+                    syncEngine.syncAll(currentUserId, famId)
                 }
             } catch (e: Exception) {
                 false
@@ -1404,59 +1322,19 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     }
 
     suspend fun getVaultSyncQrBitmap(familyId: String? = null, sizePx: Int = 512): Bitmap? {
-        val fId = familyId ?: _activeFamilyId.value ?: getOrCreateFamilyIdSync()
-        return familyLedgerRepository.generateVaultQrBitmap(fId, sizePx)
+        return null
     }
 
     fun handleScannedVaultQr(qrText: String, onResult: (Boolean, String) -> Unit) {
-        viewModelScope.launch {
-            val trimmed = qrText.trim()
-            val parsed = familyLedgerRepository.parseScannedVaultQr(trimmed)
-            if (parsed != null && isValidUuid(parsed.familyId)) {
-                val directResult = familyLedgerRepository.joinFamilyVaultDirect(
-                    familyId = parsed.familyId,
-                    familyName = parsed.familyName,
-                    inviteCode = parsed.inviteCode,
-                    currentUserId = currentUserId,
-                    currentUserName = currentUserName
-                )
-                if (directResult.isSuccess) {
-                    val vault = directResult.getOrThrow()
-                    setActiveFamily(vault.familyId)
-                    setFinanceScope(FinanceScope.FAMILY)
-                    onResult(true, "Successfully linked and synchronized with ${vault.familyName}!")
-                    return@launch
-                }
-            }
-
-            val codeToJoin = parsed?.inviteCode?.takeIf { it.isNotBlank() } ?: trimmed
-            joinFamily(codeToJoin, onResult)
-        }
+        joinFamily(qrText.trim(), onResult)
     }
 
     fun exportVaultSyncFile(context: Context, familyId: String? = null, onResult: (Intent?) -> Unit) {
-        viewModelScope.launch {
-            val fId = familyId ?: _activeFamilyId.value ?: getOrCreateFamilyIdSync()
-            val intent = familyLedgerRepository.exportVaultFileIntent(context, fId)
-            onResult(intent)
-        }
+        onResult(null)
     }
 
     fun importVaultSyncFile(jsonString: String, onResult: (Boolean, String) -> Unit) {
-        viewModelScope.launch {
-            val result = familyLedgerRepository.importVaultSyncPayload(jsonString, currentUserId, currentUserName)
-            if (result.isSuccess) {
-                val summary = result.getOrThrow()
-                setActiveFamily(summary.familyId)
-                setFinanceScope(FinanceScope.FAMILY)
-                onResult(
-                    true,
-                    "Imported '${summary.familyName}' (${summary.transactionsImported} transactions, ${summary.membersImported} members)."
-                )
-            } else {
-                onResult(false, result.exceptionOrNull()?.message ?: "Failed to import vault file.")
-            }
-        }
+        onResult(false, "Vault file import is no longer supported.")
     }
 
     fun openVoiceDialog() {
@@ -1624,45 +1502,27 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             }
             val receiptNote = if (items.isNotEmpty()) "${items.size} item${if (items.size > 1) "s" else ""}: " + items.take(2).joinToString { it.name } else "Receipt Scan"
 
-            val txId: Long = if (isFamily && fId != null) {
-                val created = familyLedgerRepository.createTransaction(
-                    familyId = fId,
-                    title = merchant.ifBlank { "Receipt Purchase" },
-                    description = receiptNote,
-                    amount = amount,
-                    category = category,
-                    type = TransactionType.EXPENSE,
-                    paymentMethod = paymentMethod,
-                    paidByMemberId = currentUserId,
-                    paidByName = currentUserName,
-                    dateMillis = System.currentTimeMillis(),
-                    currentUserId = currentUserId
-                )
-                repository.getTransactionByServerId(created.transactionId)?.id ?: 0L
-            } else {
-                val tx = TransactionEntity(
-                    title = merchant.ifBlank { "Receipt Purchase" },
-                    amount = amount,
-                    type = TransactionType.EXPENSE,
-                    category = category,
-                    categoryIconName = iconName,
-                    paymentMethod = paymentMethod,
-                    note = receiptNote,
-                    receiptImageUri = imageUri,
-                    financeScope = if (isFamily) FinanceScope.FAMILY else FinanceScope.PERSONAL,
-                    familyId = if (isFamily) fId else null,
-                    createdByUserId = if (isFamily) currentUserId else null,
-                    dateMillis = System.currentTimeMillis()
-                )
-                val newId = repository.addTransaction(tx)
-                viewModelScope.launch(Dispatchers.IO) {
-                    try {
-                        syncEngine.syncAll(currentUserId)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+            val tx = TransactionEntity(
+                title = merchant.ifBlank { "Receipt Purchase" },
+                amount = amount,
+                type = TransactionType.EXPENSE,
+                category = category,
+                categoryIconName = iconName,
+                paymentMethod = paymentMethod,
+                note = receiptNote,
+                receiptImageUri = imageUri,
+                financeScope = if (isFamily) FinanceScope.FAMILY else FinanceScope.PERSONAL,
+                familyId = if (isFamily) fId else null,
+                createdByUserId = if (isFamily) currentUserId else null,
+                dateMillis = System.currentTimeMillis()
+            )
+            val txId: Long = repository.addTransaction(tx)
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    syncEngine.syncAll(currentUserId, fId)
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-                newId
             }
             val receipt = ReceiptEntity(
                 transactionId = txId,
@@ -1700,9 +1560,6 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteTransactionWithReceipt(transaction: TransactionEntity) {
         viewModelScope.launch {
-            if (transaction.financeScope == FinanceScope.FAMILY && !transaction.serverId.isNullOrBlank()) {
-                familyLedgerRepository.deleteTransaction(transaction.serverId, currentUserId)
-            }
             repository.deleteTransaction(transaction)
             viewModelScope.launch(Dispatchers.IO) {
                 try {
@@ -1717,9 +1574,6 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     fun undoDeleteTransaction(transaction: TransactionEntity) {
         viewModelScope.launch {
             repository.restoreTransaction(transaction)
-            if (transaction.financeScope == FinanceScope.FAMILY && !transaction.serverId.isNullOrBlank()) {
-                familyLedgerRepository.restoreTransaction(transaction.serverId)
-            }
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     syncEngine.syncAll(currentUserId)
@@ -1797,7 +1651,6 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     fun clearAllLocalData() {
         viewModelScope.launch(Dispatchers.IO) {
             repository.wipeLocalDatabase()
-            familyLedgerRepository.clearAllLocalFamilyData()
             repository.reseedDefaultCategories()
             _activeFamilyId.value = null
             prefs.edit().remove("active_family_id").apply()
