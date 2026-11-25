@@ -1,0 +1,519 @@
+package com.zenith.app
+
+import android.content.Context
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import com.zenith.app.data.database.CashFlowDatabase
+import com.zenith.app.data.familyledger.*
+import com.zenith.app.data.models.FamilyRole
+import com.zenith.app.data.models.TransactionType
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.*
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import java.util.UUID
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [32])
+class FamilyLedgerRedesignTest {
+
+    private lateinit var db: CashFlowDatabase
+    private lateinit var repository: FamilyLedgerRepository
+    private lateinit var ledgerDao: FamilyLedgerDao
+
+    @Before
+    fun setup() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        db = Room.inMemoryDatabaseBuilder(context, CashFlowDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        ledgerDao = db.familyLedgerDao()
+        repository = FamilyLedgerRepository(
+            ledgerDao = ledgerDao,
+            legacyTransactionDao = db.transactionDao(),
+            legacyFamilyDao = db.familyDao(),
+            legacyMemberDao = db.familyMemberDao()
+        )
+    }
+
+    @After
+    fun tearDown() {
+        db.close()
+    }
+
+    @Test
+    fun testCreateAndObserveTransaction() = runBlocking {
+        val familyId = "fam_test_1"
+        val tx = repository.createTransaction(
+            familyId = familyId,
+            title = "Groceries",
+            description = "Vegetables and fruits",
+            amount = 650.0,
+            category = "Food & Dining",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "mem_arun",
+            paidByName = "Arun",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_arun"
+        )
+
+        assertNotNull(tx.transactionId)
+        assertTrue(tx.transactionId.isNotBlank())
+        assertEquals("Groceries", tx.title)
+        assertEquals(650.0, tx.amount, 0.001)
+
+        val list = repository.observeTransactions(familyId).first()
+        assertEquals(1, list.size)
+        assertEquals(tx.transactionId, list[0].transactionId)
+        assertEquals("Arun", list[0].paidByName)
+    }
+
+    @Test
+    fun testEditTransactionPreservesIdAndNoDuplicates() = runBlocking {
+        val familyId = "fam_test_2"
+        val original = repository.createTransaction(
+            familyId = familyId,
+            title = "Electricity",
+            description = "July bill",
+            amount = 1200.0,
+            category = "Bills & Utilities",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "mem_1",
+            paidByName = "Karthik",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_karthik"
+        )
+
+        val updated = repository.updateTransaction(
+            existing = original,
+            title = "Electricity Bill - Paid",
+            description = "July bill with surcharge",
+            amount = 1250.0,
+            category = "Bills & Utilities",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "mem_1",
+            paidByName = "Karthik",
+            dateMillis = original.dateMillis,
+            currentUserId = "user_karthik"
+        )
+
+        // Verify transactionId is preserved
+        assertEquals(original.transactionId, updated.transactionId)
+        assertEquals(1250.0, updated.amount, 0.001)
+        assertEquals("Electricity Bill - Paid", updated.title)
+
+        // Verify no duplicate records created in Room
+        val list = repository.observeTransactions(familyId).first()
+        assertEquals(1, list.size)
+        assertEquals(1250.0, list[0].amount, 0.001)
+    }
+
+    @Test
+    fun testDeleteTransactionSoftDelete() = runBlocking {
+        val familyId = "fam_test_3"
+        val tx = repository.createTransaction(
+            familyId = familyId,
+            title = "Dinner",
+            description = "",
+            amount = 450.0,
+            category = "Food & Dining",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "Cash",
+            paidByMemberId = "mem_1",
+            paidByName = "Arun",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_arun"
+        )
+
+        val listBefore = repository.observeTransactions(familyId).first()
+        assertEquals(1, listBefore.size)
+
+        repository.deleteTransaction(tx.transactionId, "user_arun")
+
+        val listAfter = repository.observeTransactions(familyId).first()
+        assertEquals(0, listAfter.size)
+    }
+
+    @Test
+    fun testMemberSpendingAggregation() = runBlocking {
+        val familyId = "fam_test_4"
+
+        // Insert two members
+        val member1 = FamilyVaultMember(
+            memberId = "mem_1",
+            familyId = familyId,
+            userId = "user_1",
+            name = "Arun",
+            role = FamilyRole.ADMIN
+        )
+        val member2 = FamilyVaultMember(
+            memberId = "mem_2",
+            familyId = familyId,
+            userId = "user_2",
+            name = "Karthik",
+            role = FamilyRole.MEMBER
+        )
+        ledgerDao.upsertMembers(listOf(member1, member2))
+
+        // Create transactions paid by member 1 and member 2
+        repository.createTransaction(
+            familyId = familyId,
+            title = "Rent",
+            amount = 15000.0,
+            category = "Housing & Rent",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "Bank Transfer",
+            paidByMemberId = "user_1",
+            paidByName = "Arun",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_1"
+        )
+
+        repository.createTransaction(
+            familyId = familyId,
+            title = "Groceries",
+            amount = 2500.0,
+            category = "Food & Dining",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "user_1",
+            paidByName = "Arun",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_1"
+        )
+
+        repository.createTransaction(
+            familyId = familyId,
+            title = "Wifi",
+            amount = 1000.0,
+            category = "Bills & Utilities",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "user_2",
+            paidByName = "Karthik",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_2"
+        )
+
+        val membersWithStats = repository.observeMembers(familyId).first()
+        assertEquals(2, membersWithStats.size)
+
+        val arun = membersWithStats.find { it.name == "Arun" }!!
+        val karthik = membersWithStats.find { it.name == "Karthik" }!!
+
+        assertEquals(17500.0, arun.totalPaid, 0.001)
+        assertEquals(2, arun.transactionCount)
+
+        assertEquals(1000.0, karthik.totalPaid, 0.001)
+        assertEquals(1, karthik.transactionCount)
+    }
+
+    @Test
+    fun testFamilyIsolation() = runBlocking {
+        val familyA = "fam_A"
+        val familyB = "fam_B"
+
+        repository.createTransaction(
+            familyId = familyA,
+            title = "Family A Expense",
+            amount = 100.0,
+            category = "General",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "mem_a",
+            paidByName = "Member A",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_a"
+        )
+
+        repository.createTransaction(
+            familyId = familyB,
+            title = "Family B Expense",
+            amount = 200.0,
+            category = "General",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "mem_b",
+            paidByName = "Member B",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_b"
+        )
+
+        val listA = repository.observeTransactions(familyA).first()
+        val listB = repository.observeTransactions(familyB).first()
+
+        assertEquals(1, listA.size)
+        assertEquals("Family A Expense", listA[0].title)
+
+        assertEquals(1, listB.size)
+        assertEquals("Family B Expense", listB[0].title)
+    }
+
+    @Test
+    fun testDuplicatePreventionOnUpsert() = runBlocking {
+        val familyId = "fam_dup_test"
+        val fixedId = UUID.randomUUID().toString()
+
+        val tx1 = LedgerTransaction(
+            transactionId = fixedId,
+            familyId = familyId,
+            title = "Groceries",
+            amount = 500.0,
+            paidByMemberId = "u1",
+            paidByName = "Arun"
+        )
+
+        val tx2 = LedgerTransaction(
+            transactionId = fixedId,
+            familyId = familyId,
+            title = "Groceries - Updated",
+            amount = 550.0,
+            paidByMemberId = "u1",
+            paidByName = "Arun"
+        )
+
+        ledgerDao.upsertTransaction(tx1)
+        ledgerDao.upsertTransaction(tx2)
+
+        val list = repository.observeTransactions(familyId).first()
+        assertEquals(1, list.size)
+        assertEquals(550.0, list[0].amount, 0.001)
+        assertEquals("Groceries - Updated", list[0].title)
+    }
+
+    @Test
+    fun testObserveMembersCalculatesBothExpenseAndIncome() = runBlocking {
+        val familyId = "fam_income_test"
+        repository.createFamilyVault("Income Test Vault", "user_1", "Arun")
+        val member = repository.addMember(familyId, "Arun", FamilyRole.ADMIN, "user_1")
+
+        // 1. Add Expense
+        repository.createTransaction(
+            familyId = familyId,
+            title = "Groceries",
+            amount = 1200.0,
+            category = "Food & Dining",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = member.memberId,
+            paidByName = "Arun",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_1"
+        )
+
+        // 2. Add Shared Income
+        repository.createTransaction(
+            familyId = familyId,
+            title = "Rental Income",
+            amount = 8000.0,
+            category = "Investments",
+            type = TransactionType.INCOME,
+            paymentMethod = "Bank Transfer",
+            paidByMemberId = member.memberId,
+            paidByName = "Arun",
+            dateMillis = System.currentTimeMillis(),
+            currentUserId = "user_1"
+        )
+
+        val members = repository.observeMembers(familyId).first()
+        val arun = members.find { it.memberId == member.memberId }
+        assertNotNull(arun)
+        assertEquals(1200.0, arun!!.totalPaid, 0.001)
+        assertEquals(8000.0, arun.totalIncome, 0.001)
+        assertEquals(2, arun.transactionCount)
+    }
+
+    @Test
+    fun testCloudLedgerTransactionDtoHandlesNullableUserId() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val rawJson = """
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "family_id": "22222222-2222-2222-2222-222222222222",
+                "title": "Shared WiFi",
+                "amount": 999.0,
+                "transaction_type": "EXPENSE",
+                "payment_method": "UPI",
+                "transaction_date": "2026-10-14T00:00:00Z"
+            }
+        """.trimIndent()
+
+        val dto = json.decodeFromString<CloudLedgerTransactionDto>(rawJson)
+        assertNull(dto.userId)
+        assertEquals(999.0, dto.amount, 0.001)
+        assertEquals("Shared WiFi", dto.title)
+    }
+
+    @Test
+    fun testCloudRestorationOnNewDevice() = runBlocking {
+        val testUserId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        val testFamilyId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+        val remoteVault = FamilyVault(
+            familyId = testFamilyId,
+            familyName = "The Incredibles Vault",
+            inviteCode = "FAM-INCRED",
+            createdBy = testUserId
+        )
+        val remoteMember = FamilyVaultMember(
+            memberId = "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            familyId = testFamilyId,
+            userId = testUserId,
+            name = "Bob Parr",
+            role = FamilyRole.ADMIN
+        )
+        val remoteTx = LedgerTransaction(
+            transactionId = "dddddddd-dddd-dddd-dddd-dddddddddddd",
+            familyId = testFamilyId,
+            title = "Super Suits Maintenance",
+            amount = 4500.0,
+            category = "Bills & Utilities",
+            type = TransactionType.EXPENSE,
+            paidByMemberId = remoteMember.memberId,
+            paidByName = "Bob Parr",
+            createdBy = testUserId
+        )
+
+        val fakeCloud = object : FamilyLedgerCloudDataSource {
+            override val isAvailable: Boolean = true
+            override fun observeRealtimeTransactions(familyId: String) = kotlinx.coroutines.flow.emptyFlow<RealtimeLedgerEvent>()
+            override suspend fun fetchFamilyVault(familyId: String) = if (familyId == testFamilyId) remoteVault else null
+            override suspend fun fetchFamilyMembers(familyId: String) = if (familyId == testFamilyId) listOf(remoteMember) else emptyList()
+            override suspend fun fetchFamilyTransactions(familyId: String) = if (familyId == testFamilyId) listOf(remoteTx) else emptyList()
+            override suspend fun upsertFamilyVault(vault: FamilyVault) = true
+            override suspend fun upsertFamilyMember(member: FamilyVaultMember) = true
+            override suspend fun deleteFamilyMember(memberId: String) = true
+            override suspend fun upsertTransaction(tx: LedgerTransaction) = true
+            override suspend fun softDeleteTransaction(transactionId: String) = true
+            override suspend fun fetchFamilyByInviteCode(inviteCode: String) = null
+            override suspend fun fetchFamiliesForUser(userId: String) = if (userId == testUserId) listOf(remoteVault) else emptyList()
+        }
+
+        val freshRepo = FamilyLedgerRepository(
+            ledgerDao = ledgerDao,
+            legacyTransactionDao = db.transactionDao(),
+            legacyFamilyDao = db.familyDao(),
+            legacyMemberDao = db.familyMemberDao(),
+            cloudDataSource = fakeCloud
+        )
+
+        // 1. Initial State on New Phone: Room database is completely empty
+        assertTrue("Fresh device must have no family vaults", freshRepo.observeAllFamilyVaults().first().isEmpty())
+
+        // 2. Perform Cloud Restoration upon login on the new device
+        val restoredVaults = freshRepo.restoreAllFamiliesForUser(testUserId)
+        assertEquals(1, restoredVaults.size)
+        assertEquals("The Incredibles Vault", restoredVaults.first().familyName)
+
+        // 3. Verify Room database now has the restored family, members, and transactions
+        val localVaults = freshRepo.observeAllFamilyVaults().first()
+        assertEquals(1, localVaults.size)
+        assertEquals(testFamilyId, localVaults.first().familyId)
+
+        val localMembers = freshRepo.observeMembers(testFamilyId).first()
+        assertEquals(1, localMembers.size)
+        assertEquals("Bob Parr", localMembers.first().name)
+
+        val localTxs = freshRepo.observeTransactions(testFamilyId).first()
+        assertEquals(1, localTxs.size)
+        assertEquals("Super Suits Maintenance", localTxs.first().title)
+        assertEquals(4500.0, localTxs.first().amount, 0.001)
+
+        // 4. Calling getOrCreateDefaultVault recovers the restored vault rather than making a new one
+        val defaultVault = freshRepo.getOrCreateDefaultVault(testUserId, "Bob Parr")
+        assertEquals(testFamilyId, defaultVault.familyId)
+        assertEquals("The Incredibles Vault", defaultVault.familyName)
+    }
+
+    @Test
+    fun testSignOutClearsLocalUserData() = runBlocking {
+        val familyId = "fam_to_purge"
+        repository.createFamilyVault("Purge Vault", "user_1", "User One")
+        val vaultsBefore = repository.observeAllFamilyVaults().first()
+        assertTrue(vaultsBefore.isNotEmpty())
+
+        // Purge local family data on sign out
+        repository.clearAllLocalFamilyData()
+        val vaultsAfter = repository.observeAllFamilyVaults().first()
+        assertTrue("Vaults must be empty after sign out purge", vaultsAfter.isEmpty())
+    }
+
+    @Test
+    fun testDeduplicateFamilyTransactions() = runBlocking {
+        val familyId = "fam_dedup_test"
+        val now = System.currentTimeMillis()
+
+        // 1. Insert original transaction
+        val tx1 = repository.createTransaction(
+            familyId = familyId,
+            title = "Movie Night",
+            description = "Cinema tickets",
+            amount = 500.0,
+            category = "Entertainment",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "user_arun",
+            paidByName = "Arun",
+            dateMillis = now,
+            currentUserId = "user_arun"
+        )
+
+        // 2. Simulate duplicate created 2 seconds later with same details
+        val tx2 = repository.createTransaction(
+            familyId = familyId,
+            title = "Movie Night",
+            description = "Cinema tickets",
+            amount = 500.0,
+            category = "Entertainment",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "user_arun",
+            paidByName = "Arun",
+            dateMillis = now + 2000L,
+            currentUserId = "user_arun"
+        )
+
+        // 3. Insert a legitimate distinct transaction (different amount)
+        val tx3 = repository.createTransaction(
+            familyId = familyId,
+            title = "Popcorn",
+            description = "Snacks",
+            amount = 250.0,
+            category = "Food & Dining",
+            type = TransactionType.EXPENSE,
+            paymentMethod = "UPI",
+            paidByMemberId = "user_arun",
+            paidByName = "Arun",
+            dateMillis = now,
+            currentUserId = "user_arun"
+        )
+
+        // Verify that initially there are 3 transactions in Room
+        val initialTxs = repository.observeTransactions(familyId).first()
+        assertEquals(3, initialTxs.size)
+
+        // Run deduplication
+        repository.deduplicateFamilyTransactions(familyId)
+
+        // Verify that the duplicate was removed and exactly 2 transactions remain
+        val remainingTxs = repository.observeTransactions(familyId).first()
+        assertEquals(2, remainingTxs.size)
+
+        val titles = remainingTxs.map { it.title }
+        assertTrue(titles.contains("Movie Night"))
+        assertTrue(titles.contains("Popcorn"))
+        assertEquals(1, remainingTxs.count { it.title == "Movie Night" })
+
+        // Verify decoupled architecture: no leakage into personal legacy transactions
+        val legacyTxs = db.transactionDao().getFamilyTransactionsOnce(familyId)
+        assertTrue("Legacy personal transactions table must remain clean and unpolluted", legacyTxs.isEmpty())
+    }
+}

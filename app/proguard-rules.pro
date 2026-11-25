@@ -65,11 +65,11 @@
 -keep class retrofit2.** { *; }
 
 # --- Domain & Data Models (Preserve all fields for Room / JSON) ---
--keep class com.example.data.models.** { *; }
--keep class com.example.data.familyledger.** { *; }
--keep class com.example.data.network.** { *; }
--keep class com.example.data.ai.** { *; }
--keep class com.example.data.upi.** { *; }
+-keep class com.zenith.app.data.models.** { *; }
+-keep class com.zenith.app.data.familyledger.** { *; }
+-keep class com.zenith.app.data.network.** { *; }
+-keep class com.zenith.app.data.ai.** { *; }
+-keep class com.zenith.app.data.upi.** { *; }
 
 # --- Google ML Kit & Code Scanner ---
 -keep class com.google.mlkit.** { *; }

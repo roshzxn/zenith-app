@@ -1,0 +1,1117 @@
+package com.zenith.app.data.familyledger
+
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.util.Log
+import com.zenith.app.data.dao.FamilyDao
+import com.zenith.app.data.dao.FamilyMemberDao
+import com.zenith.app.data.dao.TransactionDao
+import com.zenith.app.data.models.FamilyRole
+import com.zenith.app.data.models.TransactionType
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import java.util.UUID
+
+/**
+ * Single authoritative repository for the Family Ledger module.
+ *
+ * Architecture — Three sync layers:
+ *
+ * 1. **Realtime (WebSocket)** — Cloud realtime events deliver
+ *    INSERT / UPDATE / DELETE events instantly across all connected devices.
+ *    The repository applies these directly to the local Room cache so the
+ *    UI reacts without a round-trip.
+ *
+ * 2. **On-write Cloud Push** — Every local mutation (create / edit / delete)
+ *    is immediately attempted against the remote backend. If the device is
+ *    offline, the record is marked PENDING_* and retried by the flush engine.
+ *
+ * 3. **Full Reconciliation Pull** — On `startSync()` (and after joining a
+ *    vault) we fetch the full remote state to catch any changes that arrived
+ *    while Realtime was disconnected (e.g. app was in background).
+ */
+class FamilyLedgerRepository(
+    private val ledgerDao: FamilyLedgerDao,
+    private val legacyTransactionDao: TransactionDao? = null,
+    private val legacyFamilyDao: FamilyDao? = null,
+    private val legacyMemberDao: FamilyMemberDao? = null,
+    private val cloudDataSource: FamilyLedgerCloudDataSource = SupabaseFamilyLedgerDataSource()
+) {
+    private val tag = "FamilyLedgerRepo"
+    private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val _syncStatus = MutableStateFlow(FamilySyncStatus.SYNCED)
+    val syncStatus: StateFlow<FamilySyncStatus> = _syncStatus.asStateFlow()
+
+    val vaultSyncEngine: FamilyVaultSyncEngine by lazy {
+        FamilyVaultSyncEngine(ledgerDao, legacyTransactionDao, legacyFamilyDao, legacyMemberDao)
+    }
+
+    /** Active sync lifecycle jobs — cancelled on family switch or ViewModel clear. */
+    private var realtimeJob: Job? = null
+    private var reconciliationJob: Job? = null
+    private var currentActiveFamilyId: String? = null
+
+    // =========================================================================
+    // REACTIVE DATA OBSERVATION (Room Flow — always fresh from local DB)
+    // =========================================================================
+
+    fun observeTransactions(familyId: String): Flow<List<LedgerTransaction>> =
+        ledgerDao.getTransactionsForFamily(familyId)
+
+    suspend fun getTransactionById(transactionId: String): LedgerTransaction? = withContext(Dispatchers.IO) {
+        ledgerDao.getTransactionById(transactionId)
+    }
+
+    /**
+     * Combines member roster with live transaction data to produce real-time
+     * per-member financial stats (totalPaid, transactionCount).
+     * The stats are derived reactively — no stale cache values.
+     */
+    fun observeMembers(familyId: String): Flow<List<FamilyVaultMember>> =
+        combine(
+            ledgerDao.getMembersForFamily(familyId),
+            ledgerDao.getTransactionsForFamily(familyId)
+        ) { members, transactions ->
+            members.map { member ->
+                val memberTxs = transactions.filter { tx ->
+                    tx.paidByMemberId == member.userId ||
+                    tx.paidByMemberId == member.memberId ||
+                    tx.paidByName.equals(member.name, ignoreCase = true)
+                }
+                val totalPaid = memberTxs
+                    .filter { it.type == TransactionType.EXPENSE }
+                    .sumOf { it.amount }
+                val totalIncome = memberTxs
+                    .filter { it.type == TransactionType.INCOME }
+                    .sumOf { it.amount }
+                member.copy(
+                    totalPaid = totalPaid,
+                    totalIncome = totalIncome,
+                    transactionCount = memberTxs.size
+                )
+            }
+        }
+
+    fun observeFamilyVault(familyId: String): Flow<FamilyVault?> =
+        ledgerDao.observeFamilyVault(familyId)
+
+    fun observeAllFamilyVaults(): Flow<List<FamilyVault>> =
+        ledgerDao.getAllFamilyVaults()
+
+    // =========================================================================
+    // SYNC LIFECYCLE MANAGEMENT
+    // =========================================================================
+
+    /**
+     * Starts the full sync lifecycle for a family:
+     * 1. Migrates any legacy Room data
+     * 2. Does an initial full reconciliation pull from remote backend
+     * 3. Subscribes to Realtime for live updates
+     * 4. Flushes any pending offline mutations
+     */
+    fun startSync(familyId: String, currentUserId: String) {
+        if (currentActiveFamilyId == familyId &&
+            realtimeJob?.isActive == true) return
+
+        currentActiveFamilyId = familyId
+        realtimeJob?.cancel()
+        reconciliationJob?.cancel()
+
+        Log.d(tag, "SYNC_LIFECYCLE: Starting for family $familyId")
+
+        // 1. Initial reconciliation (full pull + pending flush + deduplication)
+        reconciliationJob = repositoryScope.launch {
+            migrateLegacyFamilyData(familyId)
+            syncWithCloud(familyId, currentUserId)
+            deduplicateFamilyTransactions(familyId)
+        }
+
+        // 2. Realtime subscription — runs for the lifetime of this family context
+        if (cloudDataSource.isAvailable) {
+            realtimeJob = repositoryScope.launch {
+                cloudDataSource
+                    .observeRealtimeTransactions(familyId)
+                    .catch { e ->
+                        Log.e(tag, "REALTIME_ERROR in collection: ${e.message}", e)
+                        _syncStatus.value = FamilySyncStatus.ERROR
+                    }
+                    .collect { event ->
+                        applyRealtimeEvent(event)
+                    }
+            }
+            Log.d(tag, "REALTIME_SUBSCRIBED: Listening for family $familyId")
+        } else {
+            _syncStatus.value = FamilySyncStatus.OFFLINE
+            Log.i(tag, "OFFLINE_MODE: Cloud backend not configured — local-only vault")
+        }
+    }
+
+    fun stopSync() {
+        realtimeJob?.cancel()
+        realtimeJob = null
+        reconciliationJob?.cancel()
+        reconciliationJob = null
+        currentActiveFamilyId = null
+        Log.d(tag, "SYNC_LIFECYCLE: Stopped")
+    }
+
+    // =========================================================================
+    // =========================================================================
+    // REALTIME EVENT HANDLER
+    // =========================================================================
+
+    /**
+     * Applies a remote Realtime event directly to the local Room cache.
+     * This is the hot path for live multi-device sync — no network call needed.
+     */
+    private suspend fun applyRealtimeEvent(event: RealtimeLedgerEvent) {
+        try {
+            when (event.type) {
+                RealtimeEventType.INSERT -> {
+                    event.transaction?.let { tx ->
+                        val local = ledgerDao.getTransactionById(tx.transactionId)
+                        if (local == null || local.syncStatus == "SYNCED") {
+                            ledgerDao.upsertTransaction(tx)
+                            mirrorTransactionToLegacy(tx)
+                            Log.d(tag, "REALTIME_APPLIED INSERT tx: ${tx.transactionId}")
+                        }
+                    }
+                    event.member?.let { member ->
+                        val local = ledgerDao.getMemberById(member.memberId)
+                        if (local == null) {
+                            ledgerDao.upsertMember(member)
+                            mirrorMemberToLegacy(member)
+                            Log.d(tag, "REALTIME_APPLIED INSERT member: ${member.memberId}")
+                        }
+                    }
+                }
+                RealtimeEventType.UPDATE -> {
+                    event.transaction?.let { remote ->
+                        val local = ledgerDao.getTransactionById(remote.transactionId)
+                        when {
+                            local == null -> {
+                                ledgerDao.upsertTransaction(remote)
+                                mirrorTransactionToLegacy(remote)
+                            }
+                            remote.syncVersion >= local.syncVersion && local.syncStatus == "SYNCED" -> {
+                                ledgerDao.upsertTransaction(remote)
+                                mirrorTransactionToLegacy(remote)
+                                Log.d(tag, "REALTIME_APPLIED UPDATE tx: ${remote.transactionId} v${remote.syncVersion}")
+                            }
+                            else -> Log.d(tag, "REALTIME_SKIP local win: ${remote.transactionId}")
+                        }
+                    }
+                    event.member?.let { remote ->
+                        val local = ledgerDao.getMemberById(remote.memberId)
+                        if (local == null || (local.syncStatus == "SYNCED" && remote.updatedAt >= local.updatedAt)) {
+                            ledgerDao.upsertMember(remote)
+                            mirrorMemberToLegacy(remote)
+                        }
+                    }
+                }
+                RealtimeEventType.DELETE -> {
+                    event.transaction?.let { tx ->
+                        ledgerDao.deleteTransactionPermanently(tx.transactionId)
+                        mirrorDeleteToLegacy(tx.transactionId)
+                        Log.d(tag, "REALTIME_APPLIED DELETE tx: ${tx.transactionId}")
+                    }
+                    event.member?.let { member ->
+                        ledgerDao.markMemberDeleted(member.memberId)
+                        mirrorDeleteMemberToLegacy(member.memberId)
+                        Log.d(tag, "REALTIME_APPLIED DELETE member: ${member.memberId}")
+                    }
+                }
+            }
+            _syncStatus.value = FamilySyncStatus.SYNCED
+        } catch (e: Exception) {
+            Log.e(tag, "REALTIME_APPLY_ERROR: ${e.message}", e)
+        }
+    }
+
+    // =========================================================================
+    // FULL RECONCILIATION SYNC (PostgREST)
+    // =========================================================================
+
+    /**
+     * Full bidirectional reconciliation:
+     * A. Flush pending local mutations to cloud backend
+     * B. Pull the authoritative remote state and merge with Last-Write-Wins
+     *
+     * Called once on startSync() and on demand via syncNow().
+     */
+    suspend fun syncWithCloud(familyId: String, currentUserId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            if (familyId.isBlank()) return@withContext true
+            if (!cloudDataSource.isAvailable) {
+                _syncStatus.value = FamilySyncStatus.OFFLINE
+                return@withContext false
+            }
+
+            _syncStatus.value = FamilySyncStatus.SYNCING
+            try {
+                // Ensure local vault is registered on cloud first
+                val localVault = ledgerDao.getFamilyVault(familyId)
+                if (localVault != null) {
+                    cloudDataSource.upsertFamilyVault(localVault)
+                }
+
+                // A. Push outbox (pending local mutations)
+                flushPendingTransactions()
+                flushPendingMembers()
+
+                // B. Pull remote family vault
+                cloudDataSource.fetchFamilyVault(familyId)?.let { remoteVault ->
+                    val curLocalVault = ledgerDao.getFamilyVault(familyId)
+                    if (curLocalVault == null || remoteVault.updatedAt >= curLocalVault.updatedAt) {
+                        ledgerDao.upsertFamilyVault(remoteVault)
+                        mirrorVaultToLegacy(remoteVault)
+                    }
+                }
+
+                // C. Pull remote members (LWW merge)
+                cloudDataSource.fetchFamilyMembers(familyId).forEach { remote ->
+                    val local = ledgerDao.getMemberById(remote.memberId)
+                        ?: (if (remote.userId.isNotBlank()) ledgerDao.getMemberByFamilyAndUser(remote.familyId, remote.userId) else null)
+                    when {
+                        local == null -> {
+                            ledgerDao.upsertMember(remote)
+                            mirrorMemberToLegacy(remote)
+                        }
+                        local.memberId != remote.memberId -> {
+                            ledgerDao.deleteMemberPermanently(local.memberId)
+                            ledgerDao.upsertMember(remote)
+                            mirrorMemberToLegacy(remote)
+                        }
+                        remote.updatedAt >= local.updatedAt || local.syncStatus == "SYNCED" -> {
+                            val merged = local.copy(name = remote.name, role = remote.role, updatedAt = remote.updatedAt, syncStatus = "SYNCED")
+                            ledgerDao.upsertMember(merged)
+                            mirrorMemberToLegacy(merged)
+                        }
+                    }
+                }
+
+                // D. Pull remote transactions (LWW merge using syncVersion)
+                cloudDataSource.fetchFamilyTransactions(familyId).forEach { remote ->
+                    val local = ledgerDao.getTransactionById(remote.transactionId)
+                    when {
+                        local == null -> {
+                            if (!remote.isDeleted) {
+                                ledgerDao.upsertTransaction(remote)
+                                mirrorTransactionToLegacy(remote)
+                            }
+                        }
+                        remote.isDeleted -> {
+                            ledgerDao.deleteTransactionPermanently(remote.transactionId)
+                            mirrorDeleteToLegacy(remote.transactionId)
+                        }
+                        local.syncStatus == "SYNCED" && remote.syncVersion >= local.syncVersion -> {
+                            ledgerDao.upsertTransaction(remote)
+                            mirrorTransactionToLegacy(remote)
+                        }
+                    }
+                }
+
+                // E. Run automated deduplication to remove duplicate records
+                deduplicateFamilyTransactions(familyId)
+
+                _syncStatus.value = FamilySyncStatus.SYNCED
+                Log.d(tag, "FULL_SYNC completed for family $familyId")
+                true
+            } catch (e: Exception) {
+                Log.e(tag, "SYNC_ERROR syncWithCloud: ${e.message}", e)
+                _syncStatus.value = FamilySyncStatus.ERROR
+                false
+            }
+        }
+
+    // =========================================================================
+    // OUTBOX FLUSH (pending offline mutations → cloud backend)
+    // =========================================================================
+
+    private suspend fun flushPendingTransactions() {
+        // Pending creates
+        ledgerDao.getPendingCreateTransactions().forEach { tx ->
+            if (cloudDataSource.upsertTransaction(tx)) {
+                ledgerDao.upsertTransaction(tx.copy(syncStatus = "SYNCED"))
+                Log.d(tag, "FLUSH_CREATE tx: ${tx.transactionId}")
+            }
+        }
+        // Pending updates
+        ledgerDao.getPendingUpdateTransactions().forEach { tx ->
+            if (cloudDataSource.upsertTransaction(tx)) {
+                ledgerDao.upsertTransaction(tx.copy(syncStatus = "SYNCED"))
+                Log.d(tag, "FLUSH_UPDATE tx: ${tx.transactionId}")
+            }
+        }
+        // Pending deletes (soft-delete on cloud, hard-delete locally)
+        ledgerDao.getPendingDeleteTransactions().forEach { tx ->
+            if (cloudDataSource.softDeleteTransaction(tx.transactionId)) {
+                ledgerDao.deleteTransactionPermanently(tx.transactionId)
+                Log.d(tag, "FLUSH_DELETE tx: ${tx.transactionId}")
+            }
+        }
+        // Offline queue (written without cloud) — treat as creates
+        ledgerDao.getOfflineTransactions().forEach { tx ->
+            if (cloudDataSource.upsertTransaction(tx)) {
+                ledgerDao.upsertTransaction(tx.copy(syncStatus = "SYNCED"))
+                Log.d(tag, "FLUSH_OFFLINE tx: ${tx.transactionId}")
+            }
+        }
+    }
+
+    private suspend fun flushPendingMembers() {
+        ledgerDao.getPendingCreateMembers().forEach { member ->
+            if (cloudDataSource.upsertFamilyMember(member)) {
+                ledgerDao.upsertMember(member.copy(syncStatus = "SYNCED"))
+            }
+        }
+        ledgerDao.getPendingUpdateMembers().forEach { member ->
+            if (cloudDataSource.upsertFamilyMember(member)) {
+                ledgerDao.upsertMember(member.copy(syncStatus = "SYNCED"))
+            }
+        }
+        ledgerDao.getPendingDeleteMembers().forEach { member ->
+            if (cloudDataSource.deleteFamilyMember(member.memberId)) {
+                ledgerDao.markMemberDeleted(member.memberId)
+            }
+        }
+    }
+
+    // =========================================================================
+    // TRANSACTION WRITE OPERATIONS (Optimistic UI)
+    // =========================================================================
+
+    /**
+     * Creates a transaction with optimistic local write:
+     * 1. Writes to Room immediately (UI updates instantly)
+     * 2. Pushes to cloud backend in the background
+     * 3. If push succeeds → marks SYNCED; if fails → stays PENDING_CREATE for flush
+     */
+    suspend fun createTransaction(
+        familyId: String,
+        title: String,
+        description: String = "",
+        amount: Double,
+        category: String,
+        type: TransactionType,
+        paymentMethod: String,
+        paidByMemberId: String,
+        paidByName: String,
+        dateMillis: Long,
+        currentUserId: String,
+        receiptUrl: String? = null
+    ): LedgerTransaction = withContext(Dispatchers.IO) {
+        val txId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        val pendingStatus = if (cloudDataSource.isAvailable) "PENDING_CREATE" else "OFFLINE"
+
+        val transaction = LedgerTransaction(
+            transactionId = txId,
+            familyId = familyId,
+            title = title.trim(),
+            description = description.trim(),
+            amount = amount,
+            category = category,
+            categoryIcon = categoryToIcon(category),
+            type = type,
+            paymentMethod = paymentMethod,
+            paidByMemberId = paidByMemberId,
+            paidByName = paidByName,
+            reactions = "{}",
+            receiptUrl = receiptUrl,
+            dateMillis = dateMillis,
+            createdAt = now,
+            updatedAt = now,
+            createdBy = currentUserId,
+            lastModifiedBy = currentUserId,
+            isDeleted = false,
+            syncStatus = pendingStatus,
+            syncVersion = 1L
+        )
+
+        // Instant local write
+        ledgerDao.upsertTransaction(transaction)
+        mirrorTransactionToLegacy(transaction)
+        Log.d(tag, "LOCAL_WRITE CREATE: $txId ($title ₹$amount)")
+
+        // Background cloud push
+        repositoryScope.launch {
+            if (cloudDataSource.isAvailable) {
+                val success = cloudDataSource.upsertTransaction(transaction)
+                if (success) {
+                    val synced = transaction.copy(syncStatus = "SYNCED")
+                    ledgerDao.upsertTransaction(synced)
+                    mirrorTransactionToLegacy(synced)
+                    _syncStatus.value = FamilySyncStatus.SYNCED
+                    Log.d(tag, "CLOUD_PUSH CREATE success: $txId")
+                } else {
+                    _syncStatus.value = FamilySyncStatus.ERROR
+                }
+            }
+        }
+
+        transaction
+    }
+
+    /**
+     * Edits a transaction with optimistic local write.
+     * syncVersion is incremented to signal newer state to conflict resolution.
+     */
+    suspend fun updateTransaction(
+        existing: LedgerTransaction,
+        title: String,
+        description: String,
+        amount: Double,
+        category: String,
+        type: TransactionType,
+        paymentMethod: String,
+        paidByMemberId: String,
+        paidByName: String,
+        dateMillis: Long,
+        currentUserId: String,
+        receiptUrl: String? = null
+    ): LedgerTransaction = withContext(Dispatchers.IO) {
+        if (existing.createdBy.isNotBlank() && existing.createdBy != currentUserId) {
+            val members = ledgerDao.getMembersForFamily(existing.familyId).first()
+            val currentMember = members.find { it.userId == currentUserId }
+            val isAdmin = currentMember?.role == FamilyRole.ADMIN
+            if (!isAdmin && existing.paidByMemberId != currentMember?.memberId && existing.paidByMemberId != currentUserId) {
+                Log.w(tag, "UNAUTHORIZED UPDATE: user $currentUserId cannot edit entry created by ${existing.createdBy}")
+                throw IllegalAccessException("You can only edit entries you created.")
+            }
+        }
+
+        val now = System.currentTimeMillis()
+        val pendingStatus = if (cloudDataSource.isAvailable) "PENDING_UPDATE" else "OFFLINE"
+
+        val updated = existing.copy(
+            title = title.trim(),
+            description = description.trim(),
+            amount = amount,
+            category = category,
+            categoryIcon = categoryToIcon(category),
+            type = type,
+            paymentMethod = paymentMethod,
+            paidByMemberId = paidByMemberId,
+            paidByName = paidByName,
+            receiptUrl = receiptUrl ?: existing.receiptUrl,
+            dateMillis = dateMillis,
+            updatedAt = now,
+            lastModifiedBy = currentUserId,
+            syncStatus = pendingStatus,
+            syncVersion = existing.syncVersion + 1L
+        )
+
+        ledgerDao.upsertTransaction(updated)
+        mirrorTransactionToLegacy(updated)
+        Log.d(tag, "LOCAL_WRITE UPDATE: ${updated.transactionId} v${updated.syncVersion}")
+
+        repositoryScope.launch {
+            if (cloudDataSource.isAvailable) {
+                val success = cloudDataSource.upsertTransaction(updated)
+                if (success) {
+                    val synced = updated.copy(syncStatus = "SYNCED")
+                    ledgerDao.upsertTransaction(synced)
+                    mirrorTransactionToLegacy(synced)
+                    _syncStatus.value = FamilySyncStatus.SYNCED
+                } else {
+                    _syncStatus.value = FamilySyncStatus.ERROR
+                }
+            }
+        }
+
+        updated
+    }
+
+    suspend fun toggleTransactionReaction(
+        transactionId: String,
+        emoji: String,
+        userName: String
+    ): LedgerTransaction? = withContext(Dispatchers.IO) {
+        val existing = ledgerDao.getTransactionById(transactionId) ?: return@withContext null
+        val updatedReactions = LedgerReactionUtils.toggleReaction(existing.reactions, emoji, userName)
+        val now = System.currentTimeMillis()
+        val updated = existing.copy(
+            reactions = updatedReactions,
+            updatedAt = now,
+            syncVersion = existing.syncVersion + 1L,
+            syncStatus = if (cloudDataSource.isAvailable) "PENDING_UPDATE" else "OFFLINE"
+        )
+        ledgerDao.upsertTransaction(updated)
+        repositoryScope.launch {
+            if (cloudDataSource.isAvailable) {
+                val success = cloudDataSource.upsertTransaction(updated)
+                if (success) {
+                    ledgerDao.upsertTransaction(updated.copy(syncStatus = "SYNCED"))
+                }
+            }
+        }
+        updated
+    }
+
+    suspend fun updateVaultMonthlyBudget(
+        familyId: String,
+        monthlyBudget: Double
+    ): FamilyVault? = withContext(Dispatchers.IO) {
+        val existing = ledgerDao.getFamilyVault(familyId) ?: return@withContext null
+        val now = System.currentTimeMillis()
+        val updated = existing.copy(
+            monthlyBudgetLimit = monthlyBudget,
+            updatedAt = now,
+            syncStatus = if (cloudDataSource.isAvailable) "PENDING_UPDATE" else "OFFLINE"
+        )
+        ledgerDao.upsertFamilyVault(updated)
+        repositoryScope.launch {
+            if (cloudDataSource.isAvailable) {
+                val success = cloudDataSource.upsertFamilyVault(updated)
+                if (success) {
+                    ledgerDao.upsertFamilyVault(updated.copy(syncStatus = "SYNCED"))
+                }
+            }
+        }
+        updated
+    }
+
+    /**
+     * Soft-deletes a transaction: marks locally as deleted with tombstone,
+     * mirrors to legacy table with tombstone, and syncs delete to cloud.
+     */
+    suspend fun deleteTransaction(transactionId: String, currentUserId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val existing = ledgerDao.getTransactionById(transactionId)
+            val now = System.currentTimeMillis()
+
+            if (existing != null) {
+                ledgerDao.markTransactionDeleted(transactionId, now)
+            }
+            mirrorDeleteToLegacy(transactionId)
+            Log.d(tag, "LOCAL_DELETE: $transactionId")
+
+            repositoryScope.launch {
+                if (cloudDataSource.isAvailable) {
+                    val success = cloudDataSource.softDeleteTransaction(transactionId)
+                    if (success) {
+                        _syncStatus.value = FamilySyncStatus.SYNCED
+                    } else {
+                        _syncStatus.value = FamilySyncStatus.ERROR
+                    }
+                }
+            }
+            true
+        }
+
+    /**
+     * Restores a deleted transaction (Undo).
+     */
+    suspend fun restoreTransaction(transactionId: String) = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val existing = ledgerDao.getTransactionById(transactionId)
+        if (existing != null) {
+            ledgerDao.upsertTransaction(existing.copy(isDeleted = false, syncStatus = "PENDING_UPDATE", updatedAt = now))
+        }
+        legacyTransactionDao?.restoreTransactionByServerId(transactionId, now)
+        repositoryScope.launch {
+            if (cloudDataSource.isAvailable && existing != null) {
+                cloudDataSource.upsertTransaction(existing.copy(isDeleted = false, syncStatus = "SYNCED", updatedAt = now))
+            }
+        }
+    }
+
+    // =========================================================================
+    // FAMILY VAULT OPERATIONS
+    // =========================================================================
+
+    fun generateInviteCode(): String {
+        // Unambiguous charset (no 0/O, 1/I)
+        val chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        return "FAM-" + (1..6).map { chars.random() }.joinToString("")
+    }
+
+    /**
+     * Completely restores all families, members, and family transactions for the specified user from cloud backend.
+     * Inserts/Upserts into both Family Ledger tables and legacy Room DAO mirrors.
+     */
+    suspend fun restoreAllFamiliesForUser(userId: String): List<FamilyVault> = withContext(Dispatchers.IO) {
+        if (!cloudDataSource.isAvailable || userId.isBlank() || !isValidUuid(userId)) return@withContext emptyList()
+        Log.d(tag, "RESTORE_FAMILIES: Beginning cloud restoration for user $userId")
+        val remoteVaults = cloudDataSource.fetchFamiliesForUser(userId)
+        val restoredVaults = mutableListOf<FamilyVault>()
+
+        for (vault in remoteVaults) {
+            try {
+                // A. Upsert Vault
+                ledgerDao.upsertFamilyVault(vault)
+                mirrorVaultToLegacy(vault)
+                restoredVaults.add(vault)
+
+                // B. Fetch & Upsert all members
+                val members = cloudDataSource.fetchFamilyMembers(vault.familyId)
+                for (member in members) {
+                    ledgerDao.upsertMember(member)
+                    mirrorMemberToLegacy(member)
+                }
+                // If current user is not in roster for their family, ensure they are registered as ADMIN
+                if (members.none { it.userId == userId }) {
+                    val localMember = ledgerDao.getMemberByFamilyAndUser(vault.familyId, userId)
+                    if (localMember != null) {
+                        cloudDataSource.upsertFamilyMember(localMember)
+                    } else {
+                        val ownerMember = FamilyVaultMember(
+                            memberId = UUID.randomUUID().toString(),
+                            familyId = vault.familyId,
+                            userId = userId,
+                            name = vault.familyName.substringBefore("'s").ifBlank { "You" },
+                            role = FamilyRole.ADMIN,
+                            joinedAt = vault.createdAt,
+                            updatedAt = vault.updatedAt
+                        )
+                        ledgerDao.upsertMember(ownerMember)
+                        mirrorMemberToLegacy(ownerMember)
+                        cloudDataSource.upsertFamilyMember(ownerMember)
+                    }
+                }
+
+                // C. Fetch & Upsert all family transactions
+                val transactions = cloudDataSource.fetchFamilyTransactions(vault.familyId)
+                for (tx in transactions) {
+                    if (tx.isDeleted) {
+                        ledgerDao.deleteTransactionPermanently(tx.transactionId)
+                        mirrorDeleteToLegacy(tx.transactionId)
+                    } else {
+                        ledgerDao.upsertTransaction(tx)
+                        mirrorTransactionToLegacy(tx)
+                    }
+                }
+                Log.d(tag, "RESTORE_FAMILIES: Successfully restored vault ${vault.familyId} (${vault.familyName}) with ${members.size} members and ${transactions.size} transactions")
+            } catch (e: Exception) {
+                Log.e(tag, "RESTORE_FAMILIES: Error restoring family ${vault.familyId}: ${e.message}", e)
+            }
+        }
+        restoredVaults
+    }
+
+    /**
+     * Returns the first valid existing vault or creates a default one.
+     * Called once on ViewModel init.
+     */
+    suspend fun getOrCreateDefaultVault(
+        currentUserId: String,
+        currentUserName: String
+    ): FamilyVault = withContext(Dispatchers.IO) {
+        // 1. If there's already a valid vault in Room, return it and ensure it's mirrored & pushed
+        val existing = ledgerDao.getAllFamilyVaultsOnce()
+            .firstOrNull { !it.isDeleted && isValidUuid(it.familyId) }
+        if (existing != null) {
+            mirrorVaultToLegacy(existing)
+            val members = ledgerDao.getMembersForFamilyOnce(existing.familyId)
+            for (m in members) {
+                mirrorMemberToLegacy(m)
+            }
+            repositoryScope.launch {
+                cloudDataSource.upsertFamilyVault(existing)
+                for (m in members) {
+                    cloudDataSource.upsertFamilyMember(m)
+                }
+            }
+            return@withContext existing
+        }
+
+        // 2. If Room is empty but user is authenticated, attempt cloud recovery first!
+        if (cloudDataSource.isAvailable && currentUserId.isNotBlank() && isValidUuid(currentUserId)) {
+            val restored = restoreAllFamiliesForUser(currentUserId)
+            if (restored.isNotEmpty()) {
+                val firstVault = restored.first()
+                Log.d(tag, "getOrCreateDefaultVault: Restored existing vault from cloud: ${firstVault.familyId}")
+                return@withContext firstVault
+            }
+        }
+
+        // 3. Create a fresh default vault only if neither local nor cloud has a vault
+        createFamilyVault(
+            familyName = if (currentUserName.isNotBlank() && currentUserName != "You")
+                "$currentUserName's Family Vault" else "My Family Vault",
+            currentUserId = currentUserId,
+            currentUserName = currentUserName
+        )
+    }
+
+    suspend fun createFamilyVault(
+        familyName: String,
+        currentUserId: String,
+        currentUserName: String
+    ): FamilyVault = withContext(Dispatchers.IO) {
+        val familyId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+
+        val vault = FamilyVault(
+            familyId = familyId,
+            familyName = familyName.trim(),
+            inviteCode = generateInviteCode(),
+            createdBy = currentUserId,
+            createdAt = now,
+            updatedAt = now
+        )
+        ledgerDao.upsertFamilyVault(vault)
+        mirrorVaultToLegacy(vault)
+
+        val ownerMember = FamilyVaultMember(
+            memberId = UUID.randomUUID().toString(),
+            familyId = familyId,
+            userId = currentUserId,
+            name = currentUserName.ifBlank { "You" },
+            role = FamilyRole.ADMIN,
+            joinedAt = now,
+            updatedAt = now
+        )
+        ledgerDao.upsertMember(ownerMember)
+        mirrorMemberToLegacy(ownerMember)
+
+        // Asynchronously push to cloud backend
+        repositoryScope.launch {
+            cloudDataSource.upsertFamilyVault(vault)
+            cloudDataSource.upsertFamilyMember(ownerMember)
+        }
+        vault
+    }
+
+    suspend fun addMember(
+        familyId: String,
+        name: String,
+        role: FamilyRole,
+        currentUserId: String
+    ): FamilyVaultMember = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val member = FamilyVaultMember(
+            memberId = UUID.randomUUID().toString(),
+            familyId = familyId,
+            userId = UUID.randomUUID().toString(),
+            name = name.trim(),
+            role = role,
+            joinedAt = now,
+            updatedAt = now,
+            syncStatus = if (cloudDataSource.isAvailable) "PENDING_CREATE" else "OFFLINE"
+        )
+        ledgerDao.upsertMember(member)
+        mirrorMemberToLegacy(member)
+
+        repositoryScope.launch { cloudDataSource.upsertFamilyMember(member) }
+        Log.d(tag, "MEMBER_ADDED: ${member.memberId} ($name)")
+        member
+    }
+
+    suspend fun removeMember(memberId: String): Boolean = withContext(Dispatchers.IO) {
+        ledgerDao.getMemberById(memberId) ?: return@withContext false
+        ledgerDao.markMemberDeleted(memberId)
+        mirrorDeleteMemberToLegacy(memberId)
+        repositoryScope.launch { cloudDataSource.deleteFamilyMember(memberId) }
+        true
+    }
+
+    /**
+     * Directly links and joins a Family Vault using scanned QR metadata.
+     * Guaranteed to work immediately offline or online with zero configuration.
+     */
+    suspend fun joinFamilyVaultDirect(
+        familyId: String,
+        familyName: String,
+        inviteCode: String,
+        currentUserId: String,
+        currentUserName: String
+    ): Result<FamilyVault> = withContext(Dispatchers.IO) {
+        val canonicalFamilyId = if (isValidUuid(familyId)) familyId else UUID.nameUUIDFromBytes(familyId.toByteArray()).toString()
+        val now = System.currentTimeMillis()
+        val vault = FamilyVault(
+            familyId = canonicalFamilyId,
+            familyName = familyName.ifBlank { "Family Vault" },
+            inviteCode = inviteCode.ifBlank { "FAM-" + canonicalFamilyId.take(6).uppercase() },
+            createdBy = "",
+            createdAt = now,
+            updatedAt = now,
+            syncStatus = "SYNCED"
+        )
+        ledgerDao.upsertFamilyVault(vault)
+        mirrorVaultToLegacy(vault)
+
+        var member = ledgerDao.getMemberByFamilyAndUser(canonicalFamilyId, currentUserId)
+        if (member == null) {
+            val newMember = FamilyVaultMember(
+                memberId = UUID.randomUUID().toString(),
+                familyId = canonicalFamilyId,
+                userId = currentUserId,
+                name = currentUserName.ifBlank { "Family Member" },
+                role = FamilyRole.MEMBER,
+                joinedAt = now,
+                updatedAt = now
+            )
+            ledgerDao.upsertMember(newMember)
+            mirrorMemberToLegacy(newMember)
+            repositoryScope.launch {
+                cloudDataSource.upsertFamilyVault(vault)
+                cloudDataSource.upsertFamilyMember(newMember)
+            }
+        } else {
+            mirrorMemberToLegacy(member)
+        }
+
+        syncWithCloud(canonicalFamilyId, currentUserId)
+        Result.success(vault)
+    }
+
+    /**
+     * Looks up a family by invite code on cloud backend, joins it locally, and
+     * performs an immediate full sync for that family.
+     */
+    suspend fun joinFamilyByInviteCode(
+        inviteCode: String,
+        currentUserId: String,
+        currentUserName: String
+    ): Result<FamilyVault> = withContext(Dispatchers.IO) {
+        val cleanCode = FamilyInviteCodeUtils.extractInviteCode(inviteCode).ifBlank { inviteCode.trim().uppercase() }
+        if (cleanCode.isBlank()) return@withContext Result.failure(
+            Exception("Please enter a valid invite code")
+        )
+
+        // 1. Try cloud lookup
+        var targetVault = cloudDataSource.fetchFamilyByInviteCode(cleanCode)
+
+        // 2. Fallback to local database if offline or previously stored
+        if (targetVault == null) {
+            targetVault = ledgerDao.getAllFamilyVaultsOnce().firstOrNull {
+                it.inviteCode.equals(cleanCode, ignoreCase = true) ||
+                it.inviteCode.equals("FAM-$cleanCode", ignoreCase = true) ||
+                it.familyId.equals(cleanCode, ignoreCase = true) ||
+                (cleanCode.startsWith("FAM-") && it.inviteCode.equals(cleanCode.removePrefix("FAM-"), ignoreCase = true))
+            }
+        }
+
+        if (targetVault == null) {
+            return@withContext Result.failure(
+                Exception("Family Vault with code '$cleanCode' was not found. Please ensure the other device is online or scan its QR code.")
+            )
+        }
+
+        ledgerDao.upsertFamilyVault(targetVault)
+        mirrorVaultToLegacy(targetVault)
+
+        // Add joining user as member if not already present
+        var member = ledgerDao.getMemberByFamilyAndUser(targetVault.familyId, currentUserId)
+        if (member == null) {
+            val now = System.currentTimeMillis()
+            val newMember = FamilyVaultMember(
+                memberId = UUID.randomUUID().toString(),
+                familyId = targetVault.familyId,
+                userId = currentUserId,
+                name = currentUserName.ifBlank { "Family Member" },
+                role = FamilyRole.MEMBER,
+                joinedAt = now,
+                updatedAt = now
+            )
+            ledgerDao.upsertMember(newMember)
+            mirrorMemberToLegacy(newMember)
+            repositoryScope.launch { cloudDataSource.upsertFamilyMember(newMember) }
+        } else {
+            mirrorMemberToLegacy(member)
+        }
+
+        // Immediate reconciliation pull and live Realtime connection
+        startSync(targetVault.familyId, currentUserId)
+        syncWithCloud(targetVault.familyId, currentUserId)
+        Log.d(tag, "JOIN_VAULT: ${targetVault.familyId} (${targetVault.familyName})")
+        Result.success(targetVault)
+    }
+
+    // =========================================================================
+    // LEGACY MIGRATION
+    // =========================================================================
+
+    /**
+     * One-time migration of legacy FamilyEntity / FamilyMemberEntity data into
+     * the new family_vaults / family_vault_members tables.
+     * Safe to call on every launch — uses null checks to avoid duplicates.
+     */
+    private suspend fun migrateLegacyFamilyData(familyId: String) {
+        try {
+            val legacyFamily = legacyFamilyDao?.getFirstFamily()
+            if (legacyFamily != null && ledgerDao.getFamilyVault(legacyFamily.id) == null) {
+                ledgerDao.upsertFamilyVault(
+                    FamilyVault(
+                        familyId = legacyFamily.id,
+                        familyName = legacyFamily.name,
+                        inviteCode = legacyFamily.inviteCode,
+                        createdBy = legacyFamily.createdByUserId,
+                        createdAt = legacyFamily.createdAt,
+                        updatedAt = legacyFamily.updatedAt
+                    )
+                )
+                Log.d(tag, "MIGRATION: Family ${legacyFamily.id} migrated to vault")
+            }
+
+            val legacyMembers = (legacyMemberDao?.getPendingCreates() ?: emptyList()) + (legacyMemberDao?.getPendingUpdates() ?: emptyList())
+            legacyMembers.forEach { m ->
+                if (ledgerDao.getMemberById(m.id) == null) {
+                    ledgerDao.upsertMember(
+                        FamilyVaultMember(
+                            memberId = m.id,
+                            familyId = m.familyId,
+                            userId = m.userId,
+                            name = m.name,
+                            role = m.role,
+                            joinedAt = m.joinedAt,
+                            updatedAt = m.updatedAt
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "MIGRATION_WARN: ${e.message}")
+        }
+    }
+
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    private fun categoryToIcon(category: String): String = when (category) {
+        "Food & Dining", "Food" -> "Restaurant"
+        "Shopping" -> "ShoppingBag"
+        "Housing & Rent", "Housing" -> "Home"
+        "Transportation", "Travel" -> "DirectionsCar"
+        "Bills & Utilities", "Bills" -> "Receipt"
+        "Entertainment" -> "Movie"
+        "Healthcare", "Health" -> "MedicalServices"
+        "Salary & Income", "Income", "Salary" -> "Payments"
+        "Freelance / Business" -> "Work"
+        "Investments" -> "TrendingUp"
+        else -> "Category"
+    }
+
+    // =========================================================================
+    // LEGACY DAO MIRRORING (Decoupled for clean separation without duplicate entries)
+    // =========================================================================
+
+    private suspend fun mirrorTransactionToLegacy(tx: LedgerTransaction) {
+        // Pure Family Vault architecture: no writes into personal transactions table
+    }
+
+    private suspend fun mirrorDeleteToLegacy(txId: String) {
+        // Pure Family Vault architecture
+    }
+
+    /**
+     * Scans both `ledger_transactions` and legacy `transactions` tables for this family
+     * and permanently removes duplicate records created simultaneously (within 30 seconds)
+     * with identical title, amount, and transaction type.
+     * Also soft-deletes duplicates on the cloud backend (Supabase).
+     */
+    suspend fun deduplicateFamilyTransactions(familyId: String) = withContext(Dispatchers.IO) {
+        if (familyId.isBlank()) return@withContext
+        try {
+            // 1. Deduplicate ledger_transactions table
+            val ledgerTxs = ledgerDao.getTransactionsForFamilyOnce(familyId).filter { !it.isDeleted }
+            val groupedLedger = ledgerTxs.groupBy { "${it.title.trim().lowercase()}_${it.amount}_${it.type}" }
+            for ((_, group) in groupedLedger) {
+                if (group.size <= 1) continue
+                val sorted = group.sortedBy { it.createdAt }
+                val keep = sorted.first()
+                val duplicates = sorted.drop(1).filter { dup ->
+                    Math.abs(dup.dateMillis - keep.dateMillis) <= 30_000L ||
+                    Math.abs(dup.createdAt - keep.createdAt) <= 30_000L
+                }
+                for (dup in duplicates) {
+                    Log.i(tag, "Deduplicating ledger transaction: ${dup.transactionId} for '${dup.title}' ₹${dup.amount}")
+                    ledgerDao.deleteTransactionPermanently(dup.transactionId)
+                    mirrorDeleteToLegacy(dup.transactionId)
+                    if (cloudDataSource.isAvailable) {
+                        try {
+                            cloudDataSource.softDeleteTransaction(dup.transactionId)
+                        } catch (e: Exception) {
+                            Log.w(tag, "Failed to soft-delete duplicate ledger tx on cloud: ${e.message}")
+                        }
+                    }
+                }
+            }
+
+            // 2. Deduplicate legacy transactions table in Room
+            val legacyTxs = legacyTransactionDao?.getFamilyTransactionsOnce(familyId)?.filter { !it.isDeleted } ?: emptyList()
+            val groupedLegacy = legacyTxs.groupBy { "${it.title.trim().lowercase()}_${it.amount}_${it.type}" }
+            for ((_, group) in groupedLegacy) {
+                if (group.size <= 1) continue
+                val sorted = group.sortedWith(
+                    compareBy<com.zenith.app.data.models.TransactionEntity> { it.serverId.isNullOrBlank() }
+                        .thenBy { it.syncStatus != "SYNCED" }
+                        .thenBy { it.id }
+                )
+                val keep = sorted.first()
+                val duplicates = sorted.drop(1).filter { dup ->
+                    Math.abs(dup.dateMillis - keep.dateMillis) <= 30_000L
+                }
+                for (dup in duplicates) {
+                    Log.i(tag, "Deduplicating legacy transaction id: ${dup.id} serverId: ${dup.serverId} for '${dup.title}' ₹${dup.amount}")
+                    legacyTransactionDao?.deleteTransaction(dup)
+                    val sId = dup.serverId
+                    if (!sId.isNullOrBlank() && sId != keep.serverId && cloudDataSource.isAvailable) {
+                        try {
+                            cloudDataSource.softDeleteTransaction(sId)
+                        } catch (e: Exception) {
+                            Log.w(tag, "Failed to soft-delete duplicate legacy tx on cloud: ${e.message}")
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Error during family transaction deduplication: ${e.message}", e)
+        }
+    }
+
+    private suspend fun mirrorMemberToLegacy(member: FamilyVaultMember) {
+        // Pure Family Vault separation
+    }
+
+    private suspend fun mirrorDeleteMemberToLegacy(memberId: String) {
+        // Pure Family Vault separation
+    }
+
+    private suspend fun mirrorVaultToLegacy(vault: FamilyVault) {
+        // Pure Family Vault separation
+    }
+
+    suspend fun getFamilyVault(familyId: String): FamilyVault? = withContext(Dispatchers.IO) {
+        ledgerDao.getFamilyVault(familyId)
+    }
+
+    suspend fun getMembersForFamilyOnce(familyId: String): List<FamilyVaultMember> = withContext(Dispatchers.IO) {
+        ledgerDao.getMembersForFamilyOnce(familyId)
+    }
+
+    suspend fun generateVaultQrBitmap(familyId: String, sizePx: Int = 512): Bitmap? = withContext(Dispatchers.IO) {
+        val vault = ledgerDao.getFamilyVault(familyId) ?: return@withContext null
+        val memberCount = ledgerDao.getMembersForFamilyOnce(familyId).size.coerceAtLeast(1)
+        val payload = vaultSyncEngine.createQrSyncPayload(vault, memberCount)
+        vaultSyncEngine.generateQrBitmap(payload, sizePx)
+    }
+
+    fun parseScannedVaultQr(rawText: String): VaultSyncQrData? =
+        vaultSyncEngine.parseScannedPayload(rawText)
+
+    suspend fun exportVaultFileIntent(context: Context, familyId: String): Intent? =
+        vaultSyncEngine.createShareVaultIntent(context, familyId)
+
+    suspend fun importVaultSyncPayload(jsonString: String, currentUserId: String, currentUserName: String): Result<VaultImportSummary> =
+        vaultSyncEngine.importVaultPayload(jsonString, currentUserId, currentUserName)
+
+    suspend fun clearAllLocalFamilyData() = withContext(Dispatchers.IO) {
+        stopSync()
+        currentActiveFamilyId = null
+        ledgerDao.clearAllLedgerTransactions()
+        ledgerDao.clearAllFamilyVaultMembers()
+        ledgerDao.clearAllFamilyVaults()
+        legacyFamilyDao?.deleteAllFamilies()
+        legacyMemberDao?.deleteAllFamilyMembers()
+    }
+
+    private fun isValidUuid(str: String?): Boolean = if (str.isNullOrBlank()) false else try {
+        UUID.fromString(str); true
+    } catch (e: Exception) { false }
+}
