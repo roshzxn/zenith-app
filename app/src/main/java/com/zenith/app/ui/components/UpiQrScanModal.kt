@@ -37,11 +37,13 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.zenith.app.data.upi.UpiPaymentBus
 import com.zenith.app.data.upi.UpiPaymentInfo
 import com.zenith.app.data.upi.UpiService
 import com.zenith.app.ui.theme.LightCyanAccent
 import com.zenith.app.ui.theme.LightIncomeGreen
 import com.zenith.app.ui.theme.ZenithTheme
+import java.util.Locale
 
 enum class UpiModalStep {
     CAMERA_SCAN,
@@ -67,6 +69,7 @@ fun UpiQrScanModal(
 
     var modalStep by remember { mutableStateOf(UpiModalStep.CAMERA_SCAN) }
     var awaitingUpiReturn by remember { mutableStateOf(false) }
+    val modalOpenedAt = remember { System.currentTimeMillis() }
 
     // Parsed QR & pay states
     var scannedInfo by remember { mutableStateOf<UpiPaymentInfo?>(null) }
@@ -77,6 +80,7 @@ fun UpiQrScanModal(
     var enteredTitle by remember { mutableStateOf("UPI Payment") }
     var enteredAmount by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("Food & Dining") }
+    var detectedUtr by remember { mutableStateOf<String?>(null) }
     var amountError by remember { mutableStateOf<String?>(null) }
 
     val categories = remember {
@@ -109,6 +113,29 @@ fun UpiQrScanModal(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // Pre-fill Amount, Payee Title, Category & UTR if background notification detector catches a fresh payment after redirect
+    LaunchedEffect(Unit) {
+        UpiPaymentBus.detectedPayments.collect { payment ->
+            if (payment.isDebit &&
+                payment.timestamp >= modalOpenedAt - 5_000L &&
+                (awaitingUpiReturn || modalStep == UpiModalStep.REDIRECT_CHOOSER)
+            ) {
+                if (enteredAmount.isBlank()) {
+                    enteredAmount = String.format(Locale.US, "%.2f", payment.amount)
+                }
+                if (enteredTitle == "UPI Payment" || enteredTitle.isBlank()) {
+                    enteredTitle = payment.payeeName.ifBlank { "UPI Payment" }
+                }
+                if (payment.detectedCategory.isNotBlank() && payment.detectedCategory != "Other") {
+                    selectedCategory = payment.detectedCategory
+                }
+                if (!payment.upiTransactionId.isNullOrBlank()) {
+                    detectedUtr = payment.upiTransactionId
+                }
+            }
         }
     }
 
@@ -270,7 +297,7 @@ fun UpiQrScanModal(
                                 }
 
                                 Button(
-                                    onClick = { launchUpiApp(null) },
+                                    onClick = { modalStep = UpiModalStep.REDIRECT_CHOOSER },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(48.dp)
@@ -283,7 +310,7 @@ fun UpiQrScanModal(
                                 ) {
                                     Icon(Icons.Default.Payment, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Open Default UPI App", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text("Choose UPI App to Pay & Note", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                 }
 
                                 Row(
@@ -669,7 +696,7 @@ fun UpiQrScanModal(
                                             amt,
                                             selectedCategory,
                                             scannedInfo?.payeeAddress?.ifBlank { null },
-                                            null
+                                            detectedUtr
                                         )
                                         Toast.makeText(context, "Saved $currencySymbol$amt for $finalTitle", Toast.LENGTH_SHORT).show()
                                         onDismiss()

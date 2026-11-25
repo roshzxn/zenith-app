@@ -12,7 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.zenith.app.data.upi.UpiNotificationListenerService
 import com.zenith.app.data.upi.UpiPaymentInfo
 import com.zenith.app.data.upi.UpiService
 import com.zenith.app.ui.theme.ZenithTheme
@@ -60,7 +61,9 @@ fun UPIPaySheet(
     val trimmedVpa = vpaText.trim()
     val vpaValid = UpiService.isValidVpa(trimmedVpa)
     val isAboveStandardP2pCap = amount > 100_000.0
-    val isValid = amount > 0 && amount <= 500_000.0 && purpose.isNotBlank() && vpaValid
+    val canRedirectAndNote = amount > 0 && amount <= 500_000.0
+    val isValid = canRedirectAndNote && purpose.isNotBlank() && vpaValid
+    val hasNotifAccess = remember { UpiNotificationListenerService.isPermissionGranted(context) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -292,37 +295,86 @@ fun UPIPaySheet(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Clear NPCI P2P policy notice for transparency
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = ZenithTheme.accentIndigo.copy(alpha = 0.08f),
-                    border = BorderStroke(1.dp, ZenithTheme.accentIndigo.copy(alpha = 0.25f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(10.dp),
-                        verticalAlignment = Alignment.Top
+                // Notification auto-tracking CTA or P2P redirect info
+                if (!hasNotifAccess) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = ZenithTheme.accentGreen.copy(alpha = 0.1f),
+                        border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            tint = ZenithTheme.accentIndigo,
-                            modifier = Modifier.size(16.dp).padding(top = 1.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Note: Google Pay & PhonePe block third-party P2P intent links for security. If declined, tap \"Open UPI App Directly\" to pay using mobile number, UPI ID, or QR.",
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp,
-                            color = ZenithTheme.textSecondary
-                        )
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = null,
+                                tint = ZenithTheme.accentGreen,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Auto-note UPI payments",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ZenithTheme.textPrimary
+                                )
+                                Text(
+                                    text = "Enable Notification Access to capture UTRs automatically from any UPI app.",
+                                    fontSize = 10.5.sp,
+                                    lineHeight = 14.sp,
+                                    color = ZenithTheme.textSecondary
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    try { UpiNotificationListenerService.openPermissionSettings(context) } catch (_: Exception) { }
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("Enable", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentGreen)
+                            }
+                        }
                     }
+                    Spacer(modifier = Modifier.height(10.dp))
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Pay button
+                // Primary flow: Redirect to any chosen UPI app (GPay/PhonePe/Paytm/BHIM) & auto/1-tap note on return
                 Button(
+                    onClick = {
+                        if (!canRedirectAndNote) {
+                            Toast.makeText(context, "Enter a valid amount first.", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        val resolvedPurpose = purpose.trim()
+                            .ifBlank { payeeNameText.trim().ifBlank { "UPI Payment" } }
+                        payRequest = UpiPayRequest(
+                            amount = amount,
+                            purpose = resolvedPurpose,
+                            vpa = trimmedVpa,
+                            payeeName = payeeNameText.trim().takeIf { it.isNotBlank() },
+                            launchDirectly = true
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("btn_open_upi_app_direct"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ZenithTheme.solidGreen,
+                        contentColor = Color.White
+                    ),
+                    enabled = canRedirectAndNote
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Redirect to Any UPI App & Note", fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Secondary flow: Merchant / UPI URI intent (requires valid @vpa & purpose)
+                OutlinedButton(
                     onClick = {
                         val candidateInfo = UpiPaymentInfo(
                             payeeAddress = trimmedVpa,
@@ -333,55 +385,34 @@ fun UPIPaySheet(
                         val validation = UpiService.validatePaymentInfo(candidateInfo)
                         if (!validation.isValid) {
                             Toast.makeText(context, validation.errorMessage ?: "Invalid payment request.", Toast.LENGTH_SHORT).show()
-                            return@Button
+                            return@OutlinedButton
                         }
                         if (purpose.isBlank()) {
                             Toast.makeText(context, "Enter a purpose or note.", Toast.LENGTH_SHORT).show()
-                            return@Button
+                            return@OutlinedButton
                         }
                         payRequest = UpiPayRequest(
                             amount = amount,
                             purpose = purpose.trim(),
                             vpa = trimmedVpa,
-                            payeeName = payeeNameText.trim().takeIf { it.isNotBlank() }
+                            payeeName = payeeNameText.trim().takeIf { it.isNotBlank() },
+                            launchDirectly = false
                         )
                     },
-                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("btn_pay_via_upi"),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = ZenithTheme.solidIndigo,
-                        contentColor = Color.White
-                    ),
+                    modifier = Modifier.fillMaxWidth().height(44.dp).testTag("btn_pay_via_upi"),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
                     enabled = isValid
                 ) {
-                    Icon(Icons.Default.Payment, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Payment, contentDescription = null, modifier = Modifier.size(16.dp), tint = ZenithTheme.accentIndigo)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Pay via UPI", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                OutlinedButton(
-                    onClick = {
-                        try {
-                            context.startActivity(UpiService.buildUpiScannerIntent(context, null))
-                        } catch (_: Exception) {
-                            Toast.makeText(context, "No UPI app installed.", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(44.dp).testTag("btn_open_upi_app_direct"),
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, ZenithTheme.borderColor)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp), tint = ZenithTheme.accentCyan)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Open UPI App Directly (Mobile / ID / QR)", fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp, color = ZenithTheme.textPrimary)
+                    Text("Send Merchant UPI Link (Requires Verified ID)", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = ZenithTheme.textPrimary)
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
-                    text = "Zenith opens your UPI app. Payment is verified in that app — Zenith never stores your UPI PIN or bank credentials.",
+                    text = "Zenith redirects to your chosen UPI app, copies any payee ID to your clipboard, and notes the expense when you confirm on return.",
                     fontSize = 10.sp,
                     color = ZenithTheme.textMuted,
                     lineHeight = 13.sp,

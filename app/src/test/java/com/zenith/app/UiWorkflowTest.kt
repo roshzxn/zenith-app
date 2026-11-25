@@ -155,6 +155,7 @@ class UiWorkflowTest {
 
     @Test
     fun testUpiQrScanModalDirectEntrySavesTransaction() {
+        com.zenith.app.data.upi.UpiPaymentBus.clearPending()
         var savedTitle = ""
         var savedAmount = 0.0
 
@@ -393,5 +394,130 @@ class UiWorkflowTest {
 
         assertEquals(1, savedCount)
         assertEquals("432109876543", recordedUtr)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun installFakeUpiAppForUiTest(packageName: String, appLabel: String) {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val shadowPm = org.robolectric.Shadows.shadowOf(context.packageManager)
+        val pkgInfo = android.content.pm.PackageInfo().apply {
+            this.packageName = packageName
+            this.applicationInfo = android.content.pm.ApplicationInfo().apply {
+                this.packageName = packageName
+                this.nonLocalizedLabel = appLabel
+            }
+        }
+        shadowPm.installPackage(pkgInfo)
+        val activityInfo = android.content.pm.ActivityInfo().apply {
+            this.packageName = packageName
+            this.name = "$packageName.PayActivity"
+            this.applicationInfo = pkgInfo.applicationInfo
+        }
+        val component = android.content.ComponentName(packageName, activityInfo.name)
+        shadowPm.addOrUpdateActivity(activityInfo)
+        val filter = android.content.IntentFilter(Intent.ACTION_VIEW).apply {
+            addCategory(Intent.CATEGORY_DEFAULT)
+            addCategory(Intent.CATEGORY_BROWSABLE)
+            addDataScheme("upi")
+            addDataAuthority("pay", null)
+        }
+        shadowPm.addIntentFilterForActivity(component, filter)
+        val mainIntent = android.content.IntentFilter(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        shadowPm.addIntentFilterForActivity(component, mainIntent)
+    }
+
+    @Test
+    fun testUpiPaySheetDirectRedirectWorksWithAmountOnlyAndShowsAppChooser() {
+        installFakeUpiAppForUiTest(com.zenith.app.data.upi.UpiService.GOOGLE_PAY_PACKAGE, "Google Pay")
+        installFakeUpiAppForUiTest(com.zenith.app.data.upi.UpiService.PHONEPE_PACKAGE, "PhonePe")
+
+        composeTestRule.setContent {
+            CashFlowTheme {
+                UPIPaySheet(
+                    currencySymbol = "₹",
+                    onDismiss = {},
+                    onSaveTransaction = { _, _, _, _, _ -> }
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("upi_amount_field").performTextInput("150")
+        composeTestRule.onNodeWithTag("btn_open_upi_app_direct").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("upi_app_picker_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Choose UPI App").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Google Pay").assertIsDisplayed()
+        composeTestRule.onNodeWithText("PhonePe").assertIsDisplayed()
+    }
+
+    @Test
+    fun testDirectUpiAppRedirectReturnNotesPaymentAndAttachesNotificationUtr() {
+        installFakeUpiAppForUiTest(com.zenith.app.data.upi.UpiService.GOOGLE_PAY_PACKAGE, "Google Pay")
+        val lifecycleOwner = object : androidx.lifecycle.LifecycleOwner {
+            val registry = androidx.lifecycle.LifecycleRegistry(this)
+            override val lifecycle: androidx.lifecycle.Lifecycle get() = registry
+        }
+        composeTestRule.runOnUiThread {
+            lifecycleOwner.registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
+        }
+        var savedCount = 0
+        var savedUtr: String? = null
+
+        composeTestRule.setContent {
+            CashFlowTheme {
+                CompositionLocalProvider(
+                    androidx.lifecycle.compose.LocalLifecycleOwner provides lifecycleOwner
+                ) {
+                    UpiPaymentFlow(
+                        payRequest = UpiPayRequest(
+                            amount = 150.0,
+                            purpose = "Tea & Snacks",
+                            vpa = "9876543210",
+                            targetPackage = com.zenith.app.data.upi.UpiService.GOOGLE_PAY_PACKAGE,
+                            launchDirectly = true
+                        ),
+                        currencySymbol = "₹",
+                        onSaveConfirmed = { utr ->
+                            savedCount++
+                            savedUtr = utr
+                        },
+                        onDismiss = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        // Simulate user paying inside Google Pay and Notification Listener detecting the debit
+        composeTestRule.runOnUiThread {
+            lifecycleOwner.registry.currentState = androidx.lifecycle.Lifecycle.State.STARTED
+        }
+        com.zenith.app.data.upi.UpiPaymentBus.post(
+            com.zenith.app.data.upi.ExtractedUpiPayment(
+                amount = 150.0,
+                payeeName = "Tea Stall",
+                upiTransactionId = "412399887766",
+                sourceApp = "Google Pay",
+                isDebit = true
+            )
+        )
+        // User switches back to Zenith -> ON_RESUME triggers note confirmation
+        composeTestRule.runOnUiThread {
+            lifecycleOwner.registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("upi_result_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Payment Detected").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Ref / UTR: 412399887766").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("btn_upi_save").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals(1, savedCount)
+        assertEquals("412399887766", savedUtr)
+        com.zenith.app.data.upi.UpiPaymentBus.clearPending()
     }
 }

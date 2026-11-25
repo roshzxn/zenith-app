@@ -1,6 +1,9 @@
 package com.zenith.app.ui.components
 
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
@@ -10,7 +13,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AccountBalanceWallet
@@ -32,6 +37,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.zenith.app.data.upi.ExtractedUpiPayment
 import com.zenith.app.data.upi.PaymentFlowType
 import com.zenith.app.data.upi.UpiApp
@@ -59,12 +67,15 @@ data class UpiPayRequest(
     val merchantCode: String? = null,
     val originalTxnRef: String? = null,
     val flowType: PaymentFlowType = PaymentFlowType.P2P_INTENT,
-    val gatewayVerifier: UpiGatewayVerifier? = null
+    val gatewayVerifier: UpiGatewayVerifier? = null,
+    val launchDirectly: Boolean = false
 )
 
 /**
- * Shared "pay via UPI" flow used by every UPI entry point: app picker,
- * direct intent launch, strict response validation, and confirmation.
+ * Shared "pay via UPI" flow used by every UPI entry point:
+ * 1) Direct UPI App Redirect (opens chosen GPay/PhonePe/Paytm/BHIM cleanly without P2P security blocks,
+ *    copies payee details to clipboard, listens for return / notification debit, and prompts to note it).
+ * 2) Standard/Merchant UPI URI Intent (`ACTION_VIEW` `upi://pay`) with strict response validation.
  *
  * Security invariants:
  * - Never marks a payment successful merely because a UPI app launched.
@@ -80,13 +91,18 @@ fun UpiPaymentFlow(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var showAppPicker by remember { mutableStateOf(false) }
+    var directRedirectMode by remember { mutableStateOf(false) }
+    var awaitingDirectAppReturn by remember { mutableStateOf(false) }
+    var directAppLabel by remember { mutableStateOf("UPI app") }
     var showPaymentConfirm by remember { mutableStateOf(false) }
     var upiIntentResult by remember { mutableStateOf<UpiIntentResult?>(null) }
     var returnedTxnRef by remember { mutableStateOf<String?>(null) }
     var matchedNotification by remember { mutableStateOf<ExtractedUpiPayment?>(null) }
     var lastTargetPackage by remember { mutableStateOf<String?>(null) }
     var hasSavedCurrentRequest by remember(payRequest) { mutableStateOf(false) }
+    var requestStartedAt by remember(payRequest) { mutableStateOf(System.currentTimeMillis()) }
 
     val upiApps = remember { UpiService.installedUpiApps(context) }
 
@@ -119,12 +135,61 @@ fun UpiPaymentFlow(
         showPaymentConfirm = true
     }
 
-    fun launchDirectUpiApp(targetPkg: String?) {
+    // When returning to Zenith after a direct UPI app redirect, prompt user cleanly to note the expense
+    DisposableEffect(lifecycleOwner, payRequest) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && awaitingDirectAppReturn && payRequest != null) {
+                awaitingDirectAppReturn = false
+                upiIntentResult = UpiIntentResult(
+                    launched = true,
+                    cancelled = false,
+                    returnedTxnRef = returnedTxnRef,
+                    status = UpiPaymentStatus.INITIATED,
+                    message = "Returned from $directAppLabel. Confirm only if the payment succeeded to note it in Zenith."
+                )
+                showPaymentConfirm = true
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    fun copyPayeeToClipboard(payeeText: String): Boolean {
+        val clean = payeeText.trim()
+        if (clean.isBlank()) return false
+        return try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            clipboard?.setPrimaryClip(ClipData.newPlainText("UPI Recipient", clean))
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun launchDirectUpiApp(targetPkg: String?, appLabel: String = "UPI app") {
+        val request = payRequest ?: return
+        val copied = copyPayeeToClipboard(request.vpa)
+        val formattedAmt = String.format(Locale.US, "%.2f", request.amount)
+        val hintText = if (copied) {
+            "Copied ${request.vpa.trim()} — pay $currencySymbol$formattedAmt in $appLabel, then return to note it."
+        } else {
+            "Complete $currencySymbol$formattedAmt payment in $appLabel, then return to Zenith to note it."
+        }
+        Toast.makeText(context, hintText, Toast.LENGTH_LONG).show()
+
+        directAppLabel = appLabel
+        lastTargetPackage = targetPkg
+        awaitingDirectAppReturn = true
+        showAppPicker = false
+        directRedirectMode = false
         try {
             val directIntent = UpiService.buildUpiScannerIntent(context, targetPkg)
             context.startActivity(directIntent)
         } catch (_: Exception) {
-            Toast.makeText(context, "Could not launch UPI app directly.", Toast.LENGTH_SHORT).show()
+            awaitingDirectAppReturn = false
+            Toast.makeText(context, "Could not launch $appLabel directly.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -187,9 +252,17 @@ fun UpiPaymentFlow(
             matchedNotification = null
             upiIntentResult = null
             showPaymentConfirm = false
+            awaitingDirectAppReturn = false
+            requestStartedAt = System.currentTimeMillis()
+            directRedirectMode = payRequest.launchDirectly
             if (!payRequest.targetPackage.isNullOrBlank()) {
                 showAppPicker = false
-                launchPayment(payRequest.targetPackage)
+                if (payRequest.launchDirectly) {
+                    val label = upiApps.firstOrNull { it.packageName == payRequest.targetPackage }?.label ?: "UPI app"
+                    launchDirectUpiApp(payRequest.targetPackage, label)
+                } else {
+                    launchPayment(payRequest.targetPackage)
+                }
             } else {
                 showAppPicker = true
             }
@@ -199,7 +272,7 @@ fun UpiPaymentFlow(
     LaunchedEffect(Unit) {
         UpiPaymentBus.detectedPayments.collect { payment ->
             val req = payRequest
-            if (req != null && payment.isDebit) {
+            if (req != null && payment.isDebit && payment.timestamp >= requestStartedAt - 5_000L) {
                 if (kotlin.math.abs(payment.amount - req.amount) < 0.05) {
                     matchedNotification = payment
                     if (!payment.upiTransactionId.isNullOrBlank()) {
@@ -222,17 +295,25 @@ fun UpiPaymentFlow(
                     shape = RoundedCornerShape(20.dp),
                     color = ZenithTheme.cardSurface,
                     border = BorderStroke(1.dp, ZenithTheme.borderColor),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("upi_app_picker_dialog")
                 ) {
-                    Column(modifier = Modifier.padding(20.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .padding(20.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
                         Text(
-                            text = "Pay with",
+                            text = if (directRedirectMode) "Choose UPI App" else "Pay with",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             color = ZenithTheme.textPrimary
                         )
                         Text(
-                            text = "Select a UPI app installed on this device.",
+                            text = if (directRedirectMode) {
+                                "Opens your UPI app directly (works with mobile, UPI ID & QR) and notes it when you return."
+                            } else {
+                                "Select an installed UPI app on this device."
+                            },
                             fontSize = 12.sp,
                             color = ZenithTheme.textSecondary,
                             modifier = Modifier.padding(top = 2.dp)
@@ -278,26 +359,28 @@ fun UpiPaymentFlow(
                             }
                         } else {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = ZenithTheme.accentCyan.copy(alpha = 0.12f),
-                                    border = BorderStroke(1.dp, ZenithTheme.accentCyan.copy(alpha = 0.4f)),
-                                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { launchPayment(null) }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
+                                if (!directRedirectMode) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = ZenithTheme.accentCyan.copy(alpha = 0.12f),
+                                        border = BorderStroke(1.dp, ZenithTheme.accentCyan.copy(alpha = 0.4f)),
+                                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { launchPayment(null) }
                                     ) {
-                                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = ZenithTheme.accentCyan, modifier = Modifier.size(20.dp))
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Text(
-                                            text = "All UPI apps",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = ZenithTheme.textPrimary
-                                        )
-                                        Spacer(modifier = Modifier.weight(1f))
-                                        Text("System chooser", fontSize = 11.sp, color = ZenithTheme.textSecondary)
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = ZenithTheme.accentCyan, modifier = Modifier.size(20.dp))
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Text(
+                                                text = "All UPI apps",
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = ZenithTheme.textPrimary
+                                            )
+                                            Spacer(modifier = Modifier.weight(1f))
+                                            Text("System chooser", fontSize = 11.sp, color = ZenithTheme.textSecondary)
+                                        }
                                     }
                                 }
                                 upiApps.forEach { app: UpiApp ->
@@ -307,7 +390,13 @@ fun UpiPaymentFlow(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clip(RoundedCornerShape(12.dp))
-                                            .clickable { launchPayment(app.packageName) }
+                                            .clickable {
+                                                if (directRedirectMode) {
+                                                    launchDirectUpiApp(app.packageName, app.label)
+                                                } else {
+                                                    launchPayment(app.packageName)
+                                                }
+                                            }
                                             .testTag("upi_app_${app.packageName}")
                                     ) {
                                         Row(
@@ -322,7 +411,23 @@ fun UpiPaymentFlow(
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = ZenithTheme.textPrimary
                                             )
+                                            Spacer(modifier = Modifier.weight(1f))
+                                            if (directRedirectMode) {
+                                                Text("Open & note", fontSize = 11.sp, color = ZenithTheme.accentGreen)
+                                            }
                                         }
+                                    }
+                                }
+                                if (!directRedirectMode) {
+                                    TextButton(
+                                        onClick = { directRedirectMode = true },
+                                        modifier = Modifier.fillMaxWidth().testTag("btn_switch_to_direct_redirect")
+                                    ) {
+                                        Text(
+                                            "Avoid security declines? Open UPI app directly instead",
+                                            fontSize = 11.5.sp,
+                                            color = ZenithTheme.accentCyan
+                                        )
                                     }
                                 }
                             }
@@ -356,7 +461,9 @@ fun UpiPaymentFlow(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("upi_result_dialog")
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
+                        modifier = Modifier
+                            .padding(20.dp)
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         val statusIcon = when (effectiveStatus) {
@@ -403,7 +510,8 @@ fun UpiPaymentFlow(
                             UpiPaymentStatus.CANCELLED ->
                                 "The payment was cancelled in the UPI app. No expense was recorded."
                             UpiPaymentStatus.INITIATED ->
-                                "Your UPI app returned without an automatic status. Only save if the transfer succeeded in your UPI app."
+                                resultState?.message?.takeIf { it.isNotBlank() }
+                                    ?: "Your UPI app returned without an automatic status. Only save if the transfer succeeded in your UPI app."
                         }
 
                         Icon(
@@ -479,8 +587,14 @@ fun UpiPaymentFlow(
                                 Button(
                                     onClick = {
                                         showPaymentConfirm = false
-                                        launchDirectUpiApp(lastTargetPackage)
-                                        onDismiss()
+                                        val pkg = lastTargetPackage
+                                        if (pkg != null) {
+                                            val label = upiApps.firstOrNull { it.packageName == pkg }?.label ?: "UPI app"
+                                            launchDirectUpiApp(pkg, label)
+                                        } else {
+                                            directRedirectMode = true
+                                            showAppPicker = true
+                                        }
                                     },
                                     modifier = Modifier.fillMaxWidth().height(46.dp).testTag("btn_upi_open_direct"),
                                     shape = RoundedCornerShape(12.dp),
@@ -491,7 +605,7 @@ fun UpiPaymentFlow(
                                 ) {
                                     Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Open UPI App Directly", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Open UPI App Directly & Note", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                                 TextButton(
@@ -510,6 +624,7 @@ fun UpiPaymentFlow(
                                 OutlinedButton(
                                     onClick = {
                                         showPaymentConfirm = false
+                                        directRedirectMode = false
                                         showAppPicker = true
                                     },
                                     modifier = Modifier.fillMaxWidth().height(44.dp).testTag("btn_upi_retry"),
@@ -557,7 +672,7 @@ fun UpiPaymentFlow(
                                 val ctaLabel = if (effectiveStatus == UpiPaymentStatus.SUCCESSFUL) {
                                     "Save Expense to Ledger"
                                 } else {
-                                    "Yes, Payment Succeeded — Save"
+                                    "Yes, Paid — Note in Zenith"
                                 }
 
                                 Button(
@@ -586,13 +701,13 @@ fun UpiPaymentFlow(
                                     OutlinedButton(
                                         onClick = {
                                             showPaymentConfirm = false
-                                            launchDirectUpiApp(lastTargetPackage)
-                                            onDismiss()
+                                            directRedirectMode = true
+                                            showAppPicker = true
                                         },
                                         modifier = Modifier.fillMaxWidth().height(42.dp).testTag("btn_upi_open_direct"),
                                         shape = RoundedCornerShape(12.dp)
                                     ) {
-                                        Text("Open UPI App Directly", fontSize = 12.5.sp)
+                                        Text("Open UPI App Again", fontSize = 12.5.sp)
                                     }
                                     Spacer(modifier = Modifier.height(6.dp))
                                 }
@@ -605,7 +720,7 @@ fun UpiPaymentFlow(
                                     },
                                     modifier = Modifier.fillMaxWidth().testTag("btn_upi_cancel")
                                 ) {
-                                    Text("No / Payment Declined", fontSize = 13.sp, color = ZenithTheme.textSecondary)
+                                    Text("No / Declined — Don't Save", fontSize = 13.sp, color = ZenithTheme.textSecondary)
                                 }
                             }
                         }
