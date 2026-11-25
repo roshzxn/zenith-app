@@ -23,7 +23,8 @@ data class ParsedVoiceExpense(
     val item: String? = null,
     val quantity: Double? = null,
     val unit: String? = null,
-    val unitPrice: Double? = null
+    val unitPrice: Double? = null,
+    val requestId: String = java.util.UUID.randomUUID().toString()
 )
 
 data class ParsedReceiptItem(
@@ -74,7 +75,7 @@ object GeminiAiService {
         }
         try {
             val systemInstruction = """
-                You are a domain-expert financial transaction parser for Zenith CashFlow, an intelligent personal & family finance app.
+                You are a domain-expert financial transaction parser for Zenith CashFlow, an intelligent personal finance app.
                 The user will provide a transaction command in natural English, spoken voice transcription, or Romanized Tanglish (Tamil phrases written strictly in English/Latin alphabet).
                 
                 PARSING RULES:
@@ -82,11 +83,9 @@ object GeminiAiService {
                 2. Transaction Type:
                    - "INCOME": salary, sambalam, freelance, varavu, stipend, bonus, cashback, dividend, received money, credited, refund, interest, allowance, profit, earned.
                    - "EXPENSE": spent, paid, bought, purchase, ordered, bill, recharge, fee, rent, selavu, kuduthen, vanginen, kattinen, subscription, lent, gave.
-                3. Scope:
-                   - "FAMILY": mentions of family, vault, shared, home, split, joint, house, veetu, veedu, parents, amma, appa, mom, dad, brother, sister, wife, husband, roommates, household.
-                   - "PERSONAL": default unless family/shared context is clear.
-                4. Title: Concise, clear standard English title (e.g., "Lunch", "Movie Tickets", "Monthly Salary", "House Rent", "Medicines for Father", "Swiggy Order", "Rapido Ride", "Electricity Bill", "Groceries", "Tea & Snacks", "Petrol / Fuel", "Provisions & Groceries").
-                5. Amount: Numeric value (e.g., 250.0). Accurately convert numeric abbreviations, colloquial units, and spoken number words:
+                3. Scope: Always output "PERSONAL".
+                4. Title: Concise, clear standard English title (e.g., "Lunch", "Movie Tickets", "Monthly Salary", "House Rent", "Medicines", "Swiggy Order", "Rapido Ride", "Electricity Bill", "Groceries", "Tea & Snacks", "Petrol / Fuel", "Provisions & Groceries").
+                5. Amount: Numeric value (e.g., 250.0). If no numeric amount is mentioned, output 0.0. Accurately convert numeric abbreviations, colloquial units, and spoken number words:
                    - "50k" -> 50000.0, "2.5k" -> 2500.0, "10k" -> 10000.0
                    - "1.5 lakh" / "1.5 lac" -> 150000.0, "1 crore" -> 10000000.0
                    - "500 rs" / "500 rupees" / "500 bucks" / "₹500" -> 500.0
@@ -112,15 +111,12 @@ object GeminiAiService {
                 3. "Paid 1200 for electricity bill cash" -> {"title": "Electricity Bill", "amount": 1200.0, "type": "EXPENSE", "category": "Bills & Utilities", "paymentMethod": "Cash", "scope": "PERSONAL", "note": "Paid 1200 for electricity bill cash"}
                 4. "Received 50k salary from office in bank" -> {"title": "Monthly Salary", "amount": 50000.0, "type": "INCOME", "category": "Salary & Income", "paymentMethod": "Bank Transfer", "scope": "PERSONAL", "note": "Received 50k salary from office in bank"}
                 5. "Kadaila provision samantham 1200 selavu cash" -> {"title": "Provisions & Groceries", "amount": 1200.0, "type": "EXPENSE", "category": "Shopping", "paymentMethod": "Cash", "scope": "PERSONAL", "note": "Kadaila provision samantham 1200 selavu cash"}
-                6. "Family groceries 2.5k credit card" -> {"title": "Family Groceries", "amount": 2500.0, "type": "EXPENSE", "category": "Shopping", "paymentMethod": "Credit Card", "scope": "FAMILY", "note": "Family groceries 2.5k credit card"}
-                7. "Veetu vaadagai 15000 family vault bank transfer" -> {"title": "House Rent", "amount": 15000.0, "type": "EXPENSE", "category": "Housing & Rent", "paymentMethod": "Bank Transfer", "scope": "FAMILY", "note": "Veetu vaadagai 15000 family vault bank transfer"}
-                8. "Appavukku marundhu vanginen 450 PhonePe" -> {"title": "Medicines for Father", "amount": 450.0, "type": "EXPENSE", "category": "Healthcare", "paymentMethod": "UPI", "scope": "FAMILY", "note": "Appavukku marundhu vanginen 450 PhonePe"}
-                9. "Vandi petrol 500 Google Pay" -> {"title": "Petrol / Fuel", "amount": 500.0, "type": "EXPENSE", "category": "Transportation", "paymentMethod": "UPI", "scope": "PERSONAL", "note": "Vandi petrol 500 Google Pay"}
-                10. "Ammavukku send panen 3000 bank transfer" -> {"title": "Money Sent to Mother", "amount": 3000.0, "type": "EXPENSE", "category": "Other", "paymentMethod": "Bank Transfer", "scope": "FAMILY", "note": "Ammavukku send panen 3000 bank transfer"}
-                11. "Tea and snacks ainooru selavu cash" -> {"title": "Tea & Snacks", "amount": 500.0, "type": "EXPENSE", "category": "Food & Dining", "paymentMethod": "Cash", "scope": "PERSONAL", "note": "Tea and snacks ainooru selavu cash"}
-                12. "Swiggy dinner 450 UPI" -> {"title": "Swiggy Food Order", "amount": 450.0, "type": "EXPENSE", "category": "Food & Dining", "paymentMethod": "UPI", "scope": "PERSONAL", "note": "Swiggy dinner 450 UPI"}
-                13. "Dinner with roommates 800 split" -> {"title": "Dinner with Roommates", "amount": 800.0, "type": "EXPENSE", "category": "Food & Dining", "paymentMethod": "UPI", "scope": "FAMILY", "note": "Dinner with roommates 800 split"}
-                14. "Got 200 cashback on Google Pay" -> {"title": "Cashback", "amount": 200.0, "type": "INCOME", "category": "Investments", "paymentMethod": "UPI", "scope": "PERSONAL", "note": "Got 200 cashback on Google Pay"}
+                6. "House rent 15000 bank transfer" -> {"title": "House Rent", "amount": 15000.0, "type": "EXPENSE", "category": "Housing & Rent", "paymentMethod": "Bank Transfer", "scope": "PERSONAL", "note": "House rent 15000 bank transfer"}
+                7. "Appavukku marundhu vanginen 450 PhonePe" -> {"title": "Medicines", "amount": 450.0, "type": "EXPENSE", "category": "Healthcare", "paymentMethod": "UPI", "scope": "PERSONAL", "note": "Appavukku marundhu vanginen 450 PhonePe"}
+                8. "Vandi petrol 500 Google Pay" -> {"title": "Petrol / Fuel", "amount": 500.0, "type": "EXPENSE", "category": "Transportation", "paymentMethod": "UPI", "scope": "PERSONAL", "note": "Vandi petrol 500 Google Pay"}
+                9. "Tea and snacks ainooru selavu cash" -> {"title": "Tea & Snacks", "amount": 500.0, "type": "EXPENSE", "category": "Food & Dining", "paymentMethod": "Cash", "scope": "PERSONAL", "note": "Tea and snacks ainooru selavu cash"}
+                10. "Swiggy dinner 450 UPI" -> {"title": "Swiggy Food Order", "amount": 450.0, "type": "EXPENSE", "category": "Food & Dining", "paymentMethod": "UPI", "scope": "PERSONAL", "note": "Swiggy dinner 450 UPI"}
+                11. "Got 200 cashback on Google Pay" -> {"title": "Cashback", "amount": 200.0, "type": "INCOME", "category": "Investments", "paymentMethod": "UPI", "scope": "PERSONAL", "note": "Got 200 cashback on Google Pay"}
                 
                 Return plain JSON only without markdown formatting.
             """.trimIndent()
@@ -133,8 +129,7 @@ object GeminiAiService {
             val type = if (typeStr.uppercase() == "INCOME") TransactionType.INCOME else TransactionType.EXPENSE
             val category = jsonObj.optString("category", if (type == TransactionType.INCOME) "Salary & Income" else "Food & Dining")
             val paymentMethod = jsonObj.optString("paymentMethod", "UPI")
-            val scopeStr = jsonObj.optString("scope", "PERSONAL")
-            val scope = if (scopeStr.uppercase() == "FAMILY") FinanceScope.FAMILY else FinanceScope.PERSONAL
+            val scope = FinanceScope.PERSONAL
             val note = jsonObj.optString("note", prompt)
 
             if (amount > 0) {
@@ -158,7 +153,11 @@ object GeminiAiService {
     suspend fun parseAudioCommand(audioBase64: String): ParsedVoiceExpense = withContext(Dispatchers.IO) {
         val apiKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
         if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
-            return@withContext fallbackParseVoiceCommand("Audio Expense 150")
+            return@withContext ParsedVoiceExpense(
+                title = "Voice Entry",
+                amount = 0.0,
+                note = "Gemini API key not configured. Enter details manually."
+            )
         }
         try {
             val systemInstruction = """
@@ -177,8 +176,8 @@ object GeminiAiService {
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
             conn.doOutput = true
-            conn.connectTimeout = 1500
-            conn.readTimeout = 2500
+            conn.connectTimeout = 8000
+            conn.readTimeout = 15000
 
             val requestPayload = JSONObject().apply {
                 put("systemInstruction", JSONObject().apply {
@@ -239,17 +238,25 @@ object GeminiAiService {
 
                 ParsedVoiceExpense(
                     title = title,
-                    amount = if (amount > 0) amount else 100.0,
+                    amount = if (amount > 0) amount else 0.0,
                     type = type,
                     category = category,
                     paymentMethod = paymentMethod,
                     note = note
                 )
             } else {
-                fallbackParseVoiceCommand("Voice Transaction 100")
+                ParsedVoiceExpense(
+                    title = "Voice Entry",
+                    amount = 0.0,
+                    note = "Audio recognition failed (HTTP ${conn.responseCode}). Enter amount manually or re-speak."
+                )
             }
         } catch (e: Exception) {
-            fallbackParseVoiceCommand("Voice Transaction 100")
+            ParsedVoiceExpense(
+                title = "Voice Entry",
+                amount = 0.0,
+                note = "Could not transcribe audio. Enter amount manually or re-speak."
+            )
         }
     }
 
@@ -412,8 +419,8 @@ object GeminiAiService {
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.doOutput = true
-                conn.connectTimeout = 1500
-                conn.readTimeout = 2000
+                conn.connectTimeout = 8000
+                conn.readTimeout = 15000
 
                 val requestPayload = JSONObject().apply {
                     put("systemInstruction", JSONObject().apply {
@@ -641,21 +648,7 @@ object GeminiAiService {
 
     fun fallbackParseVoiceCommand(prompt: String): ParsedVoiceExpense {
         val lower = prompt.lowercase().trim()
-
-        // 1. Scope Detection (Family Vault vs Personal)
-        val isFamilyScope = lower.contains("family") || lower.contains("shared") ||
-            lower.contains("vault") || lower.contains("household") ||
-            lower.contains("split") || lower.contains("joint") ||
-            lower.contains("our ") || lower.endsWith("our") ||
-            lower.contains("roommate") || lower.contains("veetu") ||
-            lower.contains("amma") || lower.contains("appa") ||
-            lower.contains("veedu") || lower.contains("vaadagai") ||
-            lower.contains("parents") || lower.contains("father") ||
-            lower.contains("mother") || lower.contains("brother") ||
-            lower.contains("sister") || lower.contains("wife") ||
-            lower.contains("husband") || lower.contains("children") ||
-            lower.contains("kids")
-        val scope = if (isFamilyScope) FinanceScope.FAMILY else FinanceScope.PERSONAL
+        val scope = FinanceScope.PERSONAL
 
         // 2. Explicit Income vs Expense Detection
         val isCreditCard = lower.contains("credit card") || lower.contains("credit-card")
@@ -787,7 +780,7 @@ object GeminiAiService {
             }
         }
 
-        val finalAmount = detectedAmount ?: (matchedMeta?.defaultAmount ?: 100.0)
+        val finalAmount = detectedAmount ?: 0.0
         val finalTitle = matchedMeta?.standardName ?: run {
             val clean = lower.replace(Regex("""\b(spent|paid|for|in|via|on|got|received|rs|rupees|upi|cash|card|bank|transfer|selavu|varavu|panam|kaasu|poten|kuduthen|vanginen|kattinen|innaiku|veetu|office|ku|la|with|using|and|of|a|an|the)\b"""), " ")
                 .replace(Regex("""\b\d+(?:\.\d+)?\s*(k|thousand|lakh|lac|crore|cr|bucks|rs|rupees)?\b"""), " ")

@@ -12,21 +12,19 @@ import java.time.Instant
 import java.util.UUID
 
 /**
- * Production-Grade Bidirectional Sync Engine for Personal Vault & Family Finance.
+ * Bidirectional Offline-First Sync Engine for Personal Finance.
  *
  * Guarantees:
  * 1. Offline-first: Instant UI mutations with Room SQLite local caching.
- * 2. Zero-leakage privacy: Personal finance records sync with `finance_scope = 'PERSONAL'`
- *    and are cryptographically isolated at the database kernel level via PostgreSQL RLS.
- * 3. Multi-device recovery: Restores user transactions, budgets, and savings goals upon login.
+ * 2. User-isolated cloud sync across personal transactions, budgets, savings goals, and auto-pay reminders.
+ * 3. Multi-device recovery upon sign-in.
  */
 class SyncEngine(
     private val transactionDao: TransactionDao,
-    private val familyDao: FamilyDao,
     private val authService: AuthService,
-    private val familyMemberDao: FamilyMemberDao? = null,
     private val budgetDao: BudgetDao? = null,
-    private val savingsGoalDao: SavingsGoalDao? = null
+    private val savingsGoalDao: SavingsGoalDao? = null,
+    private val autoPayReminderDao: AutoPayReminderDao? = null
 ) {
     private val tag = "SyncEngine"
     private val syncMutex = kotlinx.coroutines.sync.Mutex()
@@ -44,9 +42,9 @@ class SyncEngine(
     val isConfigured: Boolean
         get() = SupabaseClientConfig.isConfigured
 
-    suspend fun syncAll(explicitUserId: String? = null, activeFamilyId: String? = null): Boolean = withContext(Dispatchers.IO) {
+    suspend fun syncAll(explicitUserId: String? = null): Boolean = withContext(Dispatchers.IO) {
         if (!isConfigured) {
-            Log.d(tag, "Operating in Local-First Vault mode (Supabase unconfigured or offline).")
+            Log.d(tag, "Operating in Local-First mode (Supabase unconfigured or offline).")
             return@withContext true
         }
 
@@ -55,26 +53,22 @@ class SyncEngine(
             ?: try { SupabaseClientConfig.supabase.auth.currentUserOrNull()?.id } catch (e: Exception) { null }
 
         if (userId.isNullOrBlank() || userId == "local_user_1") {
-            Log.d(tag, "No active cloud user session — operating in private local guest vault.")
+            Log.d(tag, "No active cloud user session — operating in private local mode.")
             return@withContext true
         }
 
         if (!isValidUuid(userId)) {
-            Log.w(tag, "User ID '$userId' is not a valid UUID. Skipping Supabase cloud sync to prevent PostgreSQL UUID syntax error.")
+            Log.w(tag, "User ID '$userId' is not a valid UUID. Skipping Supabase cloud sync.")
             return@withContext false
         }
-
-        val effectiveFamId = activeFamilyId ?: try { familyDao.getFirstFamily()?.id } catch (e: Exception) { null }
 
         syncMutex.withLock {
             try {
                 val txSuccess = syncPersonalTransactions(userId)
-                val famSuccess = if (!effectiveFamId.isNullOrBlank() && isValidUuid(effectiveFamId)) {
-                    syncFamilyTransactions(effectiveFamId, userId)
-                } else true
                 val budgetSuccess = syncPersonalBudgets(userId)
                 val goalsSuccess = syncPersonalSavingsGoals(userId)
-                txSuccess && famSuccess && budgetSuccess && goalsSuccess
+                val autoPaySuccess = syncPersonalAutoPayReminders(userId)
+                txSuccess && budgetSuccess && goalsSuccess && autoPaySuccess
             } catch (e: Exception) {
                 Log.e(tag, "syncAll error: ${e.message}", e)
                 false
@@ -82,8 +76,8 @@ class SyncEngine(
         }
     }
 
-    suspend fun syncTransactions(explicitUserId: String? = null, activeFamilyId: String? = null) {
-        syncAll(explicitUserId, activeFamilyId)
+    suspend fun syncTransactions(explicitUserId: String? = null) {
+        syncAll(explicitUserId)
     }
 
     // =============================================================================
@@ -92,7 +86,7 @@ class SyncEngine(
     private suspend fun syncPersonalTransactions(userId: String): Boolean {
         var success = true
         // 1. Push Pending Creates
-        val pendingCreates = transactionDao.getPendingCreates().filter { it.financeScope == FinanceScope.PERSONAL }
+        val pendingCreates = transactionDao.getPendingCreates()
         for (localTx in pendingCreates) {
             val serverId = localTx.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
             val dto = TransactionDto(
@@ -132,7 +126,7 @@ class SyncEngine(
         }
 
         // 2. Push Pending Updates
-        val pendingUpdates = transactionDao.getPendingUpdates().filter { it.financeScope == FinanceScope.PERSONAL }
+        val pendingUpdates = transactionDao.getPendingUpdates()
         for (localTx in pendingUpdates) {
             val serverId = localTx.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
             val dto = TransactionDto(
@@ -166,7 +160,7 @@ class SyncEngine(
         }
 
         // 3. Push Pending Deletes
-        val pendingDeletes = transactionDao.getPendingDeletes().filter { it.financeScope == FinanceScope.PERSONAL }
+        val pendingDeletes = transactionDao.getPendingDeletes()
         for (localTx in pendingDeletes) {
             val serverId = localTx.serverId
             if (serverId != null && isValidUuid(serverId)) {
@@ -186,11 +180,13 @@ class SyncEngine(
                         Log.e(tag, "Failed to delete personal transaction on cloud: ${e2.message}")
                     }
                 }
+                transactionDao.updateTransaction(
+                    localTx.copy(isDeleted = true, syncStatus = "SYNCED", updatedAt = System.currentTimeMillis())
+                )
+            } else {
+                // Purely local record already committed for deletion: clean up local row
+                transactionDao.deleteTransactionById(localTx.id)
             }
-            // Retain the local tombstone with isDeleted = true and syncStatus = "SYNCED" so it is NEVER resurrected
-            transactionDao.updateTransaction(
-                localTx.copy(isDeleted = true, syncStatus = "SYNCED", updatedAt = System.currentTimeMillis())
-            )
         }
 
         // 4. Pull Remote Personal Transactions
@@ -206,8 +202,6 @@ class SyncEngine(
                 .decodeList<TransactionDto>()
 
             for (dto in remoteTxs) {
-                val isFamily = dto.financeScope?.equals("FAMILY", ignoreCase = true) == true && !dto.familyId.isNullOrBlank()
-                if (isFamily) continue
                 if (deletedServerIds.contains(dto.id)) continue
 
                 var existing = transactionDao.getTransactionByServerId(dto.id)
@@ -299,232 +293,13 @@ class SyncEngine(
     }
 
     // =============================================================================
-    // FAMILY TRANSACTIONS SYNC
-    // =============================================================================
-    suspend fun syncFamilyTransactions(familyId: String, userId: String): Boolean {
-        if (!isConfigured || familyId.isBlank()) return true
-        var success = true
-
-        // 1. Push Pending Creates
-        val pendingCreates = transactionDao.getPendingCreates().filter { it.financeScope == FinanceScope.FAMILY && it.familyId == familyId }
-        for (localTx in pendingCreates) {
-            val serverId = localTx.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
-            val dto = TransactionDto(
-                id = serverId,
-                userId = userId,
-                familyId = familyId,
-                financeScope = "FAMILY",
-                amount = localTx.amount,
-                title = localTx.title,
-                transactionType = localTx.type.name,
-                type = localTx.type.name,
-                categoryId = localTx.category.takeIf { isValidUuid(it) } ?: "Other",
-                category = localTx.category.ifBlank { "Other" },
-                description = localTx.note.ifBlank { localTx.title.ifBlank { "Transaction" } },
-                paymentMethod = localTx.paymentMethod,
-                paidByName = localTx.createdByUserId,
-                paidByMemberId = localTx.createdByUserId.takeIf { isValidUuid(it) },
-                upiId = localTx.upiId,
-                upiTransactionId = localTx.upiTransactionId,
-                transactionDate = Instant.ofEpochMilli(localTx.dateMillis).toString(),
-                createdAt = Instant.ofEpochMilli(localTx.updatedAt).toString(),
-                updatedAt = Instant.ofEpochMilli(localTx.updatedAt).toString(),
-                isDeleted = false
-            )
-            try {
-                SupabaseClientConfig.supabase.postgrest["transactions"].upsert(dto)
-                transactionDao.updateTransaction(
-                    localTx.copy(
-                        serverId = serverId,
-                        syncStatus = "SYNCED",
-                        createdByUserId = localTx.createdByUserId ?: userId,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-            } catch (e: Exception) {
-                Log.e(tag, "Failed to push family transaction create: ${e.message}")
-                success = false
-            }
-        }
-
-        // 2. Push Pending Updates
-        val pendingUpdates = transactionDao.getPendingUpdates().filter { it.financeScope == FinanceScope.FAMILY && it.familyId == familyId }
-        for (localTx in pendingUpdates) {
-            val serverId = localTx.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
-            val dto = TransactionDto(
-                id = serverId,
-                userId = userId,
-                familyId = familyId,
-                financeScope = "FAMILY",
-                amount = localTx.amount,
-                title = localTx.title,
-                transactionType = localTx.type.name,
-                type = localTx.type.name,
-                categoryId = localTx.category.takeIf { isValidUuid(it) } ?: "Other",
-                category = localTx.category.ifBlank { "Other" },
-                description = localTx.note.ifBlank { localTx.title.ifBlank { "Transaction" } },
-                paymentMethod = localTx.paymentMethod,
-                upiId = localTx.upiId,
-                upiTransactionId = localTx.upiTransactionId,
-                transactionDate = Instant.ofEpochMilli(localTx.dateMillis).toString(),
-                updatedAt = Instant.ofEpochMilli(localTx.updatedAt).toString(),
-                isDeleted = false
-            )
-            try {
-                SupabaseClientConfig.supabase.postgrest["transactions"].upsert(dto)
-                transactionDao.updateTransaction(
-                    localTx.copy(serverId = serverId, syncStatus = "SYNCED", updatedAt = System.currentTimeMillis())
-                )
-            } catch (e: Exception) {
-                Log.e(tag, "Failed to push family transaction update: ${e.message}")
-                success = false
-            }
-        }
-
-        // 3. Push Pending Deletes
-        val pendingDeletes = transactionDao.getPendingDeletes().filter { it.financeScope == FinanceScope.FAMILY && it.familyId == familyId }
-        for (localTx in pendingDeletes) {
-            val serverId = localTx.serverId
-            if (serverId != null && isValidUuid(serverId)) {
-                try {
-                    SupabaseClientConfig.supabase.postgrest["transactions"].delete {
-                        filter { eq("id", serverId) }
-                    }
-                } catch (e: Exception) {
-                    try {
-                        SupabaseClientConfig.supabase.postgrest["transactions"].update({
-                            set("is_deleted", true)
-                            set("updated_at", Instant.now().toString())
-                        }) {
-                            filter { eq("id", serverId) }
-                        }
-                    } catch (e2: Exception) {
-                        Log.e(tag, "Failed to delete family transaction on cloud: ${e2.message}")
-                    }
-                }
-            }
-            // Retain the local tombstone with isDeleted = true and syncStatus = "SYNCED" so it is NEVER resurrected
-            transactionDao.updateTransaction(
-                localTx.copy(isDeleted = true, syncStatus = "SYNCED", updatedAt = System.currentTimeMillis())
-            )
-        }
-
-        // 4. Pull Remote Family Transactions
-        try {
-            val deletedServerIds = transactionDao.getDeletedServerIds().toSet()
-            val remoteTxs = SupabaseClientConfig.supabase.postgrest["transactions"]
-                .select {
-                    filter {
-                        eq("finance_scope", "FAMILY")
-                        eq("family_id", familyId)
-                        eq("is_deleted", false)
-                    }
-                }
-                .decodeList<TransactionDto>()
-
-            for (dto in remoteTxs) {
-                if (deletedServerIds.contains(dto.id)) continue
-
-                var existing = transactionDao.getTransactionByServerId(dto.id)
-                if (existing != null && existing.isDeleted) continue
-                val txDateMillis = parseIsoTimestamp(dto.transactionDate)
-                val txUpdatedMillis = parseIsoTimestamp(dto.updatedAt ?: dto.createdAt)
-                val txTitle = dto.title?.takeIf { it.isNotBlank() }
-                    ?: dto.description?.takeIf { it.isNotBlank() }
-                    ?: "Family Transaction"
-                val txCategory = dto.category ?: dto.categoryId ?: "General"
-                val txType = try {
-                    val typeStr = (dto.transactionType ?: dto.type ?: "EXPENSE").uppercase()
-                    TransactionType.valueOf(typeStr)
-                } catch (e: Exception) {
-                    TransactionType.EXPENSE
-                }
-                val resolvedCreator = dto.paidByName?.takeIf { it.isNotBlank() } ?: dto.userId ?: userId
-
-                // Deduplication guard for family transactions
-                if (existing == null && !dto.isDeleted) {
-                    val dupes = transactionDao.findPotentialDuplicates(
-                        amount = dto.amount,
-                        type = txType,
-                        scope = FinanceScope.FAMILY,
-                        startMillis = txDateMillis - 60_000L,
-                        endMillis = txDateMillis + 60_000L
-                    )
-                    val match = dupes.firstOrNull { it.serverId.isNullOrBlank() || it.serverId == dto.id }
-                    if (match != null) {
-                        existing = match
-                        transactionDao.updateTransaction(
-                            existing.copy(
-                                serverId = dto.id,
-                                createdByUserId = resolvedCreator,
-                                syncStatus = "SYNCED",
-                                updatedAt = maxOf(existing.updatedAt, txUpdatedMillis)
-                            )
-                        )
-                    }
-                }
-
-                if (dto.isDeleted) {
-                    if (existing != null) {
-                        transactionDao.deleteTransaction(existing)
-                    }
-                } else {
-                    if (existing == null) {
-                        val newEntity = TransactionEntity(
-                            title = txTitle,
-                            amount = dto.amount,
-                            type = txType,
-                            category = txCategory,
-                            note = dto.description ?: "",
-                            paymentMethod = dto.paymentMethod ?: "UPI",
-                            dateMillis = txDateMillis,
-                            upiId = dto.upiId,
-                            upiTransactionId = dto.upiTransactionId,
-                            financeScope = FinanceScope.FAMILY,
-                            familyId = familyId,
-                            createdByUserId = resolvedCreator,
-                            serverId = dto.id,
-                            syncStatus = "SYNCED",
-                            updatedAt = txUpdatedMillis,
-                            isDeleted = false
-                        )
-                        transactionDao.insertTransaction(newEntity)
-                    } else if (existing.syncStatus == "SYNCED" && txUpdatedMillis > existing.updatedAt) {
-                        val updatedEntity = existing.copy(
-                            title = txTitle,
-                            amount = dto.amount,
-                            type = txType,
-                            category = txCategory,
-                            note = dto.description ?: "",
-                            paymentMethod = dto.paymentMethod ?: existing.paymentMethod,
-                            dateMillis = txDateMillis,
-                            upiId = dto.upiId,
-                            upiTransactionId = dto.upiTransactionId,
-                            createdByUserId = resolvedCreator,
-                            syncStatus = "SYNCED",
-                            updatedAt = txUpdatedMillis,
-                            isDeleted = false
-                        )
-                        transactionDao.updateTransaction(updatedEntity)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(tag, "Failed to pull remote family transactions: ${e.message}")
-            success = false
-        }
-        return success
-    }
-
-    // =============================================================================
     // PERSONAL BUDGETS SYNC
     // =============================================================================
     private suspend fun syncPersonalBudgets(userId: String): Boolean {
         val bDao = budgetDao ?: return true
         var success = true
 
-        // Push Pending Creates
-        val pendingCreates = bDao.getPendingCreates().filter { it.financeScope == FinanceScope.PERSONAL }
+        val pendingCreates = bDao.getPendingCreates()
         for (localBudget in pendingCreates) {
             val serverId = localBudget.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
             val dto = BudgetDto(
@@ -553,8 +328,7 @@ class SyncEngine(
             }
         }
 
-        // Push Pending Updates
-        val pendingUpdates = bDao.getPendingUpdates().filter { it.financeScope == FinanceScope.PERSONAL }
+        val pendingUpdates = bDao.getPendingUpdates()
         for (localBudget in pendingUpdates) {
             val serverId = localBudget.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
             val dto = BudgetDto(
@@ -583,8 +357,7 @@ class SyncEngine(
             }
         }
 
-        // Push Pending Deletes
-        val pendingDeletes = bDao.getPendingDeletes().filter { it.financeScope == FinanceScope.PERSONAL }
+        val pendingDeletes = bDao.getPendingDeletes()
         for (localBudget in pendingDeletes) {
             val serverId = localBudget.serverId
             if (serverId != null && isValidUuid(serverId)) {
@@ -603,18 +376,14 @@ class SyncEngine(
             bDao.deleteBudget(localBudget)
         }
 
-        // Pull Remote Budgets
         try {
             val remoteBudgets = SupabaseClientConfig.supabase.postgrest["budgets"]
                 .select {
-                    filter {
-                        eq("user_id", userId)
-                    }
+                    filter { eq("user_id", userId) }
                 }
                 .decodeList<BudgetDto>()
 
             for (dto in remoteBudgets) {
-                if (dto.financeScope?.equals("FAMILY", ignoreCase = true) == true && !dto.familyId.isNullOrBlank()) continue
                 val existing = bDao.getBudgetByServerId(dto.id)
                 if (dto.isDeleted) {
                     if (existing != null) bDao.deleteBudget(existing)
@@ -665,8 +434,7 @@ class SyncEngine(
         val sDao = savingsGoalDao ?: return true
         var success = true
 
-        // Push Pending Creates
-        val pendingCreates = sDao.getPendingCreates().filter { it.financeScope == FinanceScope.PERSONAL }
+        val pendingCreates = sDao.getPendingCreates()
         for (localGoal in pendingCreates) {
             val serverId = localGoal.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
             val dto = SavingsGoalDto(
@@ -695,8 +463,7 @@ class SyncEngine(
             }
         }
 
-        // Push Pending Updates
-        val pendingUpdates = sDao.getPendingUpdates().filter { it.financeScope == FinanceScope.PERSONAL }
+        val pendingUpdates = sDao.getPendingUpdates()
         for (localGoal in pendingUpdates) {
             val serverId = localGoal.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
             val dto = SavingsGoalDto(
@@ -725,8 +492,7 @@ class SyncEngine(
             }
         }
 
-        // Push Pending Deletes
-        val pendingDeletes = sDao.getPendingDeletes().filter { it.financeScope == FinanceScope.PERSONAL }
+        val pendingDeletes = sDao.getPendingDeletes()
         for (localGoal in pendingDeletes) {
             val serverId = localGoal.serverId
             if (serverId != null && isValidUuid(serverId)) {
@@ -745,18 +511,14 @@ class SyncEngine(
             sDao.deleteGoal(localGoal)
         }
 
-        // Pull Remote Savings Goals
         try {
             val remoteGoals = SupabaseClientConfig.supabase.postgrest["savings_goals"]
                 .select {
-                    filter {
-                        eq("user_id", userId)
-                    }
+                    filter { eq("user_id", userId) }
                 }
                 .decodeList<SavingsGoalDto>()
 
             for (dto in remoteGoals) {
-                if (dto.financeScope?.equals("FAMILY", ignoreCase = true) == true && !dto.familyId.isNullOrBlank()) continue
                 val existing = sDao.getGoalByServerId(dto.id)
                 if (dto.isDeleted) {
                     if (existing != null) sDao.deleteGoal(existing)
@@ -803,63 +565,163 @@ class SyncEngine(
         return success
     }
 
-    suspend fun fetchRemoteFamilyByInviteCode(inviteCode: String): Pair<FamilyDto?, List<TransactionDto>> {
-        val cleanCode = inviteCode.trim().uppercase()
-        return withContext(Dispatchers.IO) {
-            // 1. Try fetching from Supabase cloud first if configured
-            if (isConfigured) {
-                try {
-                    val candidateCodes = listOf(
-                        cleanCode,
-                        if (cleanCode.startsWith("FAM-")) cleanCode.removePrefix("FAM-") else "FAM-$cleanCode"
-                    ).distinct()
+    // =============================================================================
+    // PERSONAL AUTO-PAY REMINDERS SYNC
+    // =============================================================================
+    private suspend fun syncPersonalAutoPayReminders(userId: String): Boolean {
+        val aDao = autoPayReminderDao ?: return true
+        var success = true
 
-                    for (code in candidateCodes) {
-                        val famList = SupabaseClientConfig.supabase.postgrest["families"]
-                            .select {
-                                filter { eq("invite_code", code) }
-                            }
-                            .decodeList<FamilyDto>()
-                        val remoteFam = famList.firstOrNull()
-                        if (remoteFam != null) {
-                            val remoteTxs = try {
-                                SupabaseClientConfig.supabase.postgrest["transactions"]
-                                    .select {
-                                        filter {
-                                            eq("family_id", remoteFam.id)
-                                            eq("finance_scope", "FAMILY")
-                                            eq("is_deleted", false)
-                                        }
-                                    }
-                                    .decodeList<TransactionDto>()
-                            } catch (te: Exception) {
-                                Log.w(tag, "Failed to fetch remote transactions for family: ${te.message}")
-                                emptyList()
-                            }
-                            return@withContext Pair(remoteFam, remoteTxs)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(tag, "fetchRemoteFamilyByInviteCode cloud error: ${e.message}")
-                }
-            }
-
-            // 2. Fallback to local Room DB
-            val localFamily = familyDao.getFamilyById(cleanCode)
-            if (localFamily != null) {
-                Pair(
-                    FamilyDto(
-                        id = localFamily.id,
-                        name = localFamily.name,
-                        createdBy = localFamily.createdByUserId,
-                        inviteCode = localFamily.inviteCode
-                    ),
-                    emptyList()
+        val pendingCreates = aDao.getPendingCreates()
+        for (local in pendingCreates) {
+            val serverId = local.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
+            val dto = AutoPayReminderDto(
+                id = serverId,
+                userId = userId,
+                financeScope = "PERSONAL",
+                title = local.title,
+                amount = local.amount,
+                category = local.category,
+                paymentMethod = local.paymentMethod,
+                frequency = local.frequency,
+                dueDayOfMonth = local.dueDayOfMonth,
+                nextDueDate = Instant.ofEpochMilli(local.nextDueDateMillis).toString(),
+                isAutoDebit = local.isAutoDebit,
+                reminderDaysBefore = local.reminderDaysBefore,
+                isPaused = local.isPaused,
+                lastPaidDate = local.lastPaidDateMillis?.let { Instant.ofEpochMilli(it).toString() },
+                notes = local.notes,
+                isDeleted = false,
+                updatedAt = Instant.ofEpochMilli(local.updatedAt).toString()
+            )
+            try {
+                SupabaseClientConfig.supabase.postgrest["auto_pay_reminders"].upsert(dto)
+                aDao.updateReminder(
+                    local.copy(serverId = serverId, syncStatus = "SYNCED", updatedAt = System.currentTimeMillis())
                 )
-            } else {
-                Pair(null, emptyList())
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to push auto-pay create: ${e.message}")
+                success = false
             }
         }
+
+        val pendingUpdates = aDao.getPendingUpdates()
+        for (local in pendingUpdates) {
+            val serverId = local.serverId?.takeIf { it.isNotBlank() && isValidUuid(it) } ?: UUID.randomUUID().toString()
+            val dto = AutoPayReminderDto(
+                id = serverId,
+                userId = userId,
+                financeScope = "PERSONAL",
+                title = local.title,
+                amount = local.amount,
+                category = local.category,
+                paymentMethod = local.paymentMethod,
+                frequency = local.frequency,
+                dueDayOfMonth = local.dueDayOfMonth,
+                nextDueDate = Instant.ofEpochMilli(local.nextDueDateMillis).toString(),
+                isAutoDebit = local.isAutoDebit,
+                reminderDaysBefore = local.reminderDaysBefore,
+                isPaused = local.isPaused,
+                lastPaidDate = local.lastPaidDateMillis?.let { Instant.ofEpochMilli(it).toString() },
+                notes = local.notes,
+                isDeleted = false,
+                updatedAt = Instant.ofEpochMilli(local.updatedAt).toString()
+            )
+            try {
+                SupabaseClientConfig.supabase.postgrest["auto_pay_reminders"].upsert(dto)
+                aDao.updateReminder(
+                    local.copy(serverId = serverId, syncStatus = "SYNCED", updatedAt = System.currentTimeMillis())
+                )
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to push auto-pay update: ${e.message}")
+                success = false
+            }
+        }
+
+        val pendingDeletes = aDao.getPendingDeletes()
+        for (local in pendingDeletes) {
+            val serverId = local.serverId
+            if (serverId != null && isValidUuid(serverId)) {
+                try {
+                    SupabaseClientConfig.supabase.postgrest["auto_pay_reminders"].update({
+                        set("is_deleted", true)
+                        set("updated_at", Instant.now().toString())
+                    }) {
+                        filter { eq("id", serverId) }
+                    }
+                } catch (e: Exception) {
+                    Log.e(tag, "Failed to soft-delete auto-pay reminder: ${e.message}")
+                    success = false
+                }
+            }
+            aDao.deleteReminder(local)
+        }
+
+        try {
+            val remoteReminders = SupabaseClientConfig.supabase.postgrest["auto_pay_reminders"]
+                .select {
+                    filter { eq("user_id", userId) }
+                }
+                .decodeList<AutoPayReminderDto>()
+
+            for (dto in remoteReminders) {
+                val existing = aDao.getReminderByServerId(dto.id)
+                if (dto.isDeleted) {
+                    if (existing != null) aDao.deleteReminder(existing)
+                } else {
+                    val updatedMillis = parseIsoTimestamp(dto.updatedAt ?: dto.createdAt)
+                    val nextDueMillis = dto.nextDueDate?.let { parseIsoTimestamp(it) } ?: System.currentTimeMillis()
+                    val lastPaidMillis = dto.lastPaidDate?.let { parseIsoTimestamp(it) }
+
+                    if (existing == null) {
+                        val newEntity = AutoPayReminderEntity(
+                            title = dto.title,
+                            amount = dto.amount,
+                            category = dto.category ?: "Bills & Utilities",
+                            paymentMethod = dto.paymentMethod ?: "UPI",
+                            frequency = dto.frequency ?: "MONTHLY",
+                            dueDayOfMonth = dto.dueDayOfMonth,
+                            nextDueDateMillis = nextDueMillis,
+                            isAutoDebit = dto.isAutoDebit,
+                            reminderDaysBefore = dto.reminderDaysBefore,
+                            financeScope = FinanceScope.PERSONAL,
+                            familyId = null,
+                            isPaused = dto.isPaused,
+                            lastPaidDateMillis = lastPaidMillis,
+                            notes = dto.notes ?: "",
+                            serverId = dto.id,
+                            syncStatus = "SYNCED",
+                            updatedAt = updatedMillis,
+                            isDeleted = false
+                        )
+                        aDao.insertReminder(newEntity)
+                    } else if (existing.syncStatus == "SYNCED" && updatedMillis > existing.updatedAt) {
+                        aDao.updateReminder(
+                            existing.copy(
+                                title = dto.title,
+                                amount = dto.amount,
+                                category = dto.category ?: existing.category,
+                                paymentMethod = dto.paymentMethod ?: existing.paymentMethod,
+                                frequency = dto.frequency ?: existing.frequency,
+                                dueDayOfMonth = dto.dueDayOfMonth,
+                                nextDueDateMillis = nextDueMillis,
+                                isAutoDebit = dto.isAutoDebit,
+                                reminderDaysBefore = dto.reminderDaysBefore,
+                                isPaused = dto.isPaused,
+                                lastPaidDateMillis = lastPaidMillis,
+                                notes = dto.notes ?: existing.notes,
+                                syncStatus = "SYNCED",
+                                updatedAt = updatedMillis
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to pull remote auto-pay reminders: ${e.message}")
+            success = false
+        }
+        return success
     }
 
     private fun parseIsoTimestamp(isoString: String?): Long {

@@ -1,6 +1,10 @@
 package com.zenith.app
 
+import android.app.Activity
 import android.content.Intent
+import com.zenith.app.data.upi.GatewayVerificationStatus
+import com.zenith.app.data.upi.PaymentFlowType
+import com.zenith.app.data.upi.UpiPaymentBus
 import com.zenith.app.data.upi.UpiPaymentInfo
 import com.zenith.app.data.upi.UpiPaymentStatus
 import com.zenith.app.data.upi.UpiService
@@ -889,5 +893,139 @@ class UpiServiceTest {
         val parsed = UpiService.parseQrPayload(payload)
         assertNotNull(parsed)
         assertEquals("1250.00", parsed?.amount)
+    }
+
+    @Test
+    fun testVpaEdgeCasesAndAmountLimits() {
+        assertFalse(UpiService.isValidVpa("9876543210"))
+        assertFalse(UpiService.isValidVpa("user.@okaxis"))
+        assertFalse(UpiService.isValidVpa("user@.okaxis"))
+        assertFalse(UpiService.isValidVpa("a..b@ybl"))
+
+        val validP2p = UpiService.validatePaymentInfo(
+            UpiPaymentInfo(payeeAddress = "friend@oksbi", payeeName = "Friend", amount = "99999")
+        )
+        assertTrue(validP2p.isValid)
+        assertTrue(validP2p.isP2pUnverifiedWarning)
+
+        val overP2pCap = UpiService.validatePaymentInfo(
+            UpiPaymentInfo(payeeAddress = "friend@oksbi", payeeName = "Friend", amount = "150000")
+        )
+        assertFalse(overP2pCap.isValid)
+
+        val validMerchant = UpiService.validatePaymentInfo(
+            UpiPaymentInfo(payeeAddress = "hospital@icici", payeeName = "Apollo", amount = "150000", merchantCode = "8062")
+        )
+        assertTrue(validMerchant.isValid)
+        assertFalse(validMerchant.isP2pUnverifiedWarning)
+    }
+
+    @Test
+    fun testMandatoryPayeeNameFallbackAndCommaAmountInBuildPaymentUri() {
+        val info = UpiPaymentInfo(
+            payeeAddress = "rahul.sharma@okaxis",
+            payeeName = "???",
+            amount = "1,250.5",
+            currency = "inr",
+            note = "Lunch   split!"
+        )
+        val uri = UpiService.buildPaymentUri(info)
+        assertEquals("rahul sharma", uri.getQueryParameter("pn"))
+        assertEquals("1250.50", uri.getQueryParameter("am"))
+        assertEquals("INR", uri.getQueryParameter("cu"))
+        assertEquals("Lunch split", uri.getQueryParameter("tn"))
+    }
+
+    @Test
+    fun testSecurityDeclineAndContradictoryResponseCodeHandling() {
+        // Explicit GPay / NPCI security decline response
+        val declinedIntent = Intent().apply {
+            putExtra("response", "txnId=YBL1234&responseCode=U16&Status=FAILURE&message=Declined for security reasons")
+        }
+        val declined = UpiService.mapResult(Activity.RESULT_OK, declinedIntent)
+        assertEquals(UpiPaymentStatus.FAILED, declined.status)
+        assertTrue(declined.isSecurityDecline)
+        assertEquals("U16", declined.responseCode)
+
+        // Malformed or spoofed Status=SUCCESS combined with non-00 error responseCode must fail
+        val contradictionIntent = Intent().apply {
+            putExtra("response", "txnId=YBL9999&responseCode=U16&Status=SUCCESS")
+        }
+        val rejected = UpiService.mapResult(Activity.RESULT_OK, contradictionIntent)
+        assertEquals(UpiPaymentStatus.FAILED, rejected.status)
+        assertTrue(rejected.isSecurityDecline)
+    }
+
+    @Test
+    fun testPendingStatusAndApprovalRefExtraction() {
+        val pendingIntent = Intent().apply {
+            putExtra("response", "txnId=ICI1111&Status=PENDING&ApprovalRefNo=432198765432")
+        }
+        val res = UpiService.mapResult(Activity.RESULT_OK, pendingIntent)
+        assertEquals(UpiPaymentStatus.PENDING, res.status)
+        assertEquals("432198765432", res.approvalRefNo)
+        assertEquals("432198765432", res.returnedTxnRef)
+    }
+
+    @Test
+    fun testGatewayOrderNeverTrustsClientStatusAlone() {
+        val clientSuccess = UpiService.mapResult(
+            Activity.RESULT_OK,
+            Intent().apply {
+                putExtra("response", "txnId=GW1&responseCode=00&Status=SUCCESS&txnRef=ORD_777")
+            }
+        )
+        assertEquals(UpiPaymentStatus.SUCCESSFUL, clientSuccess.status)
+
+        // Without server verification, GATEWAY_ORDER must stay PENDING
+        val unverified = UpiService.enforceGatewayVerification(
+            result = clientSuccess,
+            flowType = PaymentFlowType.GATEWAY_ORDER,
+            expectedOrderTxnRef = "ORD_777",
+            verifier = null
+        )
+        assertEquals(UpiPaymentStatus.PENDING, unverified.status)
+        assertTrue(unverified.requiresServerVerification)
+
+        // When server verification rejects
+        val rejected = UpiService.enforceGatewayVerification(
+            result = clientSuccess,
+            flowType = PaymentFlowType.GATEWAY_ORDER,
+            expectedOrderTxnRef = "ORD_777",
+            verifier = { _, _ -> GatewayVerificationStatus.REJECTED }
+        )
+        assertEquals(UpiPaymentStatus.FAILED, rejected.status)
+
+        // When server webhook confirms VERIFIED
+        val verified = UpiService.enforceGatewayVerification(
+            result = clientSuccess,
+            flowType = PaymentFlowType.GATEWAY_ORDER,
+            expectedOrderTxnRef = "ORD_777",
+            verifier = { _, _ -> GatewayVerificationStatus.VERIFIED }
+        )
+        assertEquals(UpiPaymentStatus.SUCCESSFUL, verified.status)
+        assertFalse(verified.requiresServerVerification)
+    }
+
+    @Test
+    fun testAtomicDuplicatePreventionAndMaskedDiagnostics() {
+        val uniqueUtr = "UTR${System.currentTimeMillis()}"
+        assertTrue(UpiPaymentBus.tryClaimRecording(425.0, uniqueUtr))
+        assertFalse(UpiPaymentBus.tryClaimRecording(425.0, uniqueUtr.lowercase()))
+
+        val uri = UpiService.buildPaymentUri(
+            UpiPaymentInfo(
+                payeeAddress = "9876543210@okhdfcbank",
+                payeeName = "Merchant Store",
+                amount = "250.00"
+            )
+        )
+        val logged = UpiService.sanitizeUriForLog(uri)
+        assertFalse(logged.contains("9876543210"))
+        assertTrue(logged.contains("98***10@okhdfcbank"))
+
+        val withLiteralSpace = UpiService.parseQrPayload("upi://pay?pa=shop@upi&pn=Tea Stall&am=20.00")
+        assertEquals("Tea Stall", withLiteralSpace?.payeeName)
+        assertEquals("20.00", withLiteralSpace?.amount)
     }
 }

@@ -589,7 +589,7 @@ CREATE INDEX IF NOT EXISTS idx_auto_pay_user ON public.auto_pay_reminders (user_
 CREATE INDEX IF NOT EXISTS idx_auto_pay_family ON public.auto_pay_reminders (family_id, next_due_date ASC);
 
 -- =============================================================================
--- 6. NON-RECURSIVE, ZERO-LOCK ROW LEVEL SECURITY (RLS) POLICIES
+-- 6. STRICT PERSONAL-ONLY ROW LEVEL SECURITY (RLS) POLICIES
 -- =============================================================================
 
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
@@ -604,82 +604,132 @@ ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.family_invitations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auto_pay_reminders ENABLE ROW LEVEL SECURITY;
 
--- 6.1 Profiles: Open for lookup, owner updates
-CREATE POLICY "profiles_select" ON public.profiles FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "profiles_insert" ON public.profiles FOR INSERT TO anon, authenticated WITH CHECK (true);
-CREATE POLICY "profiles_update" ON public.profiles FOR UPDATE TO anon, authenticated USING (auth.uid() = id OR auth.role() = 'anon');
+-- Revoke anonymous / unauthenticated table privileges explicitly
+REVOKE ALL ON TABLE
+    public.profiles,
+    public.families,
+    public.family_members,
+    public.categories,
+    public.transactions,
+    public.budgets,
+    public.savings_goals,
+    public.savings_contributions,
+    public.audit_logs,
+    public.family_invitations,
+    public.auto_pay_reminders
+FROM anon;
 
--- 6.2 Families: Open read by invite code or member, full write support
-CREATE POLICY "families_select" ON public.families FOR SELECT TO anon, authenticated USING (NOT is_deleted);
-CREATE POLICY "families_insert" ON public.families FOR INSERT TO anon, authenticated WITH CHECK (true);
-CREATE POLICY "families_update" ON public.families FOR UPDATE TO anon, authenticated USING (true);
-CREATE POLICY "families_delete" ON public.families FOR DELETE TO anon, authenticated USING (true);
+-- 6.1 Profiles: strict owner isolation (authenticated only)
+CREATE POLICY "profiles_select" ON public.profiles
+    FOR SELECT TO authenticated
+    USING (auth.uid() = id);
+CREATE POLICY "profiles_insert" ON public.profiles
+    FOR INSERT TO authenticated
+    WITH CHECK (auth.uid() = id);
+CREATE POLICY "profiles_update" ON public.profiles
+    FOR UPDATE TO authenticated
+    USING (auth.uid() = id)
+    WITH CHECK (auth.uid() = id);
+CREATE POLICY "profiles_delete" ON public.profiles
+    FOR DELETE TO authenticated
+    USING (auth.uid() = id);
 
--- 6.3 Family Members: COMPLETELY NON-RECURSIVE (Zero subquery on family_members)
--- Eliminates error 42P17 forever
-CREATE POLICY "family_members_select" ON public.family_members FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "family_members_insert" ON public.family_members FOR INSERT TO anon, authenticated WITH CHECK (true);
-CREATE POLICY "family_members_update" ON public.family_members FOR UPDATE TO anon, authenticated USING (true);
-CREATE POLICY "family_members_delete" ON public.family_members FOR DELETE TO anon, authenticated USING (true);
+-- 6.2 Retired Family Vault Tables: zero external access
+CREATE POLICY "families_locked" ON public.families
+    FOR ALL TO authenticated
+    USING (false) WITH CHECK (false);
+CREATE POLICY "family_members_locked" ON public.family_members
+    FOR ALL TO authenticated
+    USING (false) WITH CHECK (false);
+CREATE POLICY "family_invitations_locked" ON public.family_invitations
+    FOR ALL TO authenticated
+    USING (false) WITH CHECK (false);
+CREATE POLICY "audit_logs_locked" ON public.audit_logs
+    FOR ALL TO authenticated
+    USING (false) WITH CHECK (false);
+CREATE POLICY "savings_contributions_locked" ON public.savings_contributions
+    FOR ALL TO authenticated
+    USING (false) WITH CHECK (false);
 
--- 6.4 Categories: Accessible to authenticated and guest app clients
-CREATE POLICY "categories_access" ON public.categories FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+-- 6.3 Categories: global defaults readable by authenticated users; custom rows owner-isolated
+CREATE POLICY "categories_select" ON public.categories
+    FOR SELECT TO authenticated
+    USING (is_default = TRUE OR user_id = auth.uid());
+CREATE POLICY "categories_insert" ON public.categories
+    FOR INSERT TO authenticated
+    WITH CHECK (user_id = auth.uid() AND is_default = FALSE);
+CREATE POLICY "categories_update" ON public.categories
+    FOR UPDATE TO authenticated
+    USING (user_id = auth.uid())
+    WITH CHECK (user_id = auth.uid());
+CREATE POLICY "categories_delete" ON public.categories
+    FOR DELETE TO authenticated
+    USING (user_id = auth.uid());
 
--- 6.5 Transactions: Dual-Scope (Personal isolated to owner, Family shared to vault)
-CREATE POLICY "transactions_select" ON public.transactions FOR SELECT TO anon, authenticated USING (
-    NOT is_deleted AND (
-        finance_scope = 'FAMILY'
-        OR auth.role() = 'anon'
-        OR auth.uid() IS NULL
-        OR user_id = auth.uid()
-    )
-);
-CREATE POLICY "transactions_insert" ON public.transactions FOR INSERT TO anon, authenticated WITH CHECK (true);
-CREATE POLICY "transactions_update" ON public.transactions FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "transactions_delete" ON public.transactions FOR DELETE TO anon, authenticated USING (true);
+-- 6.4 Personal Transactions: separate SELECT from mutations so soft-delete updates succeed
+CREATE POLICY "transactions_select" ON public.transactions
+    FOR SELECT TO authenticated
+    USING (user_id = auth.uid() AND NOT is_deleted);
+CREATE POLICY "transactions_insert" ON public.transactions
+    FOR INSERT TO authenticated
+    WITH CHECK (user_id = auth.uid());
+CREATE POLICY "transactions_update" ON public.transactions
+    FOR UPDATE TO authenticated
+    USING (user_id = auth.uid())
+    WITH CHECK (user_id = auth.uid());
+CREATE POLICY "transactions_delete" ON public.transactions
+    FOR DELETE TO authenticated
+    USING (user_id = auth.uid());
 
--- 6.6 Budgets: Multi-Scope
-CREATE POLICY "budgets_access" ON public.budgets FOR ALL TO anon, authenticated USING (
-    NOT is_deleted AND (
-        finance_scope = 'FAMILY'
-        OR auth.role() = 'anon'
-        OR auth.uid() IS NULL
-        OR user_id = auth.uid()
-    )
-) WITH CHECK (true);
+-- 6.5 Personal Budgets: owner-isolated with soft-delete update support
+CREATE POLICY "budgets_select" ON public.budgets
+    FOR SELECT TO authenticated
+    USING (user_id = auth.uid() AND NOT is_deleted);
+CREATE POLICY "budgets_insert" ON public.budgets
+    FOR INSERT TO authenticated
+    WITH CHECK (user_id = auth.uid());
+CREATE POLICY "budgets_update" ON public.budgets
+    FOR UPDATE TO authenticated
+    USING (user_id = auth.uid())
+    WITH CHECK (user_id = auth.uid());
+CREATE POLICY "budgets_delete" ON public.budgets
+    FOR DELETE TO authenticated
+    USING (user_id = auth.uid());
 
--- 6.7 Savings Goals & Contributions
-CREATE POLICY "savings_goals_access" ON public.savings_goals FOR ALL TO anon, authenticated USING (
-    NOT is_deleted AND (
-        finance_scope = 'FAMILY'
-        OR auth.role() = 'anon'
-        OR auth.uid() IS NULL
-        OR user_id = auth.uid()
-    )
-) WITH CHECK (true);
+-- 6.6 Personal Savings Goals: owner-isolated with soft-delete update support
+CREATE POLICY "savings_goals_select" ON public.savings_goals
+    FOR SELECT TO authenticated
+    USING (user_id = auth.uid() AND NOT is_deleted);
+CREATE POLICY "savings_goals_insert" ON public.savings_goals
+    FOR INSERT TO authenticated
+    WITH CHECK (user_id = auth.uid());
+CREATE POLICY "savings_goals_update" ON public.savings_goals
+    FOR UPDATE TO authenticated
+    USING (user_id = auth.uid())
+    WITH CHECK (user_id = auth.uid());
+CREATE POLICY "savings_goals_delete" ON public.savings_goals
+    FOR DELETE TO authenticated
+    USING (user_id = auth.uid());
 
-CREATE POLICY "savings_contributions_access" ON public.savings_contributions FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
--- 6.8 Audit Logs & Invitations
-CREATE POLICY "audit_logs_access" ON public.audit_logs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "family_invitations_access" ON public.family_invitations FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
--- 6.9 Auto-Pay Reminders: Multi-Scope
-CREATE POLICY "auto_pay_reminders_access" ON public.auto_pay_reminders FOR ALL TO anon, authenticated USING (
-    NOT is_deleted AND (
-        finance_scope = 'FAMILY'
-        OR auth.role() = 'anon'
-        OR auth.uid() IS NULL
-        OR user_id = auth.uid()
-    )
-) WITH CHECK (true);
+-- 6.7 Personal Auto-Pay Reminders: owner-isolated with soft-delete update support
+CREATE POLICY "auto_pay_reminders_select" ON public.auto_pay_reminders
+    FOR SELECT TO authenticated
+    USING (user_id = auth.uid() AND NOT is_deleted);
+CREATE POLICY "auto_pay_reminders_insert" ON public.auto_pay_reminders
+    FOR INSERT TO authenticated
+    WITH CHECK (user_id = auth.uid());
+CREATE POLICY "auto_pay_reminders_update" ON public.auto_pay_reminders
+    FOR UPDATE TO authenticated
+    USING (user_id = auth.uid())
+    WITH CHECK (user_id = auth.uid());
+CREATE POLICY "auto_pay_reminders_delete" ON public.auto_pay_reminders
+    FOR DELETE TO authenticated
+    USING (user_id = auth.uid());
 
 -- =============================================================================
 -- 7. REALTIME SUBSCRIPTION CONFIGURATION (SAFE & IDEMPOTENT)
 -- =============================================================================
 ALTER TABLE public.transactions REPLICA IDENTITY FULL;
-ALTER TABLE public.family_members REPLICA IDENTITY FULL;
-ALTER TABLE public.families REPLICA IDENTITY FULL;
 ALTER TABLE public.budgets REPLICA IDENTITY FULL;
 ALTER TABLE public.savings_goals REPLICA IDENTITY FULL;
 ALTER TABLE public.categories REPLICA IDENTITY FULL;
@@ -690,16 +740,15 @@ DO $$
 DECLARE
     t text;
     target_tables text[] := ARRAY[
-        'profiles', 'families', 'family_members', 'categories',
-        'transactions', 'budgets', 'savings_goals', 'auto_pay_reminders'
+        'profiles', 'categories', 'transactions', 'budgets', 'savings_goals', 'auto_pay_reminders'
     ];
 BEGIN
     FOREACH t IN ARRAY target_tables
     LOOP
         IF NOT EXISTS (
-            SELECT 1 FROM pg_publication_tables 
-            WHERE pubname = 'supabase_realtime' 
-              AND schemaname = 'public' 
+            SELECT 1 FROM pg_publication_tables
+            WHERE pubname = 'supabase_realtime'
+              AND schemaname = 'public'
               AND tablename = t
         ) THEN
             BEGIN
@@ -712,175 +761,8 @@ BEGIN
 END $$;
 
 -- =============================================================================
--- 8. ATOMIC STORED PROCEDURES (RPCs)
+-- 8. CLEAN UP RETIRED FAMILY RPCs
 -- =============================================================================
-
--- 8.1 CREATE FAMILY
-CREATE OR REPLACE FUNCTION public.create_family(family_name TEXT)
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-DECLARE
-    new_family_id UUID;
-    user_display_name TEXT;
-    target_uid UUID;
-    result JSONB;
-BEGIN
-    target_uid := auth.uid();
-    IF char_length(trim(family_name)) < 2 THEN
-        RAISE EXCEPTION 'INVALID_NAME: Family name must be at least 2 characters';
-    END IF;
-
-    IF target_uid IS NOT NULL THEN
-        SELECT full_name INTO user_display_name FROM public.profiles WHERE id = target_uid;
-    END IF;
-    IF user_display_name IS NULL OR trim(user_display_name) = '' THEN
-        user_display_name := 'Owner';
-    END IF;
-
-    INSERT INTO public.families (name, created_by)
-    VALUES (trim(family_name), target_uid)
-    RETURNING id INTO new_family_id;
-
-    INSERT INTO public.family_members (family_id, user_id, role, name, display_name, is_active)
-    VALUES (new_family_id, target_uid, 'ADMIN', user_display_name, user_display_name, TRUE);
-
-    INSERT INTO public.audit_logs (family_id, actor_user_id, action, entity_name, entity_id, metadata)
-    VALUES (new_family_id, target_uid, 'FAMILY_CREATED', 'families', new_family_id, jsonb_build_object('name', family_name));
-
-    SELECT jsonb_build_object(
-        'family_id', f.id,
-        'family_name', f.name,
-        'invite_code', f.invite_code,
-        'role', 'ADMIN'
-    ) INTO result
-    FROM public.families f WHERE f.id = new_family_id;
-
-    RETURN result;
-END;
-$$;
-
--- 8.2 JOIN FAMILY BY CODE
-CREATE OR REPLACE FUNCTION public.join_family_by_code(code VARCHAR)
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-DECLARE
-    target_family RECORD;
-    user_display_name TEXT;
-    existing_member RECORD;
-    target_uid UUID;
-    clean_code TEXT;
-BEGIN
-    clean_code := upper(trim(code));
-    target_uid := auth.uid();
-
-    SELECT * INTO target_family
-    FROM public.families
-    WHERE (upper(invite_code) = clean_code OR upper(invite_code) = ('FAM-' || clean_code))
-      AND NOT is_deleted
-    LIMIT 1;
-
-    IF target_family IS NULL THEN
-        RAISE EXCEPTION 'FAMILY_NOT_FOUND: Invalid invite code';
-    END IF;
-
-    IF target_uid IS NOT NULL THEN
-        SELECT * INTO existing_member
-        FROM public.family_members
-        WHERE family_id = target_family.id AND user_id = target_uid;
-
-        IF existing_member IS NOT NULL THEN
-            UPDATE public.family_members
-            SET is_active = TRUE, updated_at = NOW()
-            WHERE id = existing_member.id;
-        ELSE
-            SELECT full_name INTO user_display_name FROM public.profiles WHERE id = target_uid;
-            IF user_display_name IS NULL OR trim(user_display_name) = '' THEN
-                user_display_name := 'Member';
-            END IF;
-
-            INSERT INTO public.family_members (family_id, user_id, role, name, display_name, is_active)
-            VALUES (target_family.id, target_uid, 'MEMBER', user_display_name, user_display_name, TRUE);
-        END IF;
-
-        INSERT INTO public.audit_logs (family_id, actor_user_id, action, entity_name, entity_id)
-        VALUES (target_family.id, target_uid, 'MEMBER_JOINED', 'family_members', target_uid);
-    END IF;
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'family_id', target_family.id,
-        'family_name', target_family.name,
-        'invite_code', target_family.invite_code
-    );
-END;
-$$;
-
--- 8.3 GET FAMILY DASHBOARD
-CREATE OR REPLACE FUNCTION public.get_family_dashboard(p_family_id UUID)
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-STABLE
-AS $$
-DECLARE
-    dash JSONB;
-    v_total_income NUMERIC(15, 2);
-    v_total_expense NUMERIC(15, 2);
-    v_recent_txs JSONB;
-    v_category_spending JSONB;
-    v_members JSONB;
-BEGIN
-    SELECT
-        COALESCE(SUM(CASE WHEN COALESCE(transaction_type, type) = 'INCOME' THEN amount ELSE 0 END), 0),
-        COALESCE(SUM(CASE WHEN COALESCE(transaction_type, type) = 'EXPENSE' THEN amount ELSE 0 END), 0)
-    INTO v_total_income, v_total_expense
-    FROM public.transactions
-    WHERE family_id = p_family_id AND finance_scope = 'FAMILY' AND NOT is_deleted;
-
-    SELECT jsonb_agg(tx_row) INTO v_recent_txs FROM (
-        SELECT id, title, amount,
-               COALESCE(transaction_type, type, 'EXPENSE') as type,
-               COALESCE(category, category_id::text, 'Other') as category,
-               payment_method, paid_by_name, transaction_date
-        FROM public.transactions
-        WHERE family_id = p_family_id AND finance_scope = 'FAMILY' AND NOT is_deleted
-        ORDER BY transaction_date DESC
-        LIMIT 8
-    ) tx_row;
-
-    SELECT jsonb_agg(cat_row) INTO v_category_spending FROM (
-        SELECT COALESCE(category, category_id::text, 'Other') as category, SUM(amount) as total
-        FROM public.transactions
-        WHERE family_id = p_family_id AND finance_scope = 'FAMILY' AND COALESCE(transaction_type, type, 'EXPENSE') = 'EXPENSE' AND NOT is_deleted
-        GROUP BY COALESCE(category, category_id::text, 'Other')
-        ORDER BY total DESC
-        LIMIT 6
-    ) cat_row;
-
-    SELECT jsonb_agg(m_row) INTO v_members FROM (
-        SELECT fm.id, COALESCE(fm.display_name, fm.name, 'Member') as display_name, fm.role,
-               COALESCE(SUM(t.amount) FILTER (WHERE COALESCE(t.transaction_type, t.type) = 'EXPENSE'), 0) as total_spent,
-               COUNT(t.id) as transaction_count
-        FROM public.family_members fm
-        LEFT JOIN public.transactions t ON t.family_id = fm.family_id AND (t.paid_by_member_id = fm.id OR (fm.user_id IS NOT NULL AND t.user_id = fm.user_id)) AND NOT t.is_deleted
-        WHERE fm.family_id = p_family_id AND fm.is_active = TRUE
-        GROUP BY fm.id, fm.display_name, fm.name, fm.role
-    ) m_row;
-
-    dash := jsonb_build_object(
-        'family_id', p_family_id,
-        'total_income', v_total_income,
-        'total_expense', v_total_expense,
-        'net_balance', (v_total_income - v_total_expense),
-        'recent_transactions', COALESCE(v_recent_txs, '[]'::jsonb),
-        'top_categories', COALESCE(v_category_spending, '[]'::jsonb),
-        'members', COALESCE(v_members, '[]'::jsonb)
-    );
-
-    RETURN dash;
-END;
-$$;
+DROP FUNCTION IF EXISTS public.create_family(TEXT);
+DROP FUNCTION IF EXISTS public.join_family_by_code(VARCHAR);
+DROP FUNCTION IF EXISTS public.get_family_dashboard(UUID);

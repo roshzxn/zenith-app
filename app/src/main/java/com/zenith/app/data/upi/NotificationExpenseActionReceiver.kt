@@ -14,6 +14,7 @@ import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.data.network.SupabaseAuthService
 import com.zenith.app.data.network.SyncEngine
+import com.zenith.app.data.util.CategoryIconHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -50,6 +51,7 @@ class NotificationExpenseActionReceiver : BroadcastReceiver() {
         notificationManager.cancel(notifId)
 
         if (action == ACTION_DISMISS_EXPENSE) {
+            UpiPaymentBus.clearPending()
             Log.d(tag, "Expense notification dismissed by user.")
             return
         }
@@ -70,8 +72,26 @@ class NotificationExpenseActionReceiver : BroadcastReceiver() {
                 try {
                     val db = CashFlowDatabase.getDatabase(context)
                     val transactionDao = db.transactionDao()
-                    val generatedServerId = UUID.randomUUID().toString()
 
+                    // Prevent duplicate insertion if already logged by UTR or in-app UPI flow within 5 minutes
+                    val existingByUtr = utr?.takeIf { it.isNotBlank() }?.let { transactionDao.getTransactionByUtr(it) }
+                    val existingDup = transactionDao.findPotentialDuplicates(
+                        amount = amount,
+                        type = TransactionType.EXPENSE,
+                        scope = FinanceScope.PERSONAL,
+                        startMillis = dateMillis - 300_000L,
+                        endMillis = dateMillis + 300_000L
+                    ).firstOrNull()
+
+                    if (existingByUtr != null || existingDup != null || !UpiPaymentBus.tryClaimRecording(amount, utr)) {
+                        UpiPaymentBus.markRecorded(amount, utr)
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(context, "Already recorded ₹$amount at $title", Toast.LENGTH_SHORT).show()
+                        }
+                        return@launch
+                    }
+
+                    val generatedServerId = UUID.randomUUID().toString()
                     val prefs = context.getSharedPreferences("zenith_prefs", Context.MODE_PRIVATE)
                     val currentUserId = prefs.getString("user_supabase_id", null) ?: "local_user_1"
 
@@ -80,7 +100,7 @@ class NotificationExpenseActionReceiver : BroadcastReceiver() {
                         amount = amount,
                         type = TransactionType.EXPENSE,
                         category = category,
-                        categoryIconName = "Receipt",
+                        categoryIconName = CategoryIconHelper.iconNameForCategory(category),
                         note = "Logged via notification tracker",
                         paymentMethod = paymentMethod,
                         dateMillis = dateMillis,
@@ -95,15 +115,17 @@ class NotificationExpenseActionReceiver : BroadcastReceiver() {
                     )
 
                     transactionDao.insertTransaction(entity)
+                    UpiPaymentBus.markRecorded(amount, utr)
                     Log.i(tag, "Successfully recorded ₹$amount at $title via notification action (serverId=$generatedServerId)")
 
-                    // Background sync trigger
                     try {
                         val authService = SupabaseAuthService()
                         val syncEngine = SyncEngine(
                             transactionDao = transactionDao,
-                            familyDao = db.familyDao(),
-                            authService = authService
+                            authService = authService,
+                            budgetDao = db.budgetDao(),
+                            savingsGoalDao = db.savingsGoalDao(),
+                            autoPayReminderDao = db.autoPayReminderDao()
                         )
                         syncEngine.syncAll(currentUserId)
                     } catch (e: Exception) {
@@ -111,7 +133,7 @@ class NotificationExpenseActionReceiver : BroadcastReceiver() {
                     }
 
                     Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(context, "✅ Recorded ₹$amount at $title", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Recorded ₹$amount at $title", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     Log.e(tag, "Error saving expense from notification: ${e.message}", e)

@@ -76,9 +76,9 @@ fun VoiceAiModal(
     onDismiss: () -> Unit,
     onProcessPrompt: (String) -> Unit,
     onProcessAudio: (String) -> Unit = {},
+    onUserStartedEditing: () -> Unit = {},
     onConfirmSave: (title: String, amount: Double, category: String, paymentMethod: String) -> Unit = { _, _, _, _ -> },
     onConfirmSaveWithType: ((title: String, amount: Double, type: TransactionType, category: String, paymentMethod: String) -> Unit)? = null,
-    onConfirmSaveWithScope: ((title: String, amount: Double, type: TransactionType, category: String, paymentMethod: String, scope: com.zenith.app.data.models.FinanceScope) -> Unit)? = null,
     onConfirmMessageTransaction: ((messageId: String, title: String, amount: Double, type: TransactionType, category: String, paymentMethod: String) -> Unit)? = null,
     onClearHistory: (() -> Unit)? = null,
     onOpenManualAdd: (() -> Unit)? = null
@@ -400,13 +400,13 @@ fun VoiceAiModal(
             "Spent 350 for lunch via UPI",
             "Innaiku movie ki 250 selavu",
             "Paid 1200 electricity bill cash",
-            "Veetu vaadagai 15000 family vault",
+            "House rent 15000 bank transfer",
             "500 petrol PhonePe",
             "Appavukku marundhu vanginen 450",
             "Received 50000 salary in bank",
             "Kadaila groceries 1200 selavu",
             "Got 200 cashback on Google Pay",
-            "Dinner with roommates 800 split"
+            "Dinner out 800 via UPI"
         )
     }
 
@@ -446,8 +446,8 @@ fun VoiceAiModal(
     ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .wrapContentHeight()
@@ -472,7 +472,7 @@ fun VoiceAiModal(
                                 .size(36.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    Brush.linearGradient(listOf(Color(0xFF6366F1), Color(0xFF06B6D4)))
+                                    Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, ZenithTheme.accentCyan))
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
@@ -489,12 +489,12 @@ fun VoiceAiModal(
                                 text = "Voice Transaction Entry",
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
+                                color = ZenithTheme.textPrimary
                             )
                             Text(
                                 text = "English • Expense & Income Logging",
                                 fontSize = 11.sp,
-                                color = EmeraldDarkPrimary
+                                color = ZenithTheme.accentIndigo
                             )
                         }
                     }
@@ -511,7 +511,7 @@ fun VoiceAiModal(
                         Icon(
                             Icons.Default.Close,
                             contentDescription = "Close",
-                            tint = SlateDarkTextSecondary
+                            tint = ZenithTheme.textSecondary
                         )
                     }
                 }
@@ -521,47 +521,58 @@ fun VoiceAiModal(
                 // Card View: Parsed Transaction (if available) OR Listening View
                 if (parsedExpense != null) {
                     // --- PARSED TRANSACTION CONFIRMATION CARD ---
-                    var editTitle by remember(parsedExpense) { mutableStateOf(parsedExpense.title) }
-                    var editAmount by remember(parsedExpense) {
+                    val requestKey = parsedExpense.requestId
+                    var editTitle by remember(requestKey) { mutableStateOf(parsedExpense.title) }
+                    var editAmount by remember(requestKey) {
                         mutableStateOf(
-                            if (parsedExpense.amount % 1.0 == 0.0) "${parsedExpense.amount.toInt()}" else "${parsedExpense.amount}"
+                            when {
+                                parsedExpense.amount <= 0.0 -> ""
+                                parsedExpense.amount % 1.0 == 0.0 -> "${parsedExpense.amount.toInt()}"
+                                else -> "${parsedExpense.amount}"
+                            }
                         )
                     }
-                    var editType by remember(parsedExpense) { mutableStateOf(parsedExpense.type) }
-                    var editScope by remember(parsedExpense) { mutableStateOf(parsedExpense.scope) }
-                    var editCategory by remember(parsedExpense) { mutableStateOf(parsedExpense.category) }
-                    var editPaymentMethod by remember(parsedExpense) { mutableStateOf(parsedExpense.paymentMethod) }
+                    var editType by remember(requestKey) { mutableStateOf(parsedExpense.type) }
+                    var editCategory by remember(requestKey) { mutableStateOf(parsedExpense.category) }
+                    var editPaymentMethod by remember(requestKey) { mutableStateOf(parsedExpense.paymentMethod) }
 
                     // Auto-Save Countdown State (3-second timer with tap-to-pause and instant Save Now)
-                    var isAutoSavePaused by remember(parsedExpense) { mutableStateOf(false) }
-                    var autoSaveProgress by remember(parsedExpense) { mutableFloatStateOf(1f) }
-                    var remainingSeconds by remember(parsedExpense) { mutableIntStateOf(3) }
+                    var isAutoSavePaused by remember(requestKey) { mutableStateOf(parsedExpense.amount <= 0.0) }
+                    var autoSaveProgress by remember(requestKey) { mutableFloatStateOf(1f) }
+                    var remainingSeconds by remember(requestKey) { mutableIntStateOf(3) }
+
+                    val pauseAndNotifyEditing: () -> Unit = {
+                        isAutoSavePaused = true
+                        onUserStartedEditing()
+                    }
 
                     val executeSave: () -> Unit = {
                         val amt = editAmount.toDoubleOrNull() ?: parsedExpense.amount
-                        val finalTitle = editTitle.ifBlank { parsedExpense.title }
-                        val finalCat = editCategory.ifBlank { parsedExpense.category }
-                        val finalMethod = editPaymentMethod.ifBlank { parsedExpense.paymentMethod }
-
-                        try {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-
-                        if (onConfirmSaveWithScope != null) {
-                            onConfirmSaveWithScope(finalTitle, amt, editType, finalCat, finalMethod, editScope)
-                        } else if (onConfirmSaveWithType != null) {
-                            onConfirmSaveWithType(finalTitle, amt, editType, finalCat, finalMethod)
+                        if (amt <= 0.0) {
+                            Toast.makeText(context, "Please enter a valid amount greater than 0", Toast.LENGTH_SHORT).show()
                         } else {
-                            onConfirmSave(finalTitle, amt, finalCat, finalMethod)
+                            val finalTitle = editTitle.ifBlank { parsedExpense.title }
+                            val finalCat = editCategory.ifBlank { parsedExpense.category }
+                            val finalMethod = editPaymentMethod.ifBlank { parsedExpense.paymentMethod }
+
+                            try {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+
+                            if (onConfirmSaveWithType != null) {
+                                onConfirmSaveWithType(finalTitle, amt, editType, finalCat, finalMethod)
+                            } else {
+                                onConfirmSave(finalTitle, amt, finalCat, finalMethod)
+                            }
+                            Toast.makeText(context, "Saved $currencySymbol$amt for $finalTitle", Toast.LENGTH_SHORT).show()
                         }
-                        Toast.makeText(context, "Saved $currencySymbol$amt for $finalTitle", Toast.LENGTH_SHORT).show()
                     }
 
-                    // 3-second Auto-Save Countdown Effect
-                    LaunchedEffect(parsedExpense, isAutoSavePaused) {
-                        if (parsedExpense.amount > 0 && !isAutoSavePaused) {
+                    // 3-second Auto-Save Countdown Effect (keyed on requestId + pause state)
+                    LaunchedEffect(requestKey, isAutoSavePaused) {
+                        if (parsedExpense.amount > 0.0 && !isAutoSavePaused) {
                             val totalDurationMs = 3000L
                             val startEpoch = System.currentTimeMillis()
                             while (!isAutoSavePaused) {
@@ -580,17 +591,17 @@ fun VoiceAiModal(
 
                     Surface(
                         shape = RoundedCornerShape(18.dp),
-                        color = SlateDarkSurfaceVariant,
-                        border = BorderStroke(1.dp, if (editType == TransactionType.INCOME) IncomeGreen.copy(alpha = 0.5f) else PastelRose.copy(alpha = 0.5f)),
+                        color = ZenithTheme.cardVariantSurface,
+                        border = BorderStroke(1.dp, if (editType == TransactionType.INCOME) ZenithTheme.accentGreen.copy(alpha = 0.5f) else ZenithTheme.accentRed.copy(alpha = 0.5f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             // ⚡ Auto-Save Countdown Banner (iOS-Luxury Pill)
-                            if (!isAutoSavePaused && remainingSeconds > 0 && (parsedExpense.amount > 0 || (editAmount.toDoubleOrNull() ?: 0.0) > 0.0)) {
+                            if (!isAutoSavePaused && remainingSeconds > 0 && (parsedExpense.amount > 0.0 || (editAmount.toDoubleOrNull() ?: 0.0) > 0.0)) {
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = EmeraldDarkPrimary.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.5f)),
+                                    color = ZenithTheme.accentIndigo.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, ZenithTheme.accentIndigo.copy(alpha = 0.5f)),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(bottom = 12.dp)
@@ -605,7 +616,7 @@ fun VoiceAiModal(
                                                 Icon(
                                                     Icons.Default.Bolt,
                                                     contentDescription = null,
-                                                    tint = EmeraldDarkPrimary,
+                                                    tint = ZenithTheme.accentIndigo,
                                                     modifier = Modifier.size(17.dp)
                                                 )
                                                 Spacer(modifier = Modifier.width(6.dp))
@@ -613,21 +624,21 @@ fun VoiceAiModal(
                                                     text = "Auto-saving in ${remainingSeconds}s...",
                                                     fontSize = 12.5.sp,
                                                     fontWeight = FontWeight.Bold,
-                                                    color = Color.White
+                                                    color = ZenithTheme.textPrimary
                                                 )
                                             }
 
                                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                 Surface(
                                                     shape = RoundedCornerShape(8.dp),
-                                                    color = SlateDarkSurface.copy(alpha = 0.8f),
-                                                    border = BorderStroke(1.dp, GlassBorderColor),
-                                                    modifier = Modifier.clickable { isAutoSavePaused = true }
+                                                    color = ZenithTheme.cardSurface.copy(alpha = 0.9f),
+                                                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                                                    modifier = Modifier.clickable { pauseAndNotifyEditing() }
                                                 ) {
                                                     Text(
                                                         text = "Edit Details",
                                                         fontSize = 10.5.sp,
-                                                        color = SlateDarkTextSecondary,
+                                                        color = ZenithTheme.textSecondary,
                                                         fontWeight = FontWeight.SemiBold,
                                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                                     )
@@ -635,7 +646,7 @@ fun VoiceAiModal(
 
                                                 Surface(
                                                     shape = RoundedCornerShape(8.dp),
-                                                    color = EmeraldDarkPrimary,
+                                                    color = MaterialTheme.colorScheme.primary,
                                                     modifier = Modifier.clickable {
                                                         isAutoSavePaused = true
                                                         executeSave()
@@ -659,8 +670,8 @@ fun VoiceAiModal(
                                                 .fillMaxWidth()
                                                 .height(3.dp)
                                                 .clip(RoundedCornerShape(2.dp)),
-                                            color = EmeraldDarkPrimary,
-                                            trackColor = EmeraldDarkPrimary.copy(alpha = 0.2f)
+                                            color = MaterialTheme.colorScheme.primary,
+                                            trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                                         )
                                     }
                                 }
@@ -675,16 +686,17 @@ fun VoiceAiModal(
                                     text = "CONFIRM TRANSACTION",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextSecondary
+                                    color = ZenithTheme.textSecondary
                                 )
 
                                 // Income / Expense Chips
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
-                                        color = if (editType == TransactionType.EXPENSE) PastelRose else Color.Transparent,
-                                        border = BorderStroke(1.dp, if (editType == TransactionType.EXPENSE) PastelRose else SlateDarkTextSecondary.copy(alpha = 0.4f)),
+                                        color = if (editType == TransactionType.EXPENSE) LightExpenseRed else Color.Transparent,
+                                        border = BorderStroke(1.dp, if (editType == TransactionType.EXPENSE) LightExpenseRed else ZenithTheme.textSecondary.copy(alpha = 0.4f)),
                                         modifier = Modifier.clickable {
+                                            pauseAndNotifyEditing()
                                             editType = TransactionType.EXPENSE
                                             if (!expenseCategories.contains(editCategory)) {
                                                 editCategory = "Food & Dining"
@@ -695,16 +707,17 @@ fun VoiceAiModal(
                                             text = "Expense",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (editType == TransactionType.EXPENSE) Color.White else SlateDarkTextSecondary,
+                                            color = if (editType == TransactionType.EXPENSE) Color.White else ZenithTheme.textSecondary,
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                         )
                                     }
 
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
-                                        color = if (editType == TransactionType.INCOME) IncomeGreen else Color.Transparent,
-                                        border = BorderStroke(1.dp, if (editType == TransactionType.INCOME) IncomeGreen else SlateDarkTextSecondary.copy(alpha = 0.4f)),
+                                        color = if (editType == TransactionType.INCOME) LightIncomeGreen else Color.Transparent,
+                                        border = BorderStroke(1.dp, if (editType == TransactionType.INCOME) LightIncomeGreen else ZenithTheme.textSecondary.copy(alpha = 0.4f)),
                                         modifier = Modifier.clickable {
+                                            pauseAndNotifyEditing()
                                             editType = TransactionType.INCOME
                                             if (!incomeCategories.contains(editCategory)) {
                                                 editCategory = "Salary & Income"
@@ -715,59 +728,7 @@ fun VoiceAiModal(
                                             text = "Income",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (editType == TransactionType.INCOME) Color.White else SlateDarkTextSecondary,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Scope Selector Toggle (Personal vs Family Vault)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "FINANCE SCOPE",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextSecondary
-                                )
-
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Surface(
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = if (editScope == com.zenith.app.data.models.FinanceScope.PERSONAL) EmeraldDarkPrimary else Color.Transparent,
-                                        border = BorderStroke(1.dp, if (editScope == com.zenith.app.data.models.FinanceScope.PERSONAL) EmeraldDarkPrimary else SlateDarkTextSecondary.copy(alpha = 0.4f)),
-                                        modifier = Modifier.clickable {
-                                            editScope = com.zenith.app.data.models.FinanceScope.PERSONAL
-                                        }
-                                    ) {
-                                        Text(
-                                            text = "Personal",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (editScope == com.zenith.app.data.models.FinanceScope.PERSONAL) Color.White else SlateDarkTextSecondary,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        )
-                                    }
-
-                                    Surface(
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = if (editScope == com.zenith.app.data.models.FinanceScope.FAMILY) GoldAccent else Color.Transparent,
-                                        border = BorderStroke(1.dp, if (editScope == com.zenith.app.data.models.FinanceScope.FAMILY) GoldAccent else SlateDarkTextSecondary.copy(alpha = 0.4f)),
-                                        modifier = Modifier.clickable {
-                                            editScope = com.zenith.app.data.models.FinanceScope.FAMILY
-                                        }
-                                    ) {
-                                        Text(
-                                            text = "Family Vault",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (editScope == com.zenith.app.data.models.FinanceScope.FAMILY) Color.Black else SlateDarkTextSecondary,
+                                            color = if (editType == TransactionType.INCOME) Color.White else ZenithTheme.textSecondary,
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                         )
                                     }
@@ -779,15 +740,19 @@ fun VoiceAiModal(
                             // Amount Input Field
                             OutlinedTextField(
                                 value = editAmount,
-                                onValueChange = { editAmount = it },
+                                onValueChange = {
+                                    pauseAndNotifyEditing()
+                                    editAmount = it
+                                },
                                 label = { Text("Amount ($currencySymbol)", fontSize = 11.sp) },
+                                placeholder = { Text("Enter amount", fontSize = 13.sp, color = ZenithTheme.textMuted) },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = if (editType == TransactionType.INCOME) IncomeGreen else PastelRose,
-                                    unfocusedBorderColor = GlassBorderColor,
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White
+                                    focusedBorderColor = if (editType == TransactionType.INCOME) ZenithTheme.accentGreen else ZenithTheme.accentRed,
+                                    unfocusedBorderColor = ZenithTheme.borderColor,
+                                    focusedTextColor = ZenithTheme.textPrimary,
+                                    unfocusedTextColor = ZenithTheme.textPrimary
                                 ),
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -797,14 +762,17 @@ fun VoiceAiModal(
                             // Title Input Field
                             OutlinedTextField(
                                 value = editTitle,
-                                onValueChange = { editTitle = it },
+                                onValueChange = {
+                                    pauseAndNotifyEditing()
+                                    editTitle = it
+                                },
                                 label = { Text("Title / Description", fontSize = 11.sp) },
                                 singleLine = true,
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = CyanDarkSecondary,
-                                    unfocusedBorderColor = GlassBorderColor,
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White
+                                    focusedBorderColor = ZenithTheme.accentCyan,
+                                    unfocusedBorderColor = ZenithTheme.borderColor,
+                                    focusedTextColor = ZenithTheme.textPrimary,
+                                    unfocusedTextColor = ZenithTheme.textPrimary
                                 ),
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -812,7 +780,7 @@ fun VoiceAiModal(
                             Spacer(modifier = Modifier.height(10.dp))
 
                             // Category Selector
-                            Text("Category", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = SlateDarkTextSecondary)
+                            Text("Category", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textSecondary)
                             Spacer(modifier = Modifier.height(4.dp))
                             val activeCategories = if (editType == TransactionType.INCOME) incomeCategories else expenseCategories
                             LazyRow(
@@ -823,11 +791,15 @@ fun VoiceAiModal(
                                     val isSelected = editCategory == cat
                                     FilterChip(
                                         selected = isSelected,
-                                        onClick = { editCategory = cat },
+                                        onClick = {
+                                            pauseAndNotifyEditing()
+                                            editCategory = cat
+                                        },
                                         label = { Text(cat, fontSize = 10.sp) },
                                         colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = if (editType == TransactionType.INCOME) IncomeGreen.copy(alpha = 0.25f) else PastelRose.copy(alpha = 0.25f),
-                                            selectedLabelColor = Color.White
+                                            selectedContainerColor = if (editType == TransactionType.INCOME) ZenithTheme.accentGreen.copy(alpha = 0.22f) else ZenithTheme.accentRed.copy(alpha = 0.22f),
+                                            selectedLabelColor = ZenithTheme.textPrimary,
+                                            labelColor = ZenithTheme.textSecondary
                                         ),
                                         modifier = Modifier.height(28.dp)
                                     )
@@ -837,7 +809,7 @@ fun VoiceAiModal(
                             Spacer(modifier = Modifier.height(10.dp))
 
                             // Payment Method Selector
-                            Text("Payment Method", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = SlateDarkTextSecondary)
+                            Text("Payment Method", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textSecondary)
                             Spacer(modifier = Modifier.height(4.dp))
                             LazyRow(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -847,11 +819,15 @@ fun VoiceAiModal(
                                     val isSelected = editPaymentMethod.equals(method, ignoreCase = true)
                                     FilterChip(
                                         selected = isSelected,
-                                        onClick = { editPaymentMethod = method },
+                                        onClick = {
+                                            pauseAndNotifyEditing()
+                                            editPaymentMethod = method
+                                        },
                                         label = { Text(method, fontSize = 10.sp) },
                                         colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = CyanDarkSecondary.copy(alpha = 0.25f),
-                                            selectedLabelColor = Color.White
+                                            selectedContainerColor = ZenithTheme.accentCyan.copy(alpha = 0.22f),
+                                            selectedLabelColor = ZenithTheme.textPrimary,
+                                            labelColor = ZenithTheme.textSecondary
                                         ),
                                         modifier = Modifier.height(28.dp)
                                     )
@@ -871,14 +847,14 @@ fun VoiceAiModal(
                                         startListening()
                                     },
                                     shape = RoundedCornerShape(10.dp),
-                                    border = BorderStroke(1.dp, GlassBorderColor),
+                                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
                                     modifier = Modifier
                                         .weight(0.38f)
                                         .height(42.dp)
                                 ) {
-                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = SlateDarkTextSecondary)
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = ZenithTheme.textSecondary)
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Re-speak", fontSize = 11.sp, color = SlateDarkTextSecondary)
+                                    Text("Re-speak", fontSize = 11.sp, color = ZenithTheme.textSecondary)
                                 }
 
                                 Button(
@@ -888,7 +864,8 @@ fun VoiceAiModal(
                                     },
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (editType == TransactionType.INCOME) IncomeGreen else EmeraldDarkPrimary
+                                        containerColor = if (editType == TransactionType.INCOME) LightIncomeGreen else MaterialTheme.colorScheme.primary,
+                                        contentColor = Color.White
                                     ),
                                     modifier = Modifier
                                         .weight(0.62f)
@@ -921,7 +898,7 @@ fun VoiceAiModal(
                                         .size(92.dp)
                                         .scale(pulseScale)
                                         .clip(CircleShape)
-                                        .background(CyanDarkSecondary.copy(alpha = 0.20f))
+                                        .background(ZenithTheme.accentCyan.copy(alpha = 0.20f))
                                 )
                             }
 
@@ -932,9 +909,9 @@ fun VoiceAiModal(
                                     .clip(CircleShape)
                                     .background(
                                         if (modalState == VoiceModalState.LISTENING) {
-                                            Brush.linearGradient(listOf(CyanDarkSecondary, Color(0xFF6366F1)))
+                                            Brush.linearGradient(listOf(ZenithTheme.accentCyan, MaterialTheme.colorScheme.primary))
                                         } else {
-                                            Brush.linearGradient(listOf(EmeraldDarkPrimary, Color(0xFF059669)))
+                                            Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, LightIncomeGreen))
                                         }
                                     )
                                     .clickable {
@@ -969,8 +946,8 @@ fun VoiceAiModal(
                             VoiceModalState.LISTENING -> {
                                 Surface(
                                     shape = RoundedCornerShape(14.dp),
-                                    color = EmeraldDarkPrimary.copy(alpha = 0.15f),
-                                    border = BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.45f))
+                                    color = ZenithTheme.accentIndigo.copy(alpha = 0.15f),
+                                    border = BorderStroke(1.dp, ZenithTheme.accentIndigo.copy(alpha = 0.45f))
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
@@ -981,14 +958,14 @@ fun VoiceAiModal(
                                                 .size(10.dp)
                                                 .scale(pulseScale)
                                                 .clip(CircleShape)
-                                                .background(EmeraldDarkPrimary)
+                                                .background(ZenithTheme.accentIndigo)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             text = "LISTENING • Speak naturally",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = EmeraldDarkPrimary
+                                            color = ZenithTheme.accentIndigo
                                         )
                                     }
                                 }
@@ -1011,7 +988,7 @@ fun VoiceAiModal(
                                                 .clip(CircleShape)
                                                 .background(
                                                     Brush.verticalGradient(
-                                                        listOf(PastelRose, CyanDarkSecondary)
+                                                        listOf(ZenithTheme.accentRed, ZenithTheme.accentCyan)
                                                     )
                                                 )
                                         )
@@ -1023,14 +1000,14 @@ fun VoiceAiModal(
                                     Spacer(modifier = Modifier.height(10.dp))
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
-                                        color = SlateDarkSurfaceVariant,
-                                        border = BorderStroke(1.dp, GlassBorderColor),
+                                        color = ZenithTheme.cardVariantSurface,
+                                        border = BorderStroke(1.dp, ZenithTheme.borderColor),
                                         modifier = Modifier.fillMaxWidth(0.92f)
                                     ) {
                                         Text(
                                             text = "\"$speechPreview\"",
                                             fontSize = 13.5.sp,
-                                            color = Color.White,
+                                            color = ZenithTheme.textPrimary,
                                             fontWeight = FontWeight.Medium,
                                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
                                         )
@@ -1051,7 +1028,10 @@ fun VoiceAiModal(
                                         }
                                     },
                                     shape = RoundedCornerShape(14.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = PastelRose),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = LightExpenseRed,
+                                        contentColor = Color.White
+                                    ),
                                     modifier = Modifier
                                         .fillMaxWidth(0.85f)
                                         .height(46.dp)
@@ -1080,14 +1060,14 @@ fun VoiceAiModal(
                                         modalState = VoiceModalState.IDLE
                                     }
                                 ) {
-                                    Text("Cancel listening", fontSize = 11.5.sp, color = SlateDarkTextSecondary)
+                                    Text("Cancel listening", fontSize = 11.5.sp, color = ZenithTheme.textSecondary)
                                 }
                             }
                             VoiceModalState.PROCESSING -> {
                                 Surface(
                                     shape = RoundedCornerShape(16.dp),
-                                    color = SlateDarkSurfaceVariant,
-                                    border = BorderStroke(1.dp, GlassBorderColor),
+                                    color = ZenithTheme.cardVariantSurface,
+                                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
                                     modifier = Modifier
                                         .fillMaxWidth(0.92f)
                                         .padding(vertical = 4.dp)
@@ -1097,7 +1077,7 @@ fun VoiceAiModal(
                                         horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
                                         CircularProgressIndicator(
-                                            color = EmeraldDarkPrimary,
+                                            color = ZenithTheme.accentIndigo,
                                             modifier = Modifier.size(32.dp),
                                             strokeWidth = 3.dp
                                         )
@@ -1106,13 +1086,13 @@ fun VoiceAiModal(
                                             text = "Gemini AI is parsing financial entities...",
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = Color.White
+                                            color = ZenithTheme.textPrimary
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = "Extracting title, amount, category and transaction scope",
+                                            text = "Extracting title, amount, category and payment method",
                                             fontSize = 11.sp,
-                                            color = SlateDarkTextSecondary
+                                            color = ZenithTheme.textSecondary
                                         )
                                         val preview = recognizedSpokenText.ifBlank { bufferedSpeechText.ifBlank { rawInputText } }
                                         if (preview.isNotBlank()) {
@@ -1120,7 +1100,7 @@ fun VoiceAiModal(
                                             Text(
                                                 text = "\"$preview\"",
                                                 fontSize = 11.sp,
-                                                color = CyanDarkSecondary
+                                                color = ZenithTheme.accentCyan
                                             )
                                         }
                                     }
@@ -1129,8 +1109,8 @@ fun VoiceAiModal(
                             VoiceModalState.ERROR -> {
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = ExpenseRed.copy(alpha = 0.15f),
-                                    border = BorderStroke(1.dp, ExpenseRed.copy(alpha = 0.4f)),
+                                    color = ZenithTheme.accentRed.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, ZenithTheme.accentRed.copy(alpha = 0.4f)),
                                     modifier = Modifier.padding(horizontal = 8.dp)
                                 ) {
                                     Column(
@@ -1143,14 +1123,14 @@ fun VoiceAiModal(
                                             Icon(
                                                 Icons.Default.ErrorOutline,
                                                 contentDescription = null,
-                                                tint = ExpenseRed,
+                                                tint = ZenithTheme.accentRed,
                                                 modifier = Modifier.size(16.dp)
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
                                                 text = errorMessage ?: "Could not hear clearly. Tap mic to retry.",
                                                 fontSize = 12.sp,
-                                                color = ExpenseRed,
+                                                color = ZenithTheme.accentRed,
                                                 fontWeight = FontWeight.Medium
                                             )
                                         }
@@ -1158,12 +1138,12 @@ fun VoiceAiModal(
                                         OutlinedButton(
                                             onClick = { startListening() },
                                             shape = RoundedCornerShape(8.dp),
-                                            border = BorderStroke(1.dp, ExpenseRed.copy(alpha = 0.6f)),
+                                            border = BorderStroke(1.dp, ZenithTheme.accentRed.copy(alpha = 0.6f)),
                                             modifier = Modifier.height(32.dp)
                                         ) {
-                                            Icon(Icons.Default.Refresh, contentDescription = null, tint = ExpenseRed, modifier = Modifier.size(13.dp))
+                                            Icon(Icons.Default.Refresh, contentDescription = null, tint = ZenithTheme.accentRed, modifier = Modifier.size(13.dp))
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Tap to Retry", fontSize = 11.5.sp, color = ExpenseRed, fontWeight = FontWeight.Bold)
+                                            Text("Tap to Retry", fontSize = 11.5.sp, color = ZenithTheme.accentRed, fontWeight = FontWeight.Bold)
                                         }
                                     }
                                 }
@@ -1173,13 +1153,13 @@ fun VoiceAiModal(
                                     text = "Tap mic to speak your transaction",
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = SlateDarkTextPrimary
+                                    color = ZenithTheme.textPrimary
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = "Supports English & Tanglish • Extended pause window active",
                                     fontSize = 11.sp,
-                                    color = SlateDarkTextSecondary
+                                    color = ZenithTheme.textSecondary
                                 )
                             }
                         }
@@ -1192,7 +1172,7 @@ fun VoiceAiModal(
                         text = "Quick Examples",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         modifier = Modifier.align(Alignment.Start)
                     )
                     Spacer(modifier = Modifier.height(6.dp))
@@ -1203,8 +1183,8 @@ fun VoiceAiModal(
                         items(examplePhrases) { prompt ->
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
-                                color = SlateDarkSurfaceVariant,
-                                border = BorderStroke(1.dp, GlassBorderColor),
+                                color = ZenithTheme.cardVariantSurface,
+                                border = BorderStroke(1.dp, ZenithTheme.borderColor),
                                 modifier = Modifier.clickable {
                                     handleProcessQuery(prompt)
                                 }
@@ -1212,7 +1192,7 @@ fun VoiceAiModal(
                                 Text(
                                     text = prompt,
                                     fontSize = 11.sp,
-                                    color = SlateDarkTextPrimary,
+                                    color = ZenithTheme.textPrimary,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                 )
                             }
@@ -1226,8 +1206,8 @@ fun VoiceAiModal(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(SlateDarkSurfaceVariant, RoundedCornerShape(14.dp))
-                        .border(1.dp, GlassBorderColor, RoundedCornerShape(14.dp))
+                        .background(ZenithTheme.cardVariantSurface, RoundedCornerShape(14.dp))
+                        .border(1.dp, ZenithTheme.borderColor, RoundedCornerShape(14.dp))
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1238,7 +1218,7 @@ fun VoiceAiModal(
                             Text(
                                 text = "Type transaction (e.g. Lunch 250 UPI)...",
                                 fontSize = 11.sp,
-                                color = SlateDarkTextSecondary
+                                color = ZenithTheme.textSecondary
                             )
                         },
                         singleLine = true,
@@ -1254,8 +1234,8 @@ fun VoiceAiModal(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color.Transparent,
                             unfocusedBorderColor = Color.Transparent,
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
+                            focusedTextColor = ZenithTheme.textPrimary,
+                            unfocusedTextColor = ZenithTheme.textPrimary
                         ),
                         modifier = Modifier
                             .weight(1f)
@@ -1278,7 +1258,7 @@ fun VoiceAiModal(
                         Icon(
                             Icons.AutoMirrored.Filled.Send,
                             contentDescription = "Send",
-                            tint = EmeraldDarkPrimary,
+                            tint = ZenithTheme.accentIndigo,
                             modifier = Modifier.size(18.dp)
                         )
                     }

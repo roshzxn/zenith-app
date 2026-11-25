@@ -173,27 +173,27 @@ fun AuthScreen(
                     modifier = Modifier
                         .size(40.dp)
                         .clip(CircleShape)
-                        .background(GlassCardBg)
-                        .border(1.dp, GlassBorderColor, CircleShape)
+                        .background(ZenithTheme.glassCardBg)
+                        .border(1.dp, ZenithTheme.borderColor, CircleShape)
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
-                        tint = SlateDarkTextPrimary,
+                        tint = ZenithTheme.textPrimary,
                         modifier = Modifier.size(20.dp)
                     )
                 }
 
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = EmeraldDarkContainer,
-                    border = BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.4f))
+                    color = ZenithTheme.accentGreen.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.4f))
                 ) {
                     Text(
-                        text = "SECURE ENCLAVE 🔒",
+                        text = "SECURE ENCLAVE",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        color = EmeraldDarkPrimary,
+                        color = ZenithTheme.accentGreen,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         letterSpacing = 1.sp
                     )
@@ -211,13 +211,13 @@ fun AuthScreen(
                 text = if (isSignUp) "Create Zenith Account" else "Sign In to Zenith",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
-                color = SlateDarkTextPrimary
+                color = ZenithTheme.textPrimary
             )
 
             Text(
-                text = if (isSignUp) "Unlock family ledgers, receipt OCR & cloud vault" else "Access your personal and shared wealth vaults",
+                text = if (isSignUp) "Unlock receipt OCR, smart budgets & cloud backup" else "Access your personal wealth vault anywhere",
                 fontSize = 12.sp,
-                color = SlateDarkTextSecondary,
+                color = ZenithTheme.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 4.dp, bottom = 20.dp)
             )
@@ -225,8 +225,8 @@ fun AuthScreen(
             // --- TAB SELECTOR (Sign In / Sign Up) ---
             Surface(
                 shape = RoundedCornerShape(14.dp),
-                color = SlateDarkSurfaceVariant,
-                border = BorderStroke(1.dp, GlassBorderColor),
+                color = ZenithTheme.cardVariantSurface,
+                border = BorderStroke(1.dp, ZenithTheme.borderColor),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp)
@@ -241,7 +241,7 @@ fun AuthScreen(
                             .weight(1f)
                             .height(40.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(if (!isSignUp) EmeraldDarkPrimary else Color.Transparent)
+                            .background(if (!isSignUp) ZenithTheme.solidGreen else Color.Transparent)
                             .clickable {
                                 isSignUp = false
                                 errorMessage = null
@@ -254,7 +254,7 @@ fun AuthScreen(
                             text = "Sign In",
                             fontSize = 13.sp,
                             fontWeight = if (!isSignUp) FontWeight.Bold else FontWeight.Medium,
-                            color = if (!isSignUp) Color.White else SlateDarkTextSecondary
+                            color = if (!isSignUp) Color.White else ZenithTheme.textSecondary
                         )
                     }
 
@@ -263,7 +263,7 @@ fun AuthScreen(
                             .weight(1f)
                             .height(40.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(if (isSignUp) EmeraldDarkPrimary else Color.Transparent)
+                            .background(if (isSignUp) ZenithTheme.solidGreen else Color.Transparent)
                             .clickable {
                                 isSignUp = true
                                 errorMessage = null
@@ -276,7 +276,7 @@ fun AuthScreen(
                             text = "Create Account",
                             fontSize = 13.sp,
                             fontWeight = if (isSignUp) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isSignUp) Color.White else SlateDarkTextSecondary
+                            color = if (isSignUp) Color.White else ZenithTheme.textSecondary
                         )
                     }
                 }
@@ -289,8 +289,8 @@ fun AuthScreen(
                 infoMessage?.let { info ->
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = EmeraldDarkPrimary.copy(alpha = 0.15f),
-                        border = BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.5f)),
+                        color = ZenithTheme.accentGreen.copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.5f)),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 14.dp)
@@ -302,14 +302,14 @@ fun AuthScreen(
                             Icon(
                                 imageVector = Icons.Outlined.CheckCircle,
                                 contentDescription = null,
-                                tint = EmeraldDarkPrimary,
+                                tint = ZenithTheme.accentGreen,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = info,
                                 fontSize = 12.sp,
-                                color = SlateDarkTextPrimary,
+                                color = ZenithTheme.textPrimary,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -322,8 +322,8 @@ fun AuthScreen(
                 errorMessage?.let { error ->
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = ExpenseRed.copy(alpha = 0.15f),
-                        border = BorderStroke(1.dp, ExpenseRed.copy(alpha = 0.4f)),
+                        color = ZenithTheme.accentRed.copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, ZenithTheme.accentRed.copy(alpha = 0.4f)),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 14.dp)
@@ -337,14 +337,14 @@ fun AuthScreen(
                                 Icon(
                                     imageVector = Icons.Default.ErrorOutline,
                                     contentDescription = null,
-                                    tint = ExpenseRed,
+                                    tint = ZenithTheme.accentRed,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = error,
                                     fontSize = 12.sp,
-                                    color = SlateDarkTextPrimary,
+                                    color = ZenithTheme.textPrimary,
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -365,7 +365,7 @@ fun AuthScreen(
                                         .height(38.dp)
                                         .testTag("auth_btn_offline_fallback"),
                                     shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.LockOpen,
@@ -390,8 +390,8 @@ fun AuthScreen(
             // --- MAIN FORM CONTAINER ---
             GlassCard(
                 modifier = Modifier.fillMaxWidth(),
-                backgroundColor = GlassCardBg,
-                borderColor = GlassBorderColor
+                backgroundColor = ZenithTheme.glassCardBg,
+                borderColor = ZenithTheme.borderColor
             ) {
                 // Sign Up Full Name Field
                 if (isSignUp) {
@@ -404,7 +404,7 @@ fun AuthScreen(
                         label = { Text("Full Name") },
                         placeholder = { Text("e.g. Alex Morgan") },
                         leadingIcon = {
-                            Icon(Icons.Outlined.Person, contentDescription = null, tint = SlateDarkTextSecondary)
+                            Icon(Icons.Outlined.Person, contentDescription = null, tint = ZenithTheme.textSecondary)
                         },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(
@@ -430,7 +430,7 @@ fun AuthScreen(
                     label = { Text("Email Address") },
                     placeholder = { Text("name@example.com") },
                     leadingIcon = {
-                        Icon(Icons.Outlined.Email, contentDescription = null, tint = SlateDarkTextSecondary)
+                        Icon(Icons.Outlined.Email, contentDescription = null, tint = ZenithTheme.textSecondary)
                     },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
@@ -455,14 +455,14 @@ fun AuthScreen(
                     label = { Text("Password") },
                     placeholder = { Text("••••••••") },
                     leadingIcon = {
-                        Icon(Icons.Outlined.Lock, contentDescription = null, tint = SlateDarkTextSecondary)
+                        Icon(Icons.Outlined.Lock, contentDescription = null, tint = ZenithTheme.textSecondary)
                     },
                     trailingIcon = {
                         IconButton(onClick = { passwordVisible = !passwordVisible }) {
                             Icon(
                                 imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                                 contentDescription = if (passwordVisible) "Hide password" else "Show password",
-                                tint = SlateDarkTextSecondary
+                                tint = ZenithTheme.textSecondary
                             )
                         }
                     },
@@ -497,14 +497,14 @@ fun AuthScreen(
                         label = { Text("Confirm Password") },
                         placeholder = { Text("••••••••") },
                         leadingIcon = {
-                            Icon(Icons.Outlined.Lock, contentDescription = null, tint = SlateDarkTextSecondary)
+                            Icon(Icons.Outlined.Lock, contentDescription = null, tint = ZenithTheme.textSecondary)
                         },
                         trailingIcon = {
                             IconButton(onClick = { confirmPasswordVisible = !confirmPasswordVisible }) {
                                 Icon(
                                     imageVector = if (confirmPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                                     contentDescription = if (confirmPasswordVisible) "Hide password" else "Show password",
-                                    tint = SlateDarkTextSecondary
+                                    tint = ZenithTheme.textSecondary
                                 )
                             }
                         },
@@ -529,7 +529,7 @@ fun AuthScreen(
                     Text(
                         text = "• Password must be at least 6 characters",
                         fontSize = 11.sp,
-                        color = if (password.length >= 6) IncomeGreen else SlateDarkTextSecondary
+                        color = if (password.length >= 6) ZenithTheme.accentGreen else ZenithTheme.textSecondary
                     )
                 }
 
@@ -551,7 +551,7 @@ fun AuthScreen(
                             Text(
                                 text = "Forgot Password?",
                                 fontSize = 12.sp,
-                                color = GoldAccent,
+                                color = ZenithTheme.accentAmber,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -574,7 +574,7 @@ fun AuthScreen(
                         .height(50.dp)
                         .testTag("auth_btn_submit"),
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                 ) {
                     if (isLoading) {
                         CircularProgressIndicator(
@@ -586,13 +586,15 @@ fun AuthScreen(
                         Text(
                             text = if (isSignUp) "Creating account..." else "Restoring vault...",
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
                         )
                     } else {
                         Text(
                             text = if (isSignUp) "Create Account" else "Sign In",
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
                         )
                     }
                 }
@@ -608,16 +610,16 @@ fun AuthScreen(
                     .height(46.dp)
                     .testTag("auth_btn_guest_mode"),
                 shape = RoundedCornerShape(14.dp),
-                border = BorderStroke(1.dp, GlassBorderColor),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = SlateDarkTextSecondary)
+                border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = ZenithTheme.textSecondary)
             ) {
-                Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp), tint = GoldAccent)
+                Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp), tint = ZenithTheme.accentAmber)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "Open Offline Vault (Guest Mode)",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
             }
 
@@ -633,7 +635,7 @@ fun AuthScreen(
                 Text(
                     text = if (forgotPasswordSent) "Password Reset Sent" else "Reset Password",
                     fontWeight = FontWeight.Bold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
             },
             text = {
@@ -642,13 +644,13 @@ fun AuthScreen(
                         Text(
                             text = "A password recovery email has been sent to $forgotPasswordEmail.",
                             fontSize = 13.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = "Please follow the instructions in the email to set a new password.",
                             fontSize = 12.sp,
-                            color = SlateDarkTextMuted
+                            color = ZenithTheme.textMuted
                         )
                     }
                 } else {
@@ -656,7 +658,7 @@ fun AuthScreen(
                         Text(
                             text = "Enter your registered email address and we'll send you instructions to reset your password.",
                             fontSize = 13.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedTextField(
@@ -674,9 +676,9 @@ fun AuthScreen(
                 if (forgotPasswordSent) {
                     Button(
                         onClick = { showForgotPasswordDialog = false },
-                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                     ) {
-                        Text("Done")
+                        Text("Done", color = Color.White)
                     }
                 } else {
                     Button(
@@ -701,7 +703,7 @@ fun AuthScreen(
                                 Toast.makeText(context, "Please enter a valid email address.", Toast.LENGTH_SHORT).show()
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                     ) {
                         if (isResettingPassword) {
                             CircularProgressIndicator(
@@ -710,7 +712,7 @@ fun AuthScreen(
                                 strokeWidth = 2.dp
                             )
                         } else {
-                            Text("Send Reset Link")
+                            Text("Send Reset Link", color = Color.White)
                         }
                     }
                 }
@@ -718,11 +720,11 @@ fun AuthScreen(
             dismissButton = {
                 if (!forgotPasswordSent) {
                     TextButton(onClick = { showForgotPasswordDialog = false }) {
-                        Text("Cancel")
+                        Text("Cancel", color = ZenithTheme.textSecondary)
                     }
                 }
             },
-            containerColor = SlateDarkSurface,
+            containerColor = ZenithTheme.cardSurface,
             shape = RoundedCornerShape(20.dp)
         )
     }

@@ -53,7 +53,7 @@ fun SplashScreen(
                 icon = Icons.Default.AccountBalanceWallet,
                 title = "Next-Gen Wealth Ledger",
                 description = "Track income, expenses, and savings in real time across multiple currencies with comprehensive analytics.",
-                badge = "PERSONAL & FAMILY",
+                badge = "PERSONAL WEALTH",
                 accentColor = Color(0xFF6366F1) // Electric Indigo
             ),
             SplashFeature(
@@ -64,10 +64,10 @@ fun SplashScreen(
                 accentColor = Color(0xFF06B6D4) // Cyan
             ),
             SplashFeature(
-                icon = Icons.Default.Groups,
-                title = "Collaborative Family Vaults",
-                description = "Share household budgets, view individual member contributions, and manage shared goals effortlessly.",
-                badge = "ROLE PERMISSIONS",
+                icon = Icons.Default.QrCodeScanner,
+                title = "UPI Auto-Track & Budgets",
+                description = "Pay via UPI QR, auto-capture payment notifications securely on-device, and manage budgets and goals.",
+                badge = "SMART AUTOMATION",
                 accentColor = Color(0xFF10B981) // Emerald
             ),
             SplashFeature(
@@ -143,15 +143,15 @@ fun SplashScreen(
                     text = "ZENITH",
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Black,
-                    color = SlateDarkTextPrimary,
+                    color = ZenithTheme.textPrimary,
                     letterSpacing = 4.sp
                 )
 
                 Text(
-                    text = "Intelligent Personal & Family Finance",
+                    text = "Intelligent Personal Finance",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
-                    color = SlateDarkTextSecondary,
+                    color = ZenithTheme.textSecondary,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(top = 4.dp)
                 )
@@ -175,7 +175,7 @@ fun SplashScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 4.dp),
-                        backgroundColor = GlassCardBg,
+                        backgroundColor = ZenithTheme.glassCardBg,
                         borderColor = feature.accentColor.copy(alpha = 0.35f)
                     ) {
                         Column(
@@ -223,7 +223,7 @@ fun SplashScreen(
                                 text = feature.title,
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary,
+                                color = ZenithTheme.textPrimary,
                                 textAlign = TextAlign.Center
                             )
 
@@ -232,7 +232,7 @@ fun SplashScreen(
                             Text(
                                 text = feature.description,
                                 fontSize = 12.sp,
-                                color = SlateDarkTextSecondary,
+                                color = ZenithTheme.textSecondary,
                                 textAlign = TextAlign.Center,
                                 lineHeight = 17.sp,
                                 modifier = Modifier.padding(horizontal = 8.dp)
@@ -256,7 +256,7 @@ fun SplashScreen(
                                 .size(width = if (isSelected) 22.dp else 7.dp, height = 7.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    if (isSelected) EmeraldDarkPrimary else SlateDarkTextMuted.copy(alpha = 0.4f)
+                                    if (isSelected) ZenithTheme.accentGreen else ZenithTheme.textMuted.copy(alpha = 0.4f)
                                 )
                         )
                     }
@@ -279,7 +279,7 @@ fun SplashScreen(
                         .testTag("splash_btn_get_started"),
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = EmeraldDarkPrimary
+                        containerColor = ZenithTheme.solidGreen
                     )
                 ) {
                     Text(
@@ -307,9 +307,9 @@ fun SplashScreen(
                         .height(48.dp)
                         .testTag("splash_btn_sign_in"),
                     shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, GlassBorderColor),
+                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = SlateDarkTextPrimary
+                        contentColor = ZenithTheme.textPrimary
                     )
                 ) {
                     Text(
@@ -330,7 +330,7 @@ fun SplashScreen(
                         text = "Continue with Offline Vault (Guest) →",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
-                        color = GoldAccent
+                        color = ZenithTheme.accentAmber
                     )
                 }
             }

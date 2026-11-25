@@ -1,9 +1,7 @@
 package com.zenith.app.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -16,7 +14,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,10 +28,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.zenith.app.data.models.CategoryEntity
-import com.zenith.app.data.models.FamilyMemberEntity
-import com.zenith.app.data.models.FinanceScope
 import com.zenith.app.data.models.TransactionType
-import com.zenith.app.ui.theme.*
+import com.zenith.app.ui.theme.ZenithTheme
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -44,14 +39,16 @@ fun AddTransactionDialog(
     categories: List<CategoryEntity>,
     currencySymbol: String,
     onDismiss: () -> Unit,
-    onAdd: (title: String, amount: Double, type: TransactionType, category: String, dateMillis: Long, note: String, paymentMethod: String, memberId: String?, scope: FinanceScope) -> Unit,
-    familyMembers: List<FamilyMemberEntity> = emptyList(),
-    currentFinanceScope: FinanceScope = FinanceScope.PERSONAL,
-    currentUserId: String = "",
-    currentUserName: String = "",
-    familyName: String = "Zenith Family"
+    onAdd: (
+        title: String,
+        amount: Double,
+        type: TransactionType,
+        category: String,
+        dateMillis: Long,
+        note: String,
+        paymentMethod: String
+    ) -> Unit
 ) {
-    var selectedScope by remember { mutableStateOf(currentFinanceScope) }
     var title by remember { mutableStateOf("") }
     var amountText by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
@@ -59,42 +56,40 @@ fun AddTransactionDialog(
     var selectedType by remember { mutableStateOf(TransactionType.EXPENSE) }
     var selectedCategory by remember { mutableStateOf("Food & Dining") }
     var selectedPaymentMethod by remember { mutableStateOf("UPI") }
-    var selectedMemberId by remember { mutableStateOf<String?>(null) }
     var showCategoryPickerSheet by remember { mutableStateOf(false) }
-    var showScopeDropdown by remember { mutableStateOf(false) }
-    var showMemberDropdown by remember { mutableStateOf(false) }
     var isSubmitting by remember { mutableStateOf(false) }
 
     val todayFormatted = remember { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date()) }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
-    val fullCategoryList = listOf(
-        "Food & Dining" to Icons.Default.Restaurant,
-        "Transportation" to Icons.Default.DirectionsCar,
-        "Shopping" to Icons.Default.ShoppingBag,
-        "Bills & Utilities" to Icons.Default.Receipt,
-        "Entertainment" to Icons.Default.Movie,
-        "Healthcare" to Icons.Default.MedicalServices,
-        "Housing & Rent" to Icons.Default.Home,
-        "Education" to Icons.Default.School,
-        "Subscriptions" to Icons.Default.Subscriptions,
-        "Personal Care" to Icons.Default.Spa,
-        "Travel" to Icons.Default.Flight,
-        "Salary & Income" to Icons.Default.Payments,
-        "Freelance / Business" to Icons.Default.Work,
-        "Other" to Icons.Default.Category
-    )
-
-    val selectedMemberName = remember(selectedMemberId, familyMembers) {
-        if (selectedMemberId == null) "Me (${currentUserName.ifBlank { "You" }})"
-        else familyMembers.find { it.userId == selectedMemberId }?.name ?: "Me"
+    val fullCategoryList = remember(categories) {
+        val defaults = listOf(
+            "Food & Dining" to Icons.Default.Restaurant,
+            "Transportation" to Icons.Default.DirectionsCar,
+            "Shopping" to Icons.Default.ShoppingBag,
+            "Bills & Utilities" to Icons.Default.Receipt,
+            "Entertainment" to Icons.Default.Movie,
+            "Healthcare" to Icons.Default.MedicalServices,
+            "Housing & Rent" to Icons.Default.Home,
+            "Education" to Icons.Default.School,
+            "Subscriptions" to Icons.Default.Subscriptions,
+            "Personal Care" to Icons.Default.Spa,
+            "Travel" to Icons.Default.Flight,
+            "Salary & Income" to Icons.Default.Payments,
+            "Freelance / Business" to Icons.Default.Work,
+            "Other" to Icons.Default.Category
+        )
+        val extraCats = categories
+            .filter { c -> defaults.none { it.first.equals(c.name, ignoreCase = true) } }
+            .map { it.name to Icons.Default.Category }
+        defaults + extraCats
     }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp)
@@ -106,7 +101,6 @@ fun AddTransactionDialog(
                     .padding(20.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -114,15 +108,15 @@ fun AddTransactionDialog(
                 ) {
                     Column {
                         Text(
-                            text = if (selectedScope == FinanceScope.FAMILY) "Add Family Entry" else "Add Transaction",
+                            text = "Add Transaction",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
                         Text(
                             text = todayFormatted,
                             fontSize = 12.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                     }
 
@@ -132,154 +126,17 @@ fun AddTransactionDialog(
                             .size(32.dp)
                             .testTag("close_add_dialog")
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SlateDarkTextSecondary)
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = ZenithTheme.textSecondary)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // --- 1. SCOPE SELECTOR (Personal vs Family) ---
-                Text(
-                    text = "Transaction Scope",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = SlateDarkTextSecondary,
-                    modifier = Modifier.padding(bottom = 6.dp, start = 2.dp)
-                )
-
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = SlateDarkSurfaceVariant.copy(alpha = 0.65f),
-                    border = BorderStroke(1.dp, GlassBorderColor),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable { showScopeDropdown = true }
-                        .testTag("scope_dropdown_trigger")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (selectedScope == FinanceScope.FAMILY) Color(0xFF8B5CF6).copy(alpha = 0.2f)
-                                        else EmeraldDarkPrimary.copy(alpha = 0.2f)
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (selectedScope == FinanceScope.FAMILY) Icons.Default.Groups else Icons.Default.Person,
-                                    contentDescription = null,
-                                    tint = if (selectedScope == FinanceScope.FAMILY) Color(0xFFC4B5FD) else EmeraldDarkPrimary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-
-                            Text(
-                                text = if (selectedScope == FinanceScope.FAMILY) "Family Ledger" else "Personal Space",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
-                            )
-                        }
-
-                        Icon(
-                            imageVector = Icons.Default.ArrowDropDown,
-                            contentDescription = null,
-                            tint = SlateDarkTextSecondary
-                        )
-                    }
-                }
-
-                // Family Details (Only when Family Scope is active)
-                AnimatedVisibility(visible = selectedScope == FinanceScope.FAMILY) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                        // Active Family Card / Tag
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF8B5CF6).copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.35f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Home, contentDescription = null, tint = Color(0xFFC4B5FD), modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Family: $familyName", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFE9D5FF))
-                                }
-                                Text("Shared Vault", fontSize = 10.sp, color = Color(0xFFC4B5FD), fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Recorded For Member Selector
-                        Text(
-                            text = "Recorded For",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = SlateDarkTextSecondary,
-                            modifier = Modifier.padding(bottom = 6.dp, start = 2.dp)
-                        )
-
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = SlateDarkSurfaceVariant.copy(alpha = 0.65f),
-                            border = BorderStroke(1.dp, GlassBorderColor),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { showMemberDropdown = true }
-                                .testTag("member_dropdown_trigger")
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.AccountCircle, contentDescription = null, tint = GoldAccent, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Text(
-                                        text = selectedMemberName,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = SlateDarkTextPrimary
-                                    )
-                                }
-
-                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = SlateDarkTextSecondary)
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // --- 2. EXPENSE / INCOME SEGMENTED SWITCH ---
+                // Expense / Income Segmented Switch
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(SlateDarkSurfaceVariant, RoundedCornerShape(16.dp))
+                        .background(ZenithTheme.cardVariantSurface, RoundedCornerShape(16.dp))
                         .padding(4.dp)
                 ) {
                     val isExpense = selectedType == TransactionType.EXPENSE
@@ -288,7 +145,7 @@ fun AddTransactionDialog(
                             .weight(1f)
                             .height(44.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(if (isExpense) PastelRose else Color.Transparent)
+                            .background(if (isExpense) ZenithTheme.accentRed else Color.Transparent)
                             .clickable {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                                 selectedType = TransactionType.EXPENSE
@@ -296,7 +153,12 @@ fun AddTransactionDialog(
                             .testTag("type_expense_button"),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("Expense", fontWeight = FontWeight.Bold, color = if (isExpense) Color.White else SlateDarkTextSecondary, fontSize = 13.sp)
+                        Text(
+                            text = "Expense",
+                            fontWeight = FontWeight.Bold,
+                            color = if (isExpense) Color.White else ZenithTheme.textSecondary,
+                            fontSize = 13.sp
+                        )
                     }
 
                     val isIncome = selectedType == TransactionType.INCOME
@@ -305,7 +167,7 @@ fun AddTransactionDialog(
                             .weight(1f)
                             .height(44.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(if (isIncome) PastelGreen else Color.Transparent)
+                            .background(if (isIncome) ZenithTheme.accentGreen else Color.Transparent)
                             .clickable {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                                 selectedType = TransactionType.INCOME
@@ -314,13 +176,18 @@ fun AddTransactionDialog(
                             .testTag("type_income_button"),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("Income", fontWeight = FontWeight.Bold, color = if (isIncome) Color.Black else SlateDarkTextSecondary, fontSize = 13.sp)
+                        Text(
+                            text = "Income",
+                            fontWeight = FontWeight.Bold,
+                            color = if (isIncome) Color.White else ZenithTheme.textSecondary,
+                            fontSize = 13.sp
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // --- 3. AMOUNT FIELD ---
+                // Amount Field
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { input ->
@@ -331,16 +198,16 @@ fun AddTransactionDialog(
                         }
                     },
                     label = { Text("Amount ($currencySymbol)") },
-                    placeholder = { Text("0.00", color = SlateDarkTextMuted) },
+                    placeholder = { Text("0.00", color = ZenithTheme.textMuted) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = if (selectedType == TransactionType.EXPENSE) PastelRose else PastelGreen,
-                        unfocusedBorderColor = GlassBorderColor,
-                        focusedContainerColor = SlateDarkSurfaceVariant,
-                        unfocusedContainerColor = SlateDarkSurfaceVariant,
-                        focusedTextColor = SlateDarkTextPrimary,
-                        unfocusedTextColor = SlateDarkTextPrimary
+                        focusedBorderColor = if (selectedType == TransactionType.EXPENSE) ZenithTheme.accentRed else ZenithTheme.accentGreen,
+                        unfocusedBorderColor = ZenithTheme.borderColor,
+                        focusedContainerColor = ZenithTheme.cardVariantSurface,
+                        unfocusedContainerColor = ZenithTheme.cardVariantSurface,
+                        focusedTextColor = ZenithTheme.textPrimary,
+                        unfocusedTextColor = ZenithTheme.textPrimary
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -350,21 +217,21 @@ fun AddTransactionDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // --- 4. TITLE FIELD ---
+                // Title Field
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
                     label = { Text("Title / Description") },
-                    placeholder = { Text("e.g. Grocery, Lunch, Salary", color = SlateDarkTextMuted) },
+                    placeholder = { Text("e.g. Grocery, Lunch, Salary", color = ZenithTheme.textMuted) },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = EmeraldDarkPrimary,
-                        unfocusedBorderColor = GlassBorderColor,
-                        focusedContainerColor = SlateDarkSurfaceVariant,
-                        unfocusedContainerColor = SlateDarkSurfaceVariant,
-                        focusedTextColor = SlateDarkTextPrimary,
-                        unfocusedTextColor = SlateDarkTextPrimary
+                        focusedBorderColor = ZenithTheme.accentGreen,
+                        unfocusedBorderColor = ZenithTheme.borderColor,
+                        focusedContainerColor = ZenithTheme.cardVariantSurface,
+                        unfocusedContainerColor = ZenithTheme.cardVariantSurface,
+                        focusedTextColor = ZenithTheme.textPrimary,
+                        unfocusedTextColor = ZenithTheme.textPrimary
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -374,19 +241,19 @@ fun AddTransactionDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // --- 5. CATEGORY SELECTOR ---
+                // Category Selector
                 Text(
                     text = "Category",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = SlateDarkTextSecondary,
+                    color = ZenithTheme.textSecondary,
                     modifier = Modifier.padding(bottom = 6.dp, start = 2.dp)
                 )
 
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = SlateDarkSurfaceVariant.copy(alpha = 0.65f),
-                    border = BorderStroke(1.dp, GlassBorderColor),
+                    color = ZenithTheme.cardVariantSurface,
+                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
@@ -409,28 +276,27 @@ fun AddTransactionDialog(
                                 modifier = Modifier
                                     .size(28.dp)
                                     .clip(CircleShape)
-                                    .background(EmeraldDarkPrimary.copy(alpha = 0.2f)),
+                                    .background(ZenithTheme.accentGreen.copy(alpha = 0.16f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 val catIcon = fullCategoryList.firstOrNull { it.first == selectedCategory }?.second ?: Icons.Default.Category
-                                Icon(catIcon, contentDescription = null, tint = EmeraldDarkPrimary, modifier = Modifier.size(16.dp))
+                                Icon(catIcon, contentDescription = null, tint = ZenithTheme.accentGreen, modifier = Modifier.size(16.dp))
                             }
 
                             Text(
                                 text = selectedCategory,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
+                                color = ZenithTheme.textPrimary
                             )
                         }
 
-                        Text("Change ▾", fontSize = 12.sp, color = EmeraldDarkPrimary, fontWeight = FontWeight.SemiBold)
+                        Text("Change ▾", fontSize = 12.sp, color = ZenithTheme.accentGreen, fontWeight = FontWeight.SemiBold)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // --- 6. UNIFIED PAYMENT METHOD DROPDOWN ---
                 PaymentMethodDropdown(
                     selectedMethod = selectedPaymentMethod,
                     onMethodSelected = { selectedPaymentMethod = it },
@@ -439,21 +305,21 @@ fun AddTransactionDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // --- 7. NOTE FIELD ---
+                // Note Field
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
                     label = { Text("Note (Optional)") },
-                    placeholder = { Text("Additional details...", color = SlateDarkTextMuted) },
+                    placeholder = { Text("Additional details...", color = ZenithTheme.textMuted) },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = EmeraldDarkPrimary,
-                        unfocusedBorderColor = GlassBorderColor,
-                        focusedContainerColor = SlateDarkSurfaceVariant,
-                        unfocusedContainerColor = SlateDarkSurfaceVariant,
-                        focusedTextColor = SlateDarkTextPrimary,
-                        unfocusedTextColor = SlateDarkTextPrimary
+                        focusedBorderColor = ZenithTheme.accentGreen,
+                        unfocusedBorderColor = ZenithTheme.borderColor,
+                        focusedContainerColor = ZenithTheme.cardVariantSurface,
+                        unfocusedContainerColor = ZenithTheme.cardVariantSurface,
+                        focusedTextColor = ZenithTheme.textPrimary,
+                        unfocusedTextColor = ZenithTheme.textPrimary
                     ),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -461,7 +327,6 @@ fun AddTransactionDialog(
 
                 Spacer(modifier = Modifier.height(22.dp))
 
-                // --- 8. SAVE BUTTON ---
                 val isValid = (amountText.toDoubleOrNull() ?: 0.0) > 0 && title.isNotBlank() && !isSubmitting
 
                 Button(
@@ -477,9 +342,7 @@ fun AddTransactionDialog(
                                 selectedCategory,
                                 System.currentTimeMillis(),
                                 note.trim(),
-                                selectedPaymentMethod,
-                                if (selectedScope == FinanceScope.FAMILY) selectedMemberId else null,
-                                selectedScope
+                                selectedPaymentMethod
                             )
                         }
                     },
@@ -490,135 +353,26 @@ fun AddTransactionDialog(
                         .testTag("save_transaction_button"),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (selectedType == TransactionType.EXPENSE) ExpenseRed else IncomeGreen
+                        containerColor = if (selectedType == TransactionType.EXPENSE) ZenithTheme.accentRed else ZenithTheme.accentGreen
                     )
                 ) {
-                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.White)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = if (selectedType == TransactionType.EXPENSE) "Save Expense" else "Save Income",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
+                        fontSize = 15.sp,
+                        color = Color.White
                     )
                 }
             }
         }
     }
 
-    // --- SCOPE SELECTOR MODAL ---
-    if (showScopeDropdown) {
-        Dialog(onDismissRequest = { showScopeDropdown = false }) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = SlateDarkSurface,
-                border = BorderStroke(1.dp, GlassBorderColor),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text("Select Scope", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Personal Option
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (selectedScope == FinanceScope.PERSONAL) EmeraldDarkPrimary.copy(alpha = 0.15f) else Color.Transparent,
-                        border = if (selectedScope == FinanceScope.PERSONAL) BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.4f)) else null,
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
-                            selectedScope = FinanceScope.PERSONAL
-                            showScopeDropdown = false
-                        }
-                    ) {
-                        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Person, contentDescription = null, tint = EmeraldDarkPrimary)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Personal Space", fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary, fontSize = 14.sp)
-                                Text("Private to your account only", fontSize = 11.sp, color = SlateDarkTextSecondary)
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Family Option
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (selectedScope == FinanceScope.FAMILY) Color(0xFF8B5CF6).copy(alpha = 0.15f) else Color.Transparent,
-                        border = if (selectedScope == FinanceScope.FAMILY) BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.4f)) else null,
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
-                            selectedScope = FinanceScope.FAMILY
-                            showScopeDropdown = false
-                        }
-                    ) {
-                        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Groups, contentDescription = null, tint = Color(0xFFC4B5FD))
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Family Ledger", fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary, fontSize = 14.sp)
-                                Text("Shared with $familyName members", fontSize = 11.sp, color = SlateDarkTextSecondary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // --- MEMBER SELECTOR MODAL ---
-    if (showMemberDropdown) {
-        Dialog(onDismissRequest = { showMemberDropdown = false }) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = SlateDarkSurface,
-                border = BorderStroke(1.dp, GlassBorderColor),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text("Select Member", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Self
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (selectedMemberId == null) EmeraldDarkPrimary.copy(alpha = 0.15f) else Color.Transparent,
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
-                            selectedMemberId = null
-                            showMemberDropdown = false
-                        }
-                    ) {
-                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Person, contentDescription = null, tint = EmeraldDarkPrimary)
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text("Me (${currentUserName.ifBlank { "You" }})", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
-                        }
-                    }
-
-                    familyMembers.forEach { member ->
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (selectedMemberId == member.userId) EmeraldDarkPrimary.copy(alpha = 0.15f) else Color.Transparent,
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
-                                selectedMemberId = member.userId
-                                showMemberDropdown = false
-                            }
-                        ) {
-                            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.AccountCircle, contentDescription = null, tint = GoldAccent)
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(member.name, fontSize = 14.sp, color = SlateDarkTextPrimary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // --- CATEGORY PICKER MODAL ---
     if (showCategoryPickerSheet) {
         ModalBottomSheet(
             onDismissRequest = { showCategoryPickerSheet = false },
-            containerColor = SlateDarkSurface,
+            containerColor = ZenithTheme.cardSurface,
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
         ) {
             Column(
@@ -631,7 +385,7 @@ fun AddTransactionDialog(
                     text = "Select Category",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
                 Spacer(modifier = Modifier.height(14.dp))
 
@@ -645,8 +399,8 @@ fun AddTransactionDialog(
                         val isSelected = selectedCategory == catName
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) EmeraldDarkPrimary.copy(alpha = 0.2f) else SlateDarkSurfaceVariant,
-                            border = BorderStroke(1.dp, if (isSelected) EmeraldDarkPrimary else GlassBorderColor),
+                            color = if (isSelected) ZenithTheme.accentGreen.copy(alpha = 0.18f) else ZenithTheme.cardVariantSurface,
+                            border = BorderStroke(1.dp, if (isSelected) ZenithTheme.accentGreen else ZenithTheme.borderColor),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
@@ -659,13 +413,13 @@ fun AddTransactionDialog(
                                 modifier = Modifier.padding(horizontal = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(icon, contentDescription = null, tint = if (isSelected) EmeraldDarkPrimary else SlateDarkTextSecondary, modifier = Modifier.size(18.dp))
+                                Icon(icon, contentDescription = null, tint = if (isSelected) ZenithTheme.accentGreen else ZenithTheme.textSecondary, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = catName,
                                     fontSize = 12.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) EmeraldDarkPrimary else SlateDarkTextPrimary,
+                                    color = if (isSelected) ZenithTheme.accentGreen else ZenithTheme.textPrimary,
                                     maxLines = 1
                                 )
                             }

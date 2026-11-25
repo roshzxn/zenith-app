@@ -1,6 +1,5 @@
 package com.zenith.app.ui.screens
 
-import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -8,15 +7,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.*
-import androidx.compose.material.icons.automirrored.outlined.*
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.filled.TrendingDown
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,29 +26,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.zenith.app.data.models.FamilyMemberEntity
-import com.zenith.app.data.models.FamilyRole
-import com.zenith.app.data.models.FinanceScope
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.ui.components.CleanCard
-import com.zenith.app.ui.components.GlassCard
 import com.zenith.app.ui.components.RollingCounterText
 import com.zenith.app.ui.components.TransactionDetailModal
 import com.zenith.app.ui.components.TransactionItemCard
-import com.zenith.app.ui.theme.*
+import com.zenith.app.ui.theme.ZenithTheme
 import com.zenith.app.ui.viewmodel.CashFlowUiState
-import com.zenith.app.ui.viewmodel.FamilyLedgerSettlementSummary
 import com.zenith.app.ui.viewmodel.SyncUiState
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import android.widget.Toast
-import androidx.compose.ui.platform.LocalContext
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -60,64 +48,38 @@ fun HomeScreen(
     totalIncome: Double,
     totalExpense: Double,
     netBalance: Double,
-    currentFinanceScope: FinanceScope,
-    onScopeChange: (FinanceScope) -> Unit,
     onOpenAddTransaction: () -> Unit,
     onOpenVoiceAssistant: () -> Unit,
     onOpenReceiptScanner: () -> Unit,
     onOpenUpiPay: () -> Unit = {},
     onOpenUpiScanner: () -> Unit = {},
-    familySettlementSummary: FamilyLedgerSettlementSummary = FamilyLedgerSettlementSummary(),
     onDeleteTransaction: (TransactionEntity) -> Unit,
-    onManageFamilyMembers: () -> Unit,
     onNavigateToActivity: () -> Unit,
     onNavigateToProfile: () -> Unit,
     onNavigateToBudgets: () -> Unit = {},
     onUpdateTransaction: ((TransactionEntity) -> Unit)? = null,
-    familyMembers: List<FamilyMemberEntity> = emptyList(),
-    familyName: String = "Family Vault",
-    inviteCode: String = "",
     currentUserName: String = "You",
     syncUiState: SyncUiState = SyncUiState.Idle,
     onSyncNow: (() -> Unit)? = null,
     onToggleHideBalance: () -> Unit = {}
 ) {
-    val context = LocalContext.current
     var selectedTransactionForDetails by remember { mutableStateOf<TransactionEntity?>(null) }
-    var selectedFamilyMemberFilter by remember { mutableStateOf<String?>(null) }
-    var selectedFamilyTypeFilter by remember { mutableStateOf<TransactionType?>(null) }
-    var familySubTab by remember { mutableIntStateOf(0) }
 
-    val isFamily = currentFinanceScope == FinanceScope.FAMILY
-
-    // Filter transactions if family member or transaction type is selected
-    val displayedTransactions = remember(state.transactions, selectedFamilyMemberFilter, selectedFamilyTypeFilter, familyMembers) {
-        state.transactions.filter { tx ->
-            val matchesMember = selectedFamilyMemberFilter == null ||
-                    tx.createdByUserId == selectedFamilyMemberFilter ||
-                    familyMembers.any { m ->
-                        m.userId == selectedFamilyMemberFilter &&
-                        (tx.createdByUserId.equals(m.name, ignoreCase = true) || tx.createdByUserId.equals(m.userId, ignoreCase = true))
-                    }
-            val matchesType = selectedFamilyTypeFilter == null || tx.type == selectedFamilyTypeFilter
-            matchesMember && matchesType
-        }
-    }
+    // Home always reflects allTransactions so Activity filters never alter the dashboard
+    val displayedTransactions = state.allTransactions
 
     // Dynamic Spending Insight
-    val spendingInsight = remember(state.transactions, totalExpense, totalIncome, isFamily) {
-        if (state.transactions.isEmpty()) {
-            if (isFamily) "Add family entries to see group financial insights."
-            else "Add a few transactions to unlock your spending insights."
+    val spendingInsight = remember(displayedTransactions, totalExpense, totalIncome) {
+        if (displayedTransactions.isEmpty()) {
+            "Add a few transactions to unlock your spending insights."
         } else {
-            val topCategory = state.transactions
+            val topCategory = displayedTransactions
                 .filter { it.type == TransactionType.EXPENSE }
                 .groupBy { it.category }
                 .maxByOrNull { entry -> entry.value.sumOf { it.amount } }
             if (topCategory != null && totalExpense > 0) {
                 val pct = ((topCategory.value.sumOf { it.amount } / totalExpense) * 100).toInt()
-                if (isFamily) "$pct% of total family spending is in ${topCategory.key}."
-                else "$pct% of your current spending is in ${topCategory.key}."
+                "$pct% of your current spending is in ${topCategory.key}."
             } else if (totalIncome > 0) {
                 val savingsRate = (((totalIncome - totalExpense) / totalIncome) * 100).toInt().coerceAtLeast(0)
                 "Net savings rate is $savingsRate% this cycle."
@@ -162,27 +124,11 @@ fun HomeScreen(
         state.autoPayReminders.filter { !it.isPaused && it.nextDueDateMillis <= sevenDaysLater }
     }
 
-    val groupedFamilyTransactions = remember(displayedTransactions) {
-        displayedTransactions.groupBy { tx ->
-            val date = Date(tx.dateMillis)
-            val now = Calendar.getInstance()
-            val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
-            val txCal = Calendar.getInstance().apply { time = date }
-            when {
-                now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
-                        now.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Today"
-                yesterday.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
-                        yesterday.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
-                else -> SimpleDateFormat("EEEE, dd MMMM yyyy", Locale.getDefault()).format(date)
-            }
-        }
-    }
-
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 144.dp)
+        contentPadding = PaddingValues(top = 14.dp, bottom = 116.dp)
     ) {
         // --- 1. MODERN FINTECH HEADER ---
         item {
@@ -193,7 +139,6 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left: Interactive User Profile Avatar + Greetings & Date
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -207,7 +152,6 @@ fun HomeScreen(
                         modifier = Modifier.size(42.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        // Gradient Ring Background
                         Box(
                             modifier = Modifier
                                 .size(42.dp)
@@ -215,10 +159,10 @@ fun HomeScreen(
                                 .background(
                                     Brush.sweepGradient(
                                         listOf(
-                                            EmeraldDarkPrimary,
-                                            PastelIndigo,
-                                            PastelCyan,
-                                            EmeraldDarkPrimary
+                                            ZenithTheme.accentGreen,
+                                            ZenithTheme.accentIndigo,
+                                            ZenithTheme.accentCyan,
+                                            ZenithTheme.accentGreen
                                         )
                                     )
                                 )
@@ -228,39 +172,29 @@ fun HomeScreen(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .clip(CircleShape)
-                                    .background(SlateDarkSurfaceVariant),
+                                    .background(ZenithTheme.cardVariantSurface),
                                 contentAlignment = Alignment.Center
                             ) {
-                                if (isFamily) {
-                                    Icon(
-                                        imageVector = Icons.Default.Group,
-                                        contentDescription = "Family",
-                                        tint = PastelCyan,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                } else {
-                                    Text(
-                                        text = userInitial,
-                                        fontSize = 17.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = Color.White
-                                    )
-                                }
+                                Text(
+                                    text = userInitial,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = ZenithTheme.textPrimary
+                                )
                             }
                         }
 
-                        // Live Sync Dot at bottom-right corner of avatar
                         val syncDotColor = when (syncUiState) {
-                            is SyncUiState.Syncing -> PastelCyan
-                            is SyncUiState.Success, is SyncUiState.Idle -> EmeraldDarkPrimary
-                            is SyncUiState.Error -> Color(0xFFF59E0B)
+                            is SyncUiState.Syncing -> ZenithTheme.accentCyan
+                            is SyncUiState.Success, is SyncUiState.Idle -> ZenithTheme.accentGreen
+                            is SyncUiState.Error -> ZenithTheme.accentAmber
                         }
                         Box(
                             modifier = Modifier
                                 .size(11.dp)
                                 .align(Alignment.BottomEnd)
                                 .clip(CircleShape)
-                                .background(SlateDarkSurface)
+                                .background(ZenithTheme.cardSurface)
                                 .padding(1.5.dp)
                         ) {
                             Box(
@@ -274,42 +208,40 @@ fun HomeScreen(
 
                     Spacer(modifier = Modifier.width(11.dp))
 
-                    Column(modifier = Modifier.weight(1f, fill = false)) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (isFamily) "Family Vault • $formattedTodayDate" else "$timeBasedGreeting • $formattedTodayDate",
+                            text = "$timeBasedGreeting • $formattedTodayDate",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = SlateDarkTextSecondary,
+                            color = ZenithTheme.textSecondary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = if (isFamily) "Family Ledger" else currentUserName,
-                            fontSize = 18.sp,
+                            text = currentUserName,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.ExtraBold,
                             letterSpacing = (-0.3).sp,
-                            color = SlateDarkTextPrimary,
+                            color = ZenithTheme.textPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
 
-                // Right: Quick Search + Live Sync Pill + Voice AI Pill
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Quick Search Button
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = GlassCardBgElevated,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
+                        color = ZenithTheme.cardSurface,
+                        border = BorderStroke(1.dp, ZenithTheme.borderColor),
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(34.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .clickable { onNavigateToActivity() }
                             .testTag("btn_header_search")
@@ -318,46 +250,38 @@ fun HomeScreen(
                             Icon(
                                 imageVector = Icons.Default.Search,
                                 contentDescription = "Search Transactions",
-                                tint = SlateDarkTextSecondary,
-                                modifier = Modifier.size(17.dp)
+                                tint = ZenithTheme.textSecondary,
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
 
-                    // Live Cloud Sync Pill
                     val isCurrentlySyncing = syncUiState is SyncUiState.Syncing
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = GlassCardBgElevated,
-                        border = androidx.compose.foundation.BorderStroke(
+                        color = ZenithTheme.cardSurface,
+                        border = BorderStroke(
                             1.dp,
-                            if (isCurrentlySyncing) PastelCyan.copy(alpha = 0.5f) else GlassBorderColor
+                            if (isCurrentlySyncing) ZenithTheme.accentCyan.copy(alpha = 0.5f) else ZenithTheme.borderColor
                         ),
                         modifier = Modifier
+                            .height(34.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .clickable { onSyncNow?.invoke() }
                             .testTag("btn_header_sync")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (isCurrentlySyncing) {
                                 Icon(
                                     imageVector = Icons.Default.Sync,
                                     contentDescription = "Syncing",
-                                    tint = PastelCyan,
+                                    tint = ZenithTheme.accentCyan,
                                     modifier = Modifier
                                         .size(14.dp)
                                         .rotate(spinAngle)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Syncing",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = PastelCyan,
-                                    maxLines = 1
                                 )
                             } else {
                                 Box(
@@ -365,49 +289,38 @@ fun HomeScreen(
                                         .size(7.dp)
                                         .clip(CircleShape)
                                         .background(
-                                            if (syncUiState is SyncUiState.Error) Color(0xFFF59E0B)
-                                            else EmeraldDarkPrimary
+                                            if (syncUiState is SyncUiState.Error) ZenithTheme.accentAmber
+                                            else ZenithTheme.accentGreen
                                         )
                                 )
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text(
-                                    text = if (syncUiState is SyncUiState.Error) "Offline" else "Synced",
+                                    text = if (syncUiState is SyncUiState.Error) "Offline" else "Sync",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextPrimary,
+                                    color = ZenithTheme.textPrimary,
                                     maxLines = 1
                                 )
                             }
                         }
                     }
 
-                    // Voice Entry Pill
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = PastelIndigoContainer,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, PastelIndigo.copy(alpha = 0.4f)),
+                        color = ZenithTheme.accentIndigo.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, ZenithTheme.accentIndigo.copy(alpha = 0.4f)),
                         modifier = Modifier
+                            .size(34.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .clickable { onOpenVoiceAssistant() }
                             .testTag("btn_voice_entry_header")
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Mic,
                                 contentDescription = "Voice Assistant",
-                                tint = PastelIndigo,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Voice",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary,
-                                maxLines = 1
+                                tint = ZenithTheme.accentIndigo,
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
@@ -417,1538 +330,531 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(14.dp))
         }
 
-        // --- 2. MODE SELECTOR (Personal vs Family Ledger) ---
+        // --- 2. HERO BALANCE CARD ---
         item {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = SlateDarkSurface.copy(alpha = 0.9f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
+            Card(
+                shape = RoundedCornerShape(26.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(46.dp)
+                    .testTag("net_balance_card")
             ) {
-                Row(
+                Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        .fillMaxWidth()
+                        .background(
+                            brush = ZenithTheme.heroGradient,
+                            shape = RoundedCornerShape(26.dp)
+                        )
+                        .border(1.dp, ZenithTheme.heroBorderColor, RoundedCornerShape(26.dp))
+                        .padding(22.dp)
                 ) {
-                    // Personal Segment
-                    val isPersonal = currentFinanceScope == FinanceScope.PERSONAL
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isPersonal) EmeraldDarkPrimary else Color.Transparent)
-                            .clickable { onScopeChange(FinanceScope.PERSONAL) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Person,
-                                contentDescription = null,
-                                tint = if (isPersonal) Color.White else SlateDarkTextSecondary,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                "Personal",
-                                fontSize = 13.sp,
-                                fontWeight = if (isPersonal) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isPersonal) Color.White else SlateDarkTextSecondary
-                            )
-                        }
-                    }
-
-                    // Family Ledger Segment
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isFamily) GoldAccent else Color.Transparent)
-                            .clickable { onScopeChange(FinanceScope.FAMILY) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Group,
-                                contentDescription = null,
-                                tint = if (isFamily) Color.Black else SlateDarkTextSecondary,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                "Family Ledger",
-                                fontSize = 13.sp,
-                                fontWeight = if (isFamily) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isFamily) Color.Black else SlateDarkTextSecondary
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-        }
-
-        // --- 3. PROPER UNIFIED FAMILY LEDGER (If Family Scope) ---
-        if (isFamily) {
-            // 1. Vault Header Banner & 1-Tap Invite Bar
-            item {
-                Card(
-                    shape = RoundedCornerShape(22.dp),
-                    colors = CardDefaults.cardColors(containerColor = SlateDarkSurface.copy(alpha = 0.9f)),
-                    border = BorderStroke(1.dp, GlassBorderColor),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(CircleShape)
-                                        .background(PastelCyan.copy(alpha = 0.18f)),
-                                    contentAlignment = Alignment.Center
+                                Text(
+                                    text = "TOTAL NET BALANCE",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.3.sp,
+                                    color = ZenithTheme.accentIndigo
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                IconButton(
+                                    onClick = onToggleHideBalance,
+                                    modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Group,
-                                        contentDescription = null,
-                                        tint = PastelCyan,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(
-                                        text = familyName,
-                                        fontSize = 17.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = SlateDarkTextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${familyMembers.size.coerceAtLeast(1)} Connected Members",
-                                        fontSize = 11.5.sp,
-                                        color = SlateDarkTextSecondary
+                                        imageVector = if (state.isBalanceHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = "Toggle Balance Privacy",
+                                        tint = ZenithTheme.accentIndigo.copy(alpha = 0.85f),
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
 
-                            TextButton(
-                                onClick = onManageFamilyMembers,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            if (displayedTransactions.isNotEmpty()) {
+                                val badgeColor = if (netBalance >= 0) ZenithTheme.accentGreen else ZenithTheme.accentRed
+                                Surface(
+                                    color = badgeColor.copy(alpha = 0.14f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.35f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (netBalance >= 0) Icons.AutoMirrored.Filled.TrendingUp else Icons.AutoMirrored.Filled.TrendingDown,
+                                            contentDescription = null,
+                                            tint = badgeColor,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = if (netBalance >= 0) "Surplus" else "Deficit",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = badgeColor
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        RollingCounterText(
+                            amount = netBalance,
+                            currencySymbol = state.currencySymbol,
+                            isMasked = state.isBalanceHidden,
+                            decimalPlaces = 2,
+                            fontSize = 34.sp,
+                            fontWeight = FontWeight.Black,
+                            color = ZenithTheme.textPrimary,
+                            letterSpacing = (-0.5).sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = ZenithTheme.cardSurface.copy(alpha = if (ZenithTheme.isDark) 0.72f else 0.90f),
+                                border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.PersonAdd, contentDescription = null, tint = PastelCyan, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(ZenithTheme.accentGreen.copy(alpha = 0.14f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ArrowDownward,
+                                            contentDescription = null,
+                                            tint = ZenithTheme.accentGreen,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f, fill = true)) {
+                                        Text(
+                                            "Income",
+                                            fontSize = 11.sp,
+                                            color = ZenithTheme.textSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        RollingCounterText(
+                                            amount = totalIncome,
+                                            currencySymbol = state.currencySymbol,
+                                            prefix = "+",
+                                            isMasked = state.isBalanceHidden,
+                                            decimalPlaces = 0,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = ZenithTheme.accentGreen,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = ZenithTheme.cardSurface.copy(alpha = if (ZenithTheme.isDark) 0.72f else 0.90f),
+                                border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(ZenithTheme.accentRed.copy(alpha = 0.14f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ArrowUpward,
+                                            contentDescription = null,
+                                            tint = ZenithTheme.accentRed,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f, fill = true)) {
+                                        Text(
+                                            "Spent",
+                                            fontSize = 11.sp,
+                                            color = ZenithTheme.textSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        RollingCounterText(
+                                            amount = totalExpense,
+                                            currencySymbol = state.currencySymbol,
+                                            prefix = "-",
+                                            isMasked = state.isBalanceHidden,
+                                            decimalPlaces = 0,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = ZenithTheme.accentRed,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // --- 3. QUICK ACTIONS HUB (4 Cards: Scan QR, UPI Pay, Receipt, Voice Entry) ---
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(62.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                QuickActionCard(
+                    icon = Icons.Default.QrCodeScanner,
+                    label = "Scan QR",
+                    accentColor = ZenithTheme.accentCyan,
+                    containerColor = ZenithTheme.accentCyan.copy(alpha = 0.14f),
+                    testTag = "btn_scan_upi_qr",
+                    modifier = Modifier.weight(1f),
+                    onClick = onOpenUpiScanner
+                )
+
+                QuickActionCard(
+                    icon = Icons.Default.Payment,
+                    label = "UPI Pay",
+                    accentColor = ZenithTheme.accentGreen,
+                    containerColor = ZenithTheme.accentGreen.copy(alpha = 0.14f),
+                    testTag = "btn_pay_upi",
+                    modifier = Modifier.weight(1f),
+                    onClick = onOpenUpiPay
+                )
+
+                QuickActionCard(
+                    icon = Icons.AutoMirrored.Filled.ReceiptLong,
+                    label = "Receipt",
+                    accentColor = ZenithTheme.accentAmber,
+                    containerColor = ZenithTheme.accentAmber.copy(alpha = 0.14f),
+                    testTag = "btn_scan_receipt",
+                    modifier = Modifier.weight(1f),
+                    onClick = onOpenReceiptScanner
+                )
+
+                QuickActionCard(
+                    icon = Icons.Default.Mic,
+                    label = "Voice Entry",
+                    accentColor = ZenithTheme.accentIndigo,
+                    containerColor = ZenithTheme.accentIndigo.copy(alpha = 0.14f),
+                    testTag = "btn_voice_entry",
+                    modifier = Modifier.weight(1f),
+                    onClick = onOpenVoiceAssistant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // --- 4. UPCOMING AUTO-PAY & BILLS SMART CARD ---
+        if (upcomingBills.isNotEmpty()) {
+            item {
+                val totalUpcomingAmt = upcomingBills.sumOf { it.amount }
+                val earliestBill = upcomingBills.minByOrNull { it.nextDueDateMillis }!!
+                val now = System.currentTimeMillis()
+                val diffDays = ((earliestBill.nextDueDateMillis - now) / (1000 * 60 * 60 * 24)).toInt()
+                val dueText = when {
+                    diffDays < 0 -> "Overdue"
+                    diffDays == 0 -> "Due today"
+                    diffDays == 1 -> "Due tomorrow"
+                    else -> "Due in $diffDays days"
+                }
+
+                CleanCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToBudgets() },
+                    backgroundColor = ZenithTheme.accentPurple.copy(alpha = 0.10f),
+                    borderColor = ZenithTheme.accentPurple.copy(alpha = 0.28f),
+                    contentPadding = PaddingValues(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(ZenithTheme.accentPurple.copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Schedule,
+                                    contentDescription = null,
+                                    tint = ZenithTheme.accentPurple,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "Upcoming Auto-Pay & Bills",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ZenithTheme.textPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    val dueBadgeColor = if (diffDays <= 1) ZenithTheme.accentRed else ZenithTheme.accentAmber
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = dueBadgeColor.copy(alpha = 0.16f)
+                                    ) {
+                                        Text(
+                                            text = dueText,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = dueBadgeColor,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(2.dp))
+
                                 Text(
-                                    text = "Manage",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = PastelCyan
+                                    text = "${earliestBill.title}${if (upcomingBills.size > 1) " + ${upcomingBills.size - 1} more" else ""} • Tap to view",
+                                    fontSize = 11.sp,
+                                    color = ZenithTheme.textSecondary
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Stylized Invite Code Pill
-                        val effectiveCode = inviteCode.ifBlank { "FAMILY-VAULT" }
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF0F172A),
-                            border = BorderStroke(1.dp, PastelCyan.copy(alpha = 0.25f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "INVITE: ",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = SlateDarkTextMuted,
-                                        letterSpacing = 1.sp
-                                    )
-                                    Text(
-                                        text = effectiveCode,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = PastelCyan,
-                                        letterSpacing = 1.5.sp
-                                    )
-                                }
-
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    IconButton(
-                                        onClick = {
-                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            val clip = ClipData.newPlainText("Family Invite Code", effectiveCode)
-                                            clipboard.setPrimaryClip(clip)
-                                            Toast.makeText(context, "Invite code copied to clipboard!", Toast.LENGTH_SHORT).show()
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = "Copy Code",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                    }
-
-                                    IconButton(
-                                        onClick = {
-                                            val sendIntent = Intent().apply {
-                                                action = Intent.ACTION_SEND
-                                                putExtra(Intent.EXTRA_TEXT, "Join our Family Vault on Zenith! Use invite code: $effectiveCode")
-                                                type = "text/plain"
-                                            }
-                                            context.startActivity(Intent.createChooser(sendIntent, "Share Invite Code"))
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Share,
-                                            contentDescription = "Share Code",
-                                            tint = PastelCyan,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                    }
-                                }
-                            }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = if (state.isBalanceHidden) "${state.currencySymbol}••••" else "${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalUpcomingAmt)}",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZenithTheme.accentPurple
+                            )
+                            Text(
+                                text = "Committed",
+                                fontSize = 10.sp,
+                                color = ZenithTheme.accentPurple.copy(alpha = 0.8f)
+                            )
                         }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
             }
+        }
 
-            // 2. Main Hero Vault Balance Card with Respect to Personal & Settlement Banner
-            item {
-                Card(
-                    shape = RoundedCornerShape(26.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("net_balance_card")
-                ) {
+        // --- 5. SPENDING INSIGHT CARD ---
+        item {
+            CleanCard(
+                modifier = Modifier.fillMaxWidth(),
+                backgroundColor = ZenithTheme.cardGlassBackground,
+                contentPadding = PaddingValues(14.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                brush = ZenithTheme.familyHeroGradient,
-                                shape = RoundedCornerShape(26.dp)
-                            )
-                            .border(
-                                1.dp,
-                                Brush.linearGradient(listOf(PastelCyan.copy(alpha = 0.5f), Color(0xFF818CF8).copy(alpha = 0.35f))),
-                                RoundedCornerShape(26.dp)
-                            )
-                            .padding(20.dp)
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(ZenithTheme.accentAmber.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "FAMILY VAULT NET BALANCE",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 1.2.sp,
-                                        color = PastelCyan
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    IconButton(
-                                        onClick = onToggleHideBalance,
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = if (state.isBalanceHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                            contentDescription = "Toggle Balance Privacy",
-                                            tint = PastelCyan.copy(alpha = 0.85f),
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                    }
-                                }
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = Color.White.copy(alpha = 0.08f),
-                                    border = BorderStroke(1.dp, GlassBorderColor)
-                                ) {
-                                    Text(
-                                        text = "${familyMembers.size.coerceAtLeast(1)} Connected Members",
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = SlateDarkTextSecondary,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            val famNet = familySettlementSummary.familyNetBalance
-                            RollingCounterText(
-                                amount = famNet,
-                                currencySymbol = state.currencySymbol,
-                                prefix = if (famNet > 0) "+" else "",
-                                isMasked = state.isBalanceHidden,
-                                decimalPlaces = 2,
-                                fontSize = 34.sp,
-                                fontWeight = FontWeight.Black,
-                                color = if (famNet >= 0) Color.White else PastelRose,
-                                letterSpacing = (-0.5).sp
-                            )
-
-                            Spacer(modifier = Modifier.height(14.dp))
-
-                            // Dual Shared Income & Shared Expense Metrics
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = EmeraldDarkContainer.copy(alpha = 0.5f),
-                                    border = BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.35f)),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .clip(CircleShape)
-                                                .background(EmeraldDarkPrimary.copy(alpha = 0.2f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.ArrowDownward,
-                                                contentDescription = "Family Income",
-                                                tint = PastelGreen,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Column {
-                                            Text("Group Income", fontSize = 10.sp, color = SlateDarkTextSecondary, maxLines = 1)
-                                            RollingCounterText(
-                                                amount = familySettlementSummary.familyTotalIncome,
-                                                currencySymbol = state.currencySymbol,
-                                                prefix = "+",
-                                                isMasked = state.isBalanceHidden,
-                                                decimalPlaces = 0,
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = PastelGreen
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Surface(
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = PastelRoseContainer.copy(alpha = 0.4f),
-                                    border = BorderStroke(1.dp, PastelRose.copy(alpha = 0.35f)),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .clip(CircleShape)
-                                                .background(PastelRose.copy(alpha = 0.2f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.ArrowUpward,
-                                                contentDescription = "Family Expense",
-                                                tint = PastelRose,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Column {
-                                            Text("Group Spends", fontSize = 10.sp, color = SlateDarkTextSecondary, maxLines = 1)
-                                            RollingCounterText(
-                                                amount = familySettlementSummary.familyTotalExpense,
-                                                currencySymbol = state.currencySymbol,
-                                                prefix = "-",
-                                                isMasked = state.isBalanceHidden,
-                                                decimalPlaces = 0,
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = PastelRose
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Family Group Savings & Health Indicator (Pure Shared Visibility - No Debt/Settlement)
-                            val famIncome = familySettlementSummary.familyTotalIncome
-                            val famExpense = familySettlementSummary.familyTotalExpense
-                            val savingsRate = if (famIncome > 0) {
-                                (((famIncome - famExpense) / famIncome) * 100).toInt().coerceAtLeast(0)
-                            } else 0
-
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = Color.White.copy(alpha = 0.06f),
-                                border = BorderStroke(1.dp, GlassBorderColor),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(32.dp)
-                                                .clip(CircleShape)
-                                                .background(
-                                                    if (famNet >= 0) EmeraldDarkPrimary.copy(alpha = 0.2f)
-                                                    else PastelRose.copy(alpha = 0.2f)
-                                                ),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = if (famNet >= 0) Icons.AutoMirrored.Filled.TrendingUp else Icons.AutoMirrored.Filled.TrendingDown,
-                                                contentDescription = null,
-                                                tint = if (famNet >= 0) PastelGreen else PastelRose,
-                                                modifier = Modifier.size(17.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Column {
-                                            Text(
-                                                text = if (famIncome > 0) "Family Savings Rate" else "Group Cash Flow Status",
-                                                fontSize = 11.sp,
-                                                color = SlateDarkTextSecondary
-                                            )
-                                            Text(
-                                                text = if (famIncome > 0) {
-                                                    "$savingsRate% of family income saved"
-                                                } else if (famExpense > 0) {
-                                                    "Tracking ${familyMembers.size.coerceAtLeast(1)} members' spending"
-                                                } else {
-                                                    "Ready for group expenses and income"
-                                                },
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (famNet >= 0) PastelGreen else PastelRose
-                                            )
-                                        }
-                                    }
-
-                                    Surface(
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = if (famNet >= 0) EmeraldDarkPrimary.copy(alpha = 0.2f) else PastelRose.copy(alpha = 0.2f),
-                                        border = BorderStroke(1.dp, if (famNet >= 0) EmeraldDarkPrimary.copy(alpha = 0.4f) else PastelRose.copy(alpha = 0.4f))
-                                    ) {
-                                        Text(
-                                            text = if (famNet >= 0) "Surplus" else "Deficit",
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (famNet >= 0) PastelGreen else PastelRose,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        Icon(
+                            imageVector = Icons.Default.Lightbulb,
+                            contentDescription = null,
+                            tint = ZenithTheme.accentAmber,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Smart Insight",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ZenithTheme.textPrimary
+                        )
+                        Text(
+                            text = spendingInsight,
+                            fontSize = 12.sp,
+                            color = ZenithTheme.textSecondary,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // 3. Quick Actions Hub (Direct UPI Redirect Scanner, UPI Pay, Receipt, Add Entry)
-            item {
+            Spacer(modifier = Modifier.height(18.dp))
+        }
+
+        // --- 6. RECENT TRANSACTIONS HEADER & LIST ---
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Recent Activity",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ZenithTheme.textPrimary
+                    )
+                    Text(
+                        text = "Tap any entry for full breakdown",
+                        fontSize = 11.sp,
+                        color = ZenithTheme.textSecondary
+                    )
+                }
+
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(62.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    QuickActionCard(
-                        icon = Icons.Default.QrCodeScanner,
-                        label = "Scan UPI",
-                        accentColor = PastelCyan,
-                        containerColor = PastelCyanContainer,
-                        testTag = "btn_scan_upi_qr",
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenUpiScanner
-                    )
-                    QuickActionCard(
-                        icon = Icons.Default.Payment,
-                        label = "UPI Pay",
-                        accentColor = PastelGreen,
-                        containerColor = PastelGreenContainer,
-                        testTag = "btn_pay_upi",
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenUpiPay
-                    )
-                    QuickActionCard(
-                        icon = Icons.AutoMirrored.Filled.ReceiptLong,
-                        label = "Receipt",
-                        accentColor = PastelAmber,
-                        containerColor = PastelAmberContainer,
-                        testTag = "btn_scan_receipt",
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenReceiptScanner
-                    )
-                    QuickActionCard(
-                        icon = Icons.Default.Add,
-                        label = "+ Add",
-                        accentColor = EmeraldDarkPrimary,
-                        containerColor = EmeraldDarkContainer,
-                        testTag = "btn_quick_add",
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenAddTransaction
-                    )
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            // 4. Family Members & Contributions Matrix
-            item {
-                CleanCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = SlateDarkSurface.copy(alpha = 0.85f),
-                    contentPadding = PaddingValues(16.dp)
-                ) {
-                    Column {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = ZenithTheme.solidGreen,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onOpenAddTransaction() }
+                            .testTag("fab_add_transaction")
+                    ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.Group,
-                                    contentDescription = null,
-                                    tint = PastelCyan,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "FAMILY SPENDING BY MEMBER",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp,
-                                    color = SlateDarkTextSecondary
-                                )
-                            }
-
-                            TextButton(
-                                onClick = onManageFamilyMembers,
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text(
-                                    text = "+ Manage",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = PastelCyan
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        if (familyMembers.isEmpty()) {
-                            Text(
-                                text = "No family members connected yet. Tap + Manage to invite your family.",
-                                fontSize = 12.sp,
-                                color = SlateDarkTextSecondary
-                            )
-                        } else {
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                familyMembers.forEach { member ->
-                                    val memberPaid = state.transactions
-                                        .filter { (it.createdByUserId == member.userId || it.createdByUserId == member.name) && it.type == TransactionType.EXPENSE }
-                                        .sumOf { it.amount }
-                                    val memberIncome = state.transactions
-                                        .filter { (it.createdByUserId == member.userId || it.createdByUserId == member.name) && it.type == TransactionType.INCOME }
-                                        .sumOf { it.amount }
-                                    val totalExp = familySettlementSummary.familyTotalExpense.coerceAtLeast(1.0)
-                                    val progress = (memberPaid / totalExp).toFloat().coerceIn(0f, 1f)
-                                    val spendPercentage = (progress * 100).toInt()
-
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(SlateDarkSurfaceVariant.copy(alpha = 0.5f))
-                                            .padding(10.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(28.dp)
-                                                        .clip(CircleShape)
-                                                        .background(PastelIndigoContainer),
-                                                    contentAlignment = Alignment.Center
-                                                ) {
-                                                    Text(
-                                                        text = member.name.take(1).uppercase().ifEmpty { "M" },
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = PastelIndigo
-                                                    )
-                                                }
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = member.name,
-                                                    fontSize = 13.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = SlateDarkTextPrimary
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Surface(
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    color = if (member.role == FamilyRole.ADMIN) PastelCyanContainer else Color.White.copy(alpha = 0.08f)
-                                                ) {
-                                                    Text(
-                                                        text = member.role.name,
-                                                        fontSize = 9.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = if (member.role == FamilyRole.ADMIN) PastelCyan else SlateDarkTextMuted,
-                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                    )
-                                                }
-                                            }
-
-                                            Column(horizontalAlignment = Alignment.End) {
-                                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    Text(
-                                                        text = "Spent: ${state.currencySymbol}${String.format(Locale.US, "%,.0f", memberPaid)}",
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = SlateDarkTextPrimary
-                                                    )
-                                                    if (memberIncome > 0) {
-                                                        Spacer(modifier = Modifier.width(6.dp))
-                                                        Text(
-                                                            text = "+${state.currencySymbol}${String.format(Locale.US, "%,.0f", memberIncome)}",
-                                                            fontSize = 11.sp,
-                                                            fontWeight = FontWeight.Bold,
-                                                            color = PastelGreen
-                                                        )
-                                                    }
-                                                }
-                                                Text(
-                                                    text = if (familySettlementSummary.familyTotalExpense > 0) "$spendPercentage% of group spending" else "No expenses yet",
-                                                    fontSize = 10.5.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    color = SlateDarkTextSecondary
-                                                )
-                                            }
-                                        }
-
-                                        Spacer(modifier = Modifier.height(6.dp))
-
-                                        LinearProgressIndicator(
-                                            progress = { progress },
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(5.dp)
-                                                .clip(RoundedCornerShape(3.dp)),
-                                            color = PastelCyan,
-                                            trackColor = Color.White.copy(alpha = 0.08f)
-                                        )
-                                    }
-                                }
-                            }
+                            Icon(Icons.Default.Add, contentDescription = "Add Transaction", tint = Color.White, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
                     }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
 
-            // 5. Family Spending Insight
-            item {
-                CleanCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = SlateDarkSurface.copy(alpha = 0.85f),
-                    contentPadding = PaddingValues(14.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(PastelAmberContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Lightbulb,
-                                contentDescription = null,
-                                tint = PastelAmber,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Family Spending Insight",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
-                            )
-                            Text(
-                                text = spendingInsight,
-                                fontSize = 12.sp,
-                                color = SlateDarkTextSecondary,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(18.dp))
-            }
-
-            // 6. Recent Family Activity Header & Member Filter Chips
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(
-                            text = "Recent Family Activity",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
-                        )
-                        Text(
-                            text = "Tap & hold any entry for full breakdown",
-                            fontSize = 11.sp,
-                            color = SlateDarkTextSecondary
-                        )
-                    }
-
-                    TextButton(onClick = onNavigateToActivity) {
+                    TextButton(
+                        onClick = onNavigateToActivity,
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
                         Text(
                             text = "See all →",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            color = PastelCyan
+                            color = ZenithTheme.accentGreen
                         )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Transaction Type Filter Chips (All, Expenses, Income)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedFamilyTypeFilter == null,
-                        onClick = { selectedFamilyTypeFilter = null },
-                        label = { Text("All Types", fontSize = 11.sp) }
-                    )
-                    FilterChip(
-                        selected = selectedFamilyTypeFilter == TransactionType.EXPENSE,
-                        onClick = {
-                            selectedFamilyTypeFilter = if (selectedFamilyTypeFilter == TransactionType.EXPENSE) null else TransactionType.EXPENSE
-                        },
-                        label = { Text("Expenses", fontSize = 11.sp) }
-                    )
-                    FilterChip(
-                        selected = selectedFamilyTypeFilter == TransactionType.INCOME,
-                        onClick = {
-                            selectedFamilyTypeFilter = if (selectedFamilyTypeFilter == TransactionType.INCOME) null else TransactionType.INCOME
-                        },
-                        label = { Text("Income", fontSize = 11.sp) }
-                    )
-                }
-
-                // Social Member Story Bubbles (Instagram/Social style member avatars)
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
-                ) {
-                    // "All Activity" Story Bubble
-                    item {
-                        val isAllSelected = selectedFamilyMemberFilter == null
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { selectedFamilyMemberFilter = null }
-                                .padding(2.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (isAllSelected) Brush.sweepGradient(listOf(PastelCyan, PastelIndigo, PastelCyan))
-                                        else Brush.linearGradient(listOf(GlassBorderColor, GlassBorderColor))
-                                    )
-                                    .padding(2.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .clip(CircleShape)
-                                        .background(if (isAllSelected) Color(0xFF0F172A) else SlateDarkSurface),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Groups,
-                                        contentDescription = "All",
-                                        tint = if (isAllSelected) PastelCyan else SlateDarkTextSecondary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "All Feed",
-                                fontSize = 10.5.sp,
-                                fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isAllSelected) PastelCyan else SlateDarkTextSecondary
-                            )
-                        }
-                    }
-
-                    // "+ Invite" Story Bubble
-                    item {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { onManageFamilyMembers() }
-                                .padding(2.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.Transparent)
-                                    .border(1.dp, PastelCyan.copy(alpha = 0.5f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PersonAdd,
-                                    contentDescription = "Invite",
-                                    tint = PastelCyan,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "+ Invite",
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = PastelCyan
-                            )
-                        }
-                    }
-
-                    // Individual Member Story Bubbles
-                    val memberGradients = listOf(
-                        Brush.linearGradient(listOf(Color(0xFF6366F1), Color(0xFF8B5CF6))),
-                        Brush.linearGradient(listOf(Color(0xFF06B6D4), Color(0xFF3B82F6))),
-                        Brush.linearGradient(listOf(Color(0xFFF59E0B), Color(0xFFEF4444))),
-                        Brush.linearGradient(listOf(Color(0xFF10B981), Color(0xFF059669))),
-                        Brush.linearGradient(listOf(Color(0xFFEC4899), Color(0xFF8B5CF6)))
-                    )
-
-                    items(familyMembers.size) { idx ->
-                        val member = familyMembers[idx]
-                        val isSelected = selectedFamilyMemberFilter == member.userId
-                        val grad = memberGradients[idx % memberGradients.size]
-                        val memberSpends = state.transactions
-                            .filter { (it.createdByUserId == member.userId || it.createdByUserId == member.name) && it.type == TransactionType.EXPENSE }
-                            .sumOf { it.amount }
-
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable {
-                                    selectedFamilyMemberFilter = if (isSelected) null else member.userId
-                                }
-                                .padding(2.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(if (isSelected) grad else Brush.linearGradient(listOf(GlassBorderColor, GlassBorderColor)))
-                                    .padding(2.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .clip(CircleShape)
-                                        .background(if (isSelected) Color(0xFF0F172A) else SlateDarkSurface),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = if (member.name.isNotBlank()) member.name.take(1).uppercase() else "M",
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = if (isSelected) Color.White else SlateDarkTextSecondary
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = member.name.take(7),
-                                fontSize = 10.5.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) Color.White else SlateDarkTextSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "${state.currencySymbol}${String.format(Locale.US, "%,.0f", memberSpends)}",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (memberSpends > 0) PastelRose else SlateDarkTextMuted
-                            )
-                        }
                     }
                 }
             }
 
-            if (displayedTransactions.isEmpty()) {
-                item {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = SlateDarkSurface.copy(alpha = 0.85f),
-                        border = BorderStroke(1.dp, GlassBorderColor),
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(PastelIndigoContainer)
-                                    .border(1.dp, PastelIndigo.copy(alpha = 0.35f), RoundedCornerShape(16.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
-                                    contentDescription = null,
-                                    tint = PastelIndigo,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "No family transactions yet",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
-                            )
-                            Text(
-                                text = "Add your first shared expense or income to start tracking with your family.",
-                                fontSize = 12.sp,
-                                color = SlateDarkTextSecondary,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
-                            )
-                            Button(
-                                onClick = onOpenAddTransaction,
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary),
-                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Add Transaction", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            }
-                        }
-                    }
-                }
-            } else {
-                groupedFamilyTransactions.forEach { (dateHeader, txList) ->
-                    item(key = "family_header_$dateHeader") {
-                        val dayExpense = txList.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 14.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = dateHeader,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextSecondary,
-                                letterSpacing = 0.5.sp
-                            )
-                            if (dayExpense > 0) {
-                                Text(
-                                    text = "Spent: -${state.currencySymbol}${String.format(Locale.US, "%,.0f", dayExpense)}",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = PastelRose
-                                )
-                            }
-                        }
-                    }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
 
-                    items(txList, key = { "family_tx_${it.id}" }) { tx ->
-                        val memberName = familyMembers.firstOrNull {
-                            it.userId == tx.createdByUserId || it.name.equals(tx.createdByUserId, ignoreCase = true)
-                        }?.name ?: tx.createdByUserId?.takeIf { !it.contains("-") && it != "local_user_1" } ?: "Member"
-                        TransactionItemCard(
-                            transaction = tx,
-                            currencySymbol = state.currencySymbol,
-                            creatorName = memberName,
-                            onClick = { selectedTransactionForDetails = it },
-                            onLongClick = { selectedTransactionForDetails = it },
-                            modifier = Modifier.animateItem()
+        if (displayedTransactions.isEmpty()) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = ZenithTheme.cardGlassBackground,
+                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(ZenithTheme.accentIndigo.copy(alpha = 0.14f))
+                                .border(1.dp, ZenithTheme.accentIndigo.copy(alpha = 0.35f), RoundedCornerShape(16.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
+                                contentDescription = null,
+                                tint = ZenithTheme.accentIndigo,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "No transactions yet",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ZenithTheme.textPrimary
                         )
+                        Text(
+                            text = "Track your income, daily spends, or scan a UPI QR code to get started.",
+                            fontSize = 12.sp,
+                            color = ZenithTheme.textSecondary,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
+                        )
+                        Button(
+                            onClick = onOpenAddTransaction,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Add Transaction", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                        }
                     }
                 }
             }
         } else {
-            // ==========================================
-            // PERSONAL FINANCE DASHBOARD (isFamily == false)
-            // ==========================================
-            item {
-                Card(
-                    shape = RoundedCornerShape(26.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("net_balance_card")
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                brush = ZenithTheme.heroGradient,
-                                shape = RoundedCornerShape(26.dp)
-                            )
-                            .border(1.dp, GlassBorderColor, RoundedCornerShape(26.dp))
-                            .padding(22.dp)
-                    ) {
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "TOTAL NET BALANCE",
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 1.3.sp,
-                                        color = PastelIndigo
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    IconButton(
-                                        onClick = onToggleHideBalance,
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = if (state.isBalanceHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                            contentDescription = "Toggle Balance Privacy",
-                                            tint = PastelIndigo.copy(alpha = 0.85f),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                }
-
-                                if (state.transactions.isNotEmpty()) {
-                                    Surface(
-                                        color = if (netBalance >= 0) PastelGreenContainer else PastelRoseContainer,
-                                        shape = RoundedCornerShape(10.dp),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, if (netBalance >= 0) PastelGreen.copy(alpha = 0.35f) else PastelRose.copy(alpha = 0.35f))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = if (netBalance >= 0) Icons.AutoMirrored.Filled.TrendingUp else Icons.AutoMirrored.Filled.TrendingDown,
-                                                contentDescription = null,
-                                                tint = if (netBalance >= 0) PastelGreen else PastelRose,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = if (netBalance >= 0) "Surplus" else "Deficit",
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (netBalance >= 0) PastelGreen else PastelRose
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            RollingCounterText(
-                                amount = netBalance,
-                                currencySymbol = state.currencySymbol,
-                                isMasked = state.isBalanceHidden,
-                                decimalPlaces = 2,
-                                fontSize = 34.sp,
-                                fontWeight = FontWeight.Black,
-                                color = SlateDarkTextPrimary,
-                                letterSpacing = (-0.5).sp
-                            )
-
-                            Spacer(modifier = Modifier.height(18.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = SlateDarkSurface.copy(alpha = 0.7f),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(PastelGreenContainer),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                Icons.Default.ArrowDownward,
-                                                contentDescription = null,
-                                                tint = PastelGreen,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Column(modifier = Modifier.weight(1f, fill = false)) {
-                                            Text(
-                                                "Income",
-                                                fontSize = 11.sp,
-                                                color = SlateDarkTextSecondary,
-                                                maxLines = 1,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                            )
-                                            RollingCounterText(
-                                                amount = totalIncome,
-                                                currencySymbol = state.currencySymbol,
-                                                prefix = "+",
-                                                isMasked = state.isBalanceHidden,
-                                                decimalPlaces = 0,
-                                                fontSize = 14.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = PastelGreen
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = SlateDarkSurface.copy(alpha = 0.7f),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(PastelRoseContainer),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                Icons.Default.ArrowUpward,
-                                                contentDescription = null,
-                                                tint = PastelRose,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Column(modifier = Modifier.weight(1f, fill = false)) {
-                                            Text(
-                                                "Spent",
-                                                fontSize = 11.sp,
-                                                color = SlateDarkTextSecondary,
-                                                maxLines = 1,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                            )
-                                            RollingCounterText(
-                                                amount = totalExpense,
-                                                currencySymbol = state.currencySymbol,
-                                                prefix = "-",
-                                                isMasked = state.isBalanceHidden,
-                                                decimalPlaces = 0,
-                                                fontSize = 14.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = PastelRose
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            // Quick Actions Hub (4 Cards: Scan QR, UPI Pay, Receipt, Voice Entry)
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(62.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    QuickActionCard(
-                        icon = Icons.Default.QrCodeScanner,
-                        label = "Scan QR",
-                        accentColor = PastelCyan,
-                        containerColor = PastelCyanContainer,
-                        testTag = "btn_scan_upi_qr",
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenUpiScanner
-                    )
-
-                    QuickActionCard(
-                        icon = Icons.Default.Payment,
-                        label = "UPI Pay",
-                        accentColor = PastelGreen,
-                        containerColor = PastelGreenContainer,
-                        testTag = "btn_pay_upi",
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenUpiPay
-                    )
-
-                    QuickActionCard(
-                        icon = Icons.AutoMirrored.Filled.ReceiptLong,
-                        label = "Receipt",
-                        accentColor = PastelAmber,
-                        containerColor = PastelAmberContainer,
-                        testTag = "btn_scan_receipt",
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenReceiptScanner
-                    )
-
-                    QuickActionCard(
-                        icon = Icons.Default.Mic,
-                        label = "Voice Entry",
-                        accentColor = PastelIndigo,
-                        containerColor = PastelIndigoContainer,
-                        testTag = "btn_voice_entry",
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenVoiceAssistant
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            // Upcoming Auto-Pay & Bills Smart Card (shown when bills due within 7 days)
-            if (upcomingBills.isNotEmpty()) {
-                item {
-                    val totalUpcomingAmt = upcomingBills.sumOf { it.amount }
-                    val earliestBill = upcomingBills.minByOrNull { it.nextDueDateMillis }!!
-                    val now = System.currentTimeMillis()
-                    val diffDays = ((earliestBill.nextDueDateMillis - now) / (1000 * 60 * 60 * 24)).toInt()
-                    val dueText = when {
-                        diffDays < 0 -> "Overdue ⚠️"
-                        diffDays == 0 -> "Due today 🔔"
-                        diffDays == 1 -> "Due tomorrow"
-                        else -> "Due in $diffDays days"
-                    }
-
-                    CleanCard(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onNavigateToBudgets() },
-                        backgroundColor = Color(0xFF8B5CF6).copy(alpha = 0.12f),
-                        contentPadding = PaddingValues(14.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(Color(0xFF8B5CF6).copy(alpha = 0.25f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Schedule,
-                                        contentDescription = null,
-                                        tint = Color(0xFFC4B5FD),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(12.dp))
-
-                                Column {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = "Upcoming Auto-Pay & Bills",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = SlateDarkTextPrimary
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Surface(
-                                            shape = RoundedCornerShape(6.dp),
-                                            color = if (diffDays <= 1) ExpenseRed.copy(alpha = 0.2f) else PastelAmber.copy(alpha = 0.2f)
-                                        ) {
-                                            Text(
-                                                text = dueText,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (diffDays <= 1) ExpenseRed else PastelAmber,
-                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                            )
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(2.dp))
-
-                                    Text(
-                                        text = "${earliestBill.title}${if (upcomingBills.size > 1) " + ${upcomingBills.size - 1} more" else ""} • Tap to view",
-                                        fontSize = 11.sp,
-                                        color = SlateDarkTextSecondary
-                                    )
-                                }
-                            }
-
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    text = "${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalUpcomingAmt)}",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFE9D5FF)
-                                )
-                                Text(
-                                    text = "Committed",
-                                    fontSize = 10.sp,
-                                    color = Color(0xFFC4B5FD)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                }
-            }
-
-            // Spending Insight Card
-            item {
-                CleanCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = SlateDarkSurface.copy(alpha = 0.85f),
-                    contentPadding = PaddingValues(14.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(PastelAmberContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Lightbulb,
-                                contentDescription = null,
-                                tint = PastelAmber,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Smart Insight",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
-                            )
-                            Text(
-                                text = spendingInsight,
-                                fontSize = 12.sp,
-                                color = SlateDarkTextSecondary,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-            }
-
-            // Recent Transactions Header
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(
-                            text = "Recent Activity",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
-                        )
-                        Text(
-                            text = "Tap & hold any entry for full breakdown",
-                            fontSize = 11.sp,
-                            color = SlateDarkTextSecondary
-                        )
-                    }
-
-                    TextButton(onClick = onNavigateToActivity) {
-                        Text(
-                            text = "See all →",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = EmeraldDarkPrimary
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            // Recent Transactions List
-            if (displayedTransactions.isEmpty()) {
-                item {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = SlateDarkSurface.copy(alpha = 0.85f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(PastelIndigoContainer)
-                                    .border(1.dp, PastelIndigo.copy(alpha = 0.35f), RoundedCornerShape(16.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
-                                    contentDescription = null,
-                                    tint = PastelIndigo,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "No transactions yet",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
-                            )
-                            Text(
-                                text = "Track your income, daily spends, or scan a UPI QR code to get started.",
-                                fontSize = 12.sp,
-                                color = SlateDarkTextSecondary,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
-                            )
-                            Button(
-                                onClick = onOpenAddTransaction,
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary),
-                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Add Transaction", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            }
-                        }
-                    }
-                }
-            } else {
-                items(displayedTransactions.take(6), key = { "recent_${it.id}" }) { tx ->
-                    TransactionItemCard(
-                        transaction = tx,
-                        currencySymbol = state.currencySymbol,
-                        creatorName = null,
-                        onClick = { selectedTransactionForDetails = it },
-                        onLongClick = { selectedTransactionForDetails = it },
-                        modifier = Modifier.animateItem()
-                    )
-                }
+            items(displayedTransactions.take(6), key = { "recent_${it.id}" }) { tx ->
+                TransactionItemCard(
+                    transaction = tx,
+                    currencySymbol = state.currencySymbol,
+                    isMasked = state.isBalanceHidden,
+                    onClick = { selectedTransactionForDetails = it },
+                    onLongClick = { selectedTransactionForDetails = it },
+                    modifier = Modifier.animateItem()
+                )
             }
         }
     }
 
-    // --- FULL TRANSACTION DETAIL MODAL ON TAP & HOLD ---
     selectedTransactionForDetails?.let { tx ->
-        val memberName = familyMembers.firstOrNull { it.userId == tx.createdByUserId }?.name
         TransactionDetailModal(
             transaction = tx,
             currencySymbol = state.currencySymbol,
@@ -1960,8 +866,7 @@ fun HomeScreen(
             onUpdate = { updated ->
                 onUpdateTransaction?.invoke(updated)
                 selectedTransactionForDetails = null
-            },
-            creatorName = memberName
+            }
         )
     }
 }
@@ -1979,8 +884,8 @@ fun QuickActionCard(
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = SlateDarkSurface.copy(alpha = 0.9f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
+        color = ZenithTheme.cardSurface,
+        border = BorderStroke(1.dp, ZenithTheme.borderColor),
         modifier = modifier
             .fillMaxHeight()
             .clip(RoundedCornerShape(16.dp))
@@ -2016,7 +921,7 @@ fun QuickActionCard(
                 text = label,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = SlateDarkTextPrimary,
+                color = ZenithTheme.textPrimary,
                 maxLines = 1
             )
         }
@@ -2029,14 +934,14 @@ fun GlassActionButton(
     contentDescription: String? = null,
     label: String? = null,
     modifier: Modifier = Modifier,
-    accentColor: Color = EmeraldDarkPrimary,
+    accentColor: Color = ZenithTheme.accentGreen,
     onClick: () -> Unit
 ) {
     val description = contentDescription ?: label
     Surface(
         shape = CircleShape,
-        color = GlassCardBg,
-        border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
+        color = ZenithTheme.glassCardBg,
+        border = BorderStroke(1.dp, ZenithTheme.borderColor),
         modifier = modifier
             .fillMaxHeight()
             .clickable { onClick() }

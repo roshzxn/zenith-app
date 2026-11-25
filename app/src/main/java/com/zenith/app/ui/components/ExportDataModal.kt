@@ -1,9 +1,7 @@
 package com.zenith.app.ui.components
 
-import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -11,10 +9,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.*
-import androidx.compose.material.icons.automirrored.outlined.*
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.outlined.Launch
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,10 +26,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.zenith.app.data.export.*
-import com.zenith.app.data.models.FinanceScope
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
-import com.zenith.app.ui.theme.*
+import com.zenith.app.ui.theme.ZenithTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -47,23 +44,22 @@ fun ExportDataModal(
     var selectedFormat by remember { mutableStateOf(ExportFormat.PDF) }
     var selectedDateFilter by remember { mutableStateOf(DateFilterType.THIS_MONTH) }
     var selectedTypeFilter by remember { mutableStateOf<TransactionType?>(null) }
-    var selectedScopeFilter by remember { mutableStateOf<FinanceScope?>(null) }
 
     var incTransactions by remember { mutableStateOf(true) }
     var incCategories by remember { mutableStateOf(true) }
     var incNotes by remember { mutableStateOf(true) }
     var incPaymentMethods by remember { mutableStateOf(true) }
-    var incBudgetSummary by remember { mutableStateOf(true) }
+    val incBudgetSummary = true
 
     var isGenerating by remember { mutableStateOf(false) }
     var exportResult by remember { mutableStateOf<ExportResult?>(null) }
 
-    val filteredCount = remember(transactions, selectedDateFilter, selectedTypeFilter, selectedScopeFilter) {
+    val filteredCount = remember(transactions, selectedDateFilter, selectedTypeFilter) {
         val options = ExportOptions(
             format = selectedFormat,
             dateFilter = selectedDateFilter,
             typeFilter = selectedTypeFilter,
-            scopeFilter = selectedScopeFilter
+            scopeFilter = null
         )
         ExportImportService.filterTransactions(transactions, options).size
     }
@@ -71,8 +67,8 @@ fun ExportDataModal(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 2.dp)
@@ -83,7 +79,6 @@ fun ExportDataModal(
                     .padding(22.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -94,29 +89,33 @@ fun ExportDataModal(
                             text = "Export Your Data",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
                         Text(
                             text = "Download your Zenith financial activity.",
                             fontSize = 12.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                     }
 
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp).testTag("close_export_modal")) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SlateDarkTextSecondary)
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("close_export_modal")
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = ZenithTheme.textSecondary)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (exportResult == null) {
-                    // --- 1. EXPORT FORMAT CARDS ---
                     Text(
                         text = "EXPORT FORMAT",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         letterSpacing = 1.sp
                     )
 
@@ -131,7 +130,7 @@ fun ExportDataModal(
                             subtitle = "Visual Report",
                             icon = Icons.Default.PictureAsPdf,
                             isSelected = selectedFormat == ExportFormat.PDF,
-                            accentColor = ExpenseRed,
+                            accentColor = ZenithTheme.accentRed,
                             modifier = Modifier.weight(1f),
                             onClick = { selectedFormat = ExportFormat.PDF }
                         )
@@ -141,7 +140,7 @@ fun ExportDataModal(
                             subtitle = "Sheets / Excel",
                             icon = Icons.Default.TableChart,
                             isSelected = selectedFormat == ExportFormat.CSV,
-                            accentColor = EmeraldDarkPrimary,
+                            accentColor = ZenithTheme.accentGreen,
                             modifier = Modifier.weight(1f),
                             onClick = { selectedFormat = ExportFormat.CSV }
                         )
@@ -158,7 +157,7 @@ fun ExportDataModal(
                             subtitle = "Spreadsheet",
                             icon = Icons.AutoMirrored.Filled.InsertDriveFile,
                             isSelected = selectedFormat == ExportFormat.EXCEL,
-                            accentColor = IncomeGreen,
+                            accentColor = ZenithTheme.accentCyan,
                             modifier = Modifier.weight(1f),
                             onClick = { selectedFormat = ExportFormat.EXCEL }
                         )
@@ -168,7 +167,7 @@ fun ExportDataModal(
                             subtitle = "Full Backup",
                             icon = Icons.Default.Code,
                             isSelected = selectedFormat == ExportFormat.JSON,
-                            accentColor = GoldAccent,
+                            accentColor = ZenithTheme.accentAmber,
                             modifier = Modifier.weight(1f),
                             onClick = { selectedFormat = ExportFormat.JSON }
                         )
@@ -176,12 +175,11 @@ fun ExportDataModal(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // --- 2. DATE RANGE SELECTION ---
                     Text(
                         text = "DATE RANGE",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         letterSpacing = 1.sp
                     )
 
@@ -203,64 +201,33 @@ fun ExportDataModal(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // --- 3. TRANSACTION TYPE & ACCOUNT FILTERS ---
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Type", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = SlateDarkTextSecondary)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                FilterChip(
-                                    selected = selectedTypeFilter == null,
-                                    onClick = { selectedTypeFilter = null },
-                                    label = { Text("All", fontSize = 10.sp) }
-                                )
-                                FilterChip(
-                                    selected = selectedTypeFilter == TransactionType.EXPENSE,
-                                    onClick = { selectedTypeFilter = TransactionType.EXPENSE },
-                                    label = { Text("Expense", fontSize = 10.sp) }
-                                )
-                                FilterChip(
-                                    selected = selectedTypeFilter == TransactionType.INCOME,
-                                    onClick = { selectedTypeFilter = TransactionType.INCOME },
-                                    label = { Text("Income", fontSize = 10.sp) }
-                                )
-                            }
-                        }
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Account", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = SlateDarkTextSecondary)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                FilterChip(
-                                    selected = selectedScopeFilter == null,
-                                    onClick = { selectedScopeFilter = null },
-                                    label = { Text("All", fontSize = 10.sp) }
-                                )
-                                FilterChip(
-                                    selected = selectedScopeFilter == FinanceScope.PERSONAL,
-                                    onClick = { selectedScopeFilter = FinanceScope.PERSONAL },
-                                    label = { Text("Personal", fontSize = 10.sp) }
-                                )
-                                FilterChip(
-                                    selected = selectedScopeFilter == FinanceScope.FAMILY,
-                                    onClick = { selectedScopeFilter = FinanceScope.FAMILY },
-                                    label = { Text("Family", fontSize = 10.sp) }
-                                )
-                            }
-                        }
+                    Text("Type Filter", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textSecondary)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = selectedTypeFilter == null,
+                            onClick = { selectedTypeFilter = null },
+                            label = { Text("All", fontSize = 11.sp) }
+                        )
+                        FilterChip(
+                            selected = selectedTypeFilter == TransactionType.EXPENSE,
+                            onClick = { selectedTypeFilter = TransactionType.EXPENSE },
+                            label = { Text("Expense", fontSize = 11.sp) }
+                        )
+                        FilterChip(
+                            selected = selectedTypeFilter == TransactionType.INCOME,
+                            onClick = { selectedTypeFilter = TransactionType.INCOME },
+                            label = { Text("Income", fontSize = 11.sp) }
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // --- 4. INCLUDE DATA CHECKBOXES ---
                     Text(
                         text = "INCLUDE DATA",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         letterSpacing = 1.sp
                     )
 
@@ -283,41 +250,39 @@ fun ExportDataModal(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Security Notice
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = GoalAmber.copy(alpha = 0.1f),
-                        border = BorderStroke(1.dp, GoalAmber.copy(alpha = 0.3f)),
+                        color = ZenithTheme.accentAmber.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, ZenithTheme.accentAmber.copy(alpha = 0.3f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier.padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Security, contentDescription = null, tint = GoalAmber, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Security, contentDescription = null, tint = ZenithTheme.accentAmber, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "Exported files contain sensitive financial information. Store them securely.",
                                 fontSize = 11.sp,
-                                color = GoalAmber
+                                color = ZenithTheme.accentAmber
                             )
                         }
                     }
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Export Primary Button
                     Button(
                         onClick = {
                             coroutineScope.launch {
                                 isGenerating = true
-                                delay(400) // Brief animation delay
+                                delay(300)
 
                                 val options = ExportOptions(
                                     format = selectedFormat,
                                     dateFilter = selectedDateFilter,
                                     typeFilter = selectedTypeFilter,
-                                    scopeFilter = selectedScopeFilter,
+                                    scopeFilter = null,
                                     includeCategories = incCategories,
                                     includeNotes = incNotes,
                                     includePaymentMethods = incPaymentMethods,
@@ -335,23 +300,25 @@ fun ExportDataModal(
                                 isGenerating = false
                             }
                         },
-                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("btn_trigger_export"),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("btn_trigger_export"),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary),
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
                         enabled = !isGenerating
                     ) {
                         if (isGenerating) {
                             CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Generating File...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text("Generating File...", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
                         } else {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.White)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Export $filteredCount Records", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text("Export $filteredCount Records", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
                         }
                     }
                 } else {
-                    // --- SUCCESS VIEW ---
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally
@@ -359,7 +326,7 @@ fun ExportDataModal(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = "Success",
-                            tint = IncomeGreen,
+                            tint = ZenithTheme.accentGreen,
                             modifier = Modifier.size(54.dp)
                         )
 
@@ -369,22 +336,21 @@ fun ExportDataModal(
                             text = "Export Complete",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
 
                         Text(
                             text = "Your Zenith transaction data has been exported successfully.",
                             fontSize = 12.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // File Summary Card
                         Surface(
                             shape = RoundedCornerShape(14.dp),
-                            color = SlateDarkSurfaceVariant,
-                            border = BorderStroke(1.dp, GlassBorderColor),
+                            color = ZenithTheme.cardVariantSurface,
+                            border = BorderStroke(1.dp, ZenithTheme.borderColor),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
@@ -392,61 +358,62 @@ fun ExportDataModal(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("File Name", fontSize = 11.sp, color = SlateDarkTextSecondary)
-                                    Text(exportResult?.fileName ?: "", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
+                                    Text("File Name", fontSize = 11.sp, color = ZenithTheme.textSecondary)
+                                    Text(exportResult?.fileName ?: "", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
                                 }
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Format", fontSize = 11.sp, color = SlateDarkTextSecondary)
-                                    Text(exportResult?.fileType ?: "", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = GoldAccent)
+                                    Text("Format", fontSize = 11.sp, color = ZenithTheme.textSecondary)
+                                    Text(exportResult?.fileType ?: "", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.accentAmber)
                                 }
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Records Included", fontSize = 11.sp, color = SlateDarkTextSecondary)
-                                    Text("${exportResult?.transactionCount ?: 0} transactions", fontSize = 11.sp, color = SlateDarkTextPrimary)
+                                    Text("Records Included", fontSize = 11.sp, color = ZenithTheme.textSecondary)
+                                    Text("${exportResult?.transactionCount ?: 0} transactions", fontSize = 11.sp, color = ZenithTheme.textPrimary)
                                 }
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("File Size", fontSize = 11.sp, color = SlateDarkTextSecondary)
-                                    Text(exportResult?.fileSizeFormatted ?: "", fontSize = 11.sp, color = SlateDarkTextPrimary)
+                                    Text("File Size", fontSize = 11.sp, color = ZenithTheme.textSecondary)
+                                    Text(exportResult?.fileSizeFormatted ?: "", fontSize = 11.sp, color = ZenithTheme.textPrimary)
                                 }
                             }
                         }
 
                         Spacer(modifier = Modifier.height(20.dp))
 
-                        // Actions: [Share], [Open], [Export Again]
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Button(
-                                onClick = {
-                                    exportResult?.let { ExportImportService.shareFile(context, it) }
-                                },
-                                modifier = Modifier.weight(1f).height(44.dp).testTag("btn_share_export"),
+                                onClick = { exportResult?.let { ExportImportService.shareFile(context, it) } },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("btn_share_export"),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                                colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                             ) {
-                                Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Share", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text("Share", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
                             }
 
                             OutlinedButton(
-                                onClick = {
-                                    exportResult?.let { ExportImportService.openFile(context, it) }
-                                },
-                                modifier = Modifier.weight(1f).height(44.dp).testTag("btn_open_export"),
+                                onClick = { exportResult?.let { ExportImportService.openFile(context, it) } },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("btn_open_export"),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Icon(Icons.AutoMirrored.Outlined.Launch, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -461,7 +428,7 @@ fun ExportDataModal(
                             onClick = { exportResult = null },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Export Another File", color = SlateDarkTextSecondary, fontSize = 13.sp)
+                            Text("Export Another File", color = ZenithTheme.textSecondary, fontSize = 13.sp)
                         }
                     }
                 }
@@ -482,8 +449,8 @@ private fun FormatCard(
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = if (isSelected) accentColor.copy(alpha = 0.15f) else SlateDarkSurfaceVariant,
-        border = BorderStroke(1.5.dp, if (isSelected) accentColor else GlassBorderColor),
+        color = if (isSelected) accentColor.copy(alpha = 0.15f) else ZenithTheme.cardVariantSurface,
+        border = BorderStroke(1.5.dp, if (isSelected) accentColor else ZenithTheme.borderColor),
         modifier = modifier
             .height(60.dp)
             .clickable { onClick() }
@@ -496,13 +463,13 @@ private fun FormatCard(
                 modifier = Modifier
                     .size(34.dp)
                     .clip(CircleShape)
-                    .background(if (isSelected) accentColor else Color.White.copy(alpha = 0.05f)),
+                    .background(if (isSelected) accentColor else ZenithTheme.borderColor.copy(alpha = 0.25f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = if (isSelected) Color.White else SlateDarkTextSecondary,
+                    tint = if (isSelected) Color.White else ZenithTheme.textSecondary,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -514,12 +481,12 @@ private fun FormatCard(
                     text = title,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (isSelected) SlateDarkTextPrimary else SlateDarkTextSecondary
+                    color = if (isSelected) ZenithTheme.textPrimary else ZenithTheme.textSecondary
                 )
                 Text(
                     text = subtitle,
                     fontSize = 10.sp,
-                    color = SlateDarkTextMuted
+                    color = ZenithTheme.textMuted
                 )
             }
         }
@@ -530,16 +497,18 @@ private fun FormatCard(
 private fun IncludeCheckbox(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.clickable { onCheckedChange(!checked) }.padding(vertical = 4.dp)
+        modifier = Modifier
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 4.dp)
     ) {
         Checkbox(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = CheckboxDefaults.colors(
-                checkedColor = EmeraldDarkPrimary,
-                uncheckedColor = SlateDarkTextSecondary
+                checkedColor = ZenithTheme.accentGreen,
+                uncheckedColor = ZenithTheme.textSecondary
             )
         )
-        Text(text = label, fontSize = 12.sp, color = SlateDarkTextPrimary)
+        Text(text = label, fontSize = 12.sp, color = ZenithTheme.textPrimary)
     }
 }

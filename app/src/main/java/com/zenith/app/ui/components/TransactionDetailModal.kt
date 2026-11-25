@@ -53,6 +53,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.zenith.app.data.database.CashFlowDatabase
 import com.zenith.app.data.models.*
+import com.zenith.app.data.util.CategoryIconHelper
 import com.zenith.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -65,8 +66,7 @@ fun TransactionDetailModal(
     currencySymbol: String,
     onDismiss: () -> Unit,
     onDelete: (TransactionEntity) -> Unit,
-    onUpdate: ((TransactionEntity) -> Unit)? = null,
-    creatorName: String? = null
+    onUpdate: ((TransactionEntity) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val database = remember { CashFlowDatabase.getDatabase(context) }
@@ -87,7 +87,7 @@ fun TransactionDetailModal(
     var editNote by remember(transaction) { mutableStateOf(transaction.note) }
 
     val isExpense = transaction.type == TransactionType.EXPENSE
-    val icon = getCategoryDetailIcon(transaction.categoryIconName)
+    val icon = categoryVectorFor(transaction.categoryIconName, transaction.category)
     val fullDateFormatted = remember(transaction.dateMillis) {
         SimpleDateFormat("EEEE, dd MMMM yyyy 'at' hh:mm a", Locale.getDefault()).format(Date(transaction.dateMillis))
     }
@@ -111,8 +111,8 @@ fun TransactionDetailModal(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 2.dp)
@@ -123,7 +123,6 @@ fun TransactionDetailModal(
                     .padding(22.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                // Top Action Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -132,14 +131,14 @@ fun TransactionDetailModal(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = if (transaction.financeScope == FinanceScope.FAMILY) GoldContainer else EmeraldDarkContainer,
-                            border = BorderStroke(1.dp, if (transaction.financeScope == FinanceScope.FAMILY) GoldAccent.copy(alpha = 0.4f) else EmeraldDarkPrimary.copy(alpha = 0.4f))
+                            color = ZenithTheme.accentGreen.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.35f))
                         ) {
                             Text(
-                                text = if (transaction.financeScope == FinanceScope.FAMILY) "FAMILY LEDGER" else "PERSONAL VAULT",
+                                text = "PERSONAL LEDGER",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (transaction.financeScope == FinanceScope.FAMILY) GoldAccent else EmeraldDarkPrimary,
+                                color = ZenithTheme.accentGreen,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 letterSpacing = 1.sp
                             )
@@ -149,30 +148,14 @@ fun TransactionDetailModal(
                             Spacer(modifier = Modifier.width(6.dp))
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFF8B5CF6).copy(alpha = 0.2f),
-                                border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.4f))
+                                color = ZenithTheme.accentPurple.copy(alpha = 0.16f),
+                                border = BorderStroke(1.dp, ZenithTheme.accentPurple.copy(alpha = 0.35f))
                             ) {
                                 Text(
-                                    text = "🧾 Receipt Attached",
+                                    text = "Receipt Attached",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFC4B5FD),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
-
-                        if (!creatorName.isNullOrBlank()) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = SlateDarkSurfaceVariant
-                            ) {
-                                Text(
-                                    text = "👤 $creatorName",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = SlateDarkTextSecondary,
+                                    color = ZenithTheme.accentPurple,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
                                 )
                             }
@@ -181,18 +164,19 @@ fun TransactionDetailModal(
 
                     IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.size(32.dp).testTag("close_detail_modal")
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("close_detail_modal")
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SlateDarkTextSecondary)
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = ZenithTheme.textSecondary)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (!isEditing) {
-                    // --- VIEW MODE ---
+                    val typeColor = if (isExpense) ZenithTheme.accentRed else ZenithTheme.accentGreen
 
-                    // Hero Amount & Icon
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -201,14 +185,14 @@ fun TransactionDetailModal(
                             modifier = Modifier
                                 .size(56.dp)
                                 .clip(CircleShape)
-                                .background(if (isExpense) ExpenseRed.copy(alpha = 0.15f) else IncomeGreen.copy(alpha = 0.15f))
-                                .border(1.5.dp, if (isExpense) ExpenseRed.copy(alpha = 0.4f) else IncomeGreen.copy(alpha = 0.4f), CircleShape),
+                                .background(typeColor.copy(alpha = 0.14f))
+                                .border(1.5.dp, typeColor.copy(alpha = 0.38f), CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = icon,
                                 contentDescription = transaction.category,
-                                tint = if (isExpense) ExpenseRed else IncomeGreen,
+                                tint = typeColor,
                                 modifier = Modifier.size(28.dp)
                             )
                         }
@@ -220,7 +204,7 @@ fun TransactionDetailModal(
                                 text = transaction.title,
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary,
+                                color = ZenithTheme.textPrimary,
                                 maxLines = 2
                             )
                             Spacer(modifier = Modifier.height(4.dp))
@@ -228,21 +212,20 @@ fun TransactionDetailModal(
                                 text = "${if (isExpense) "-" else "+"}$currencySymbol${String.format(Locale.US, "%,.2f", transaction.amount)}",
                                 fontSize = 26.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = if (isExpense) ExpenseRed else IncomeGreen
+                                color = typeColor
                             )
                         }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
-                    HorizontalDivider(color = GlassBorderColor)
+                    HorizontalDivider(color = ZenithTheme.borderColor)
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Detail Key-Value Rows
                     Text(
                         text = "TRANSACTION BREAKDOWN",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         letterSpacing = 1.sp
                     )
 
@@ -254,20 +237,19 @@ fun TransactionDetailModal(
                     DetailItemRow(label = "Date & Time", value = fullDateFormatted, icon = Icons.Default.CalendarToday)
                     DetailItemRow(
                         label = "Sync Status",
-                        value = if (transaction.syncStatus == "SYNCED") "Cloud Synced ☁️" else "Local Storage 📱",
+                        value = if (transaction.syncStatus == "SYNCED") "Cloud Synced" else "On-Device Storage",
                         icon = Icons.Default.CloudDone
                     )
 
-                    // --- ATTACHED RECEIPT SECTION ---
                     if (hasReceipt) {
                         Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider(color = GlassBorderColor)
+                        HorizontalDivider(color = ZenithTheme.borderColor)
                         Spacer(modifier = Modifier.height(14.dp))
 
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = GlassCardBg,
-                            border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.35f)),
+                            color = ZenithTheme.glassCardBg,
+                            border = BorderStroke(1.dp, ZenithTheme.accentPurple.copy(alpha = 0.35f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
@@ -277,13 +259,13 @@ fun TransactionDetailModal(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = null, tint = Color(0xFF8B5CF6), modifier = Modifier.size(18.dp))
+                                        Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = null, tint = ZenithTheme.accentPurple, modifier = Modifier.size(18.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
                                             text = "ATTACHED RECEIPT",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFC4B5FD),
+                                            color = ZenithTheme.accentPurple,
                                             letterSpacing = 1.sp
                                         )
                                     }
@@ -291,12 +273,12 @@ fun TransactionDetailModal(
                                     if (!receiptState?.receiptNumber.isNullOrBlank()) {
                                         Surface(
                                             shape = RoundedCornerShape(6.dp),
-                                            color = SlateDarkSurfaceVariant
+                                            color = ZenithTheme.cardVariantSurface
                                         ) {
                                             Text(
                                                 text = "#${receiptState?.receiptNumber}",
                                                 fontSize = 10.sp,
-                                                color = SlateDarkTextSecondary,
+                                                color = ZenithTheme.textSecondary,
                                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                             )
                                         }
@@ -310,25 +292,24 @@ fun TransactionDetailModal(
                                         text = currentReceipt.merchantName,
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = SlateDarkTextPrimary
+                                        color = ZenithTheme.textPrimary
                                     )
                                     if (currentReceipt.receiptDate.isNotBlank()) {
                                         Text(
                                             text = "${currentReceipt.receiptDate} ${currentReceipt.receiptTime ?: ""}",
                                             fontSize = 11.sp,
-                                            color = SlateDarkTextSecondary
+                                            color = ZenithTheme.textSecondary
                                         )
                                     }
                                 }
 
-                                // Items Table
                                 if (receiptItemsState.isNotEmpty()) {
                                     Spacer(modifier = Modifier.height(10.dp))
                                     Text(
                                         text = "ITEMS (${receiptItemsState.size})",
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = SlateDarkTextSecondary,
+                                        color = ZenithTheme.textSecondary,
                                         letterSpacing = 0.5.sp
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
@@ -346,12 +327,12 @@ fun TransactionDetailModal(
                                                     text = item.name,
                                                     fontSize = 12.sp,
                                                     fontWeight = FontWeight.Medium,
-                                                    color = SlateDarkTextPrimary
+                                                    color = ZenithTheme.textPrimary
                                                 )
                                                 Text(
                                                     text = "${if (item.quantity % 1.0 == 0.0) item.quantity.toInt().toString() else item.quantity} × $currencySymbol${String.format(Locale.US, "%.2f", item.unitPrice)}",
                                                     fontSize = 10.sp,
-                                                    color = SlateDarkTextSecondary
+                                                    color = ZenithTheme.textSecondary
                                                 )
                                             }
 
@@ -359,16 +340,15 @@ fun TransactionDetailModal(
                                                 text = "$currencySymbol${String.format(Locale.US, "%.2f", item.totalPrice)}",
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.SemiBold,
-                                                color = SlateDarkTextPrimary
+                                                color = ZenithTheme.textPrimary
                                             )
                                         }
                                     }
 
-                                    // Tax / Discount / Subtotal breakdown if present
                                     val rState = receiptState
                                     if (rState != null && ((rState.tax > 0) || (rState.discount > 0) || (rState.subtotal > 0))) {
                                         Spacer(modifier = Modifier.height(6.dp))
-                                        HorizontalDivider(color = GlassBorderColor)
+                                        HorizontalDivider(color = ZenithTheme.borderColor)
                                         Spacer(modifier = Modifier.height(6.dp))
 
                                         if (rState.subtotal > 0) {
@@ -378,37 +358,40 @@ fun TransactionDetailModal(
                                             ReceiptSummaryRow(label = "Tax / GST", amount = "+$currencySymbol${String.format(Locale.US, "%.2f", rState.tax)}")
                                         }
                                         if (rState.discount > 0) {
-                                            ReceiptSummaryRow(label = "Discount", amount = "-$currencySymbol${String.format(Locale.US, "%.2f", rState.discount)}", color = IncomeGreen)
+                                            ReceiptSummaryRow(label = "Discount", amount = "-$currencySymbol${String.format(Locale.US, "%.2f", rState.discount)}", color = ZenithTheme.accentGreen)
                                         }
                                     }
                                 }
 
                                 Spacer(modifier = Modifier.height(12.dp))
 
-                                // Receipt Action Buttons: [ View Full Receipt ] and [ View Image ]
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     OutlinedButton(
                                         onClick = { showFullReceiptModal = true },
-                                        modifier = Modifier.weight(1f).height(38.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(38.dp),
                                         shape = RoundedCornerShape(10.dp)
                                     ) {
-                                        Icon(Icons.Default.Receipt, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF8B5CF6))
+                                        Icon(Icons.Default.Receipt, contentDescription = null, modifier = Modifier.size(14.dp), tint = ZenithTheme.accentPurple)
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Full Receipt", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC4B5FD))
+                                        Text("Full Receipt", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentPurple)
                                     }
 
                                     if (!imageUriToDisplay.isNullOrBlank()) {
                                         OutlinedButton(
                                             onClick = { showImageViewerModal = true },
-                                            modifier = Modifier.weight(1f).height(38.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(38.dp),
                                             shape = RoundedCornerShape(10.dp)
                                         ) {
-                                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(14.dp), tint = EmeraldDarkPrimary)
+                                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(14.dp), tint = ZenithTheme.accentGreen)
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Receipt Image", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EmeraldDarkPrimary)
+                                            Text("Receipt Image", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentGreen)
                                         }
                                     }
                                 }
@@ -422,19 +405,19 @@ fun TransactionDetailModal(
                             text = "Note / Transcription",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = SlateDarkSurfaceVariant,
-                            border = BorderStroke(1.dp, GlassBorderColor),
+                            color = ZenithTheme.cardVariantSurface,
+                            border = BorderStroke(1.dp, ZenithTheme.borderColor),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
                                 text = transaction.note,
                                 fontSize = 13.sp,
-                                color = SlateDarkTextPrimary,
+                                color = ZenithTheme.textPrimary,
                                 modifier = Modifier.padding(12.dp)
                             )
                         }
@@ -442,7 +425,6 @@ fun TransactionDetailModal(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // Bottom Actions: [Edit], [Share], [Delete]
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -458,18 +440,10 @@ fun TransactionDetailModal(
                                 shape = RoundedCornerShape(12.dp),
                                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                                     Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        "Edit",
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 12.sp,
-                                        maxLines = 1
-                                    )
+                                    Text("Edit", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1)
                                 }
                             }
                         }
@@ -488,18 +462,10 @@ fun TransactionDetailModal(
                             shape = RoundedCornerShape(12.dp),
                             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                                 Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    "Share",
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 12.sp,
-                                    maxLines = 1
-                                )
+                                Text("Share", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1)
                             }
                         }
 
@@ -510,40 +476,33 @@ fun TransactionDetailModal(
                                 .heightIn(min = 44.dp)
                                 .testTag("btn_delete_modal_tx"),
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed.copy(alpha = 0.2f), contentColor = ExpenseRed),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = ZenithTheme.accentRed.copy(alpha = 0.16f),
+                                contentColor = ZenithTheme.accentRed
+                            ),
                             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                                 Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    "Delete",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    maxLines = 1
-                                )
+                                Text("Delete", fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
                             }
                         }
                     }
                 } else {
-                    // --- EDIT MODE ---
                     Text(
                         text = "EDIT TRANSACTION",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = EmeraldDarkPrimary
+                        color = ZenithTheme.accentGreen
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Type Toggle
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(SlateDarkSurfaceVariant, RoundedCornerShape(10.dp))
+                            .background(ZenithTheme.cardVariantSurface, RoundedCornerShape(10.dp))
                             .padding(3.dp)
                     ) {
                         val isExp = editType == TransactionType.EXPENSE
@@ -551,11 +510,12 @@ fun TransactionDetailModal(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(36.dp)
-                                .background(if (isExp) ExpenseRed else Color.Transparent, RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isExp) ZenithTheme.solidRed else Color.Transparent)
                                 .clickable { editType = TransactionType.EXPENSE },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("Expense", fontWeight = FontWeight.Bold, color = if (isExp) Color.White else SlateDarkTextSecondary, fontSize = 13.sp)
+                            Text("Expense", fontWeight = FontWeight.Bold, color = if (isExp) Color.White else ZenithTheme.textSecondary, fontSize = 13.sp)
                         }
 
                         val isInc = editType == TransactionType.INCOME
@@ -563,17 +523,17 @@ fun TransactionDetailModal(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(36.dp)
-                                .background(if (isInc) IncomeGreen else Color.Transparent, RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isInc) ZenithTheme.solidGreen else Color.Transparent)
                                 .clickable { editType = TransactionType.INCOME },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("Income", fontWeight = FontWeight.Bold, color = if (isInc) Color.White else SlateDarkTextSecondary, fontSize = 13.sp)
+                            Text("Income", fontWeight = FontWeight.Bold, color = if (isInc) Color.White else ZenithTheme.textSecondary, fontSize = 13.sp)
                         }
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Title
                     OutlinedTextField(
                         value = editTitle,
                         onValueChange = { editTitle = it },
@@ -584,7 +544,6 @@ fun TransactionDetailModal(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Amount
                     OutlinedTextField(
                         value = editAmountText,
                         onValueChange = { input ->
@@ -602,8 +561,7 @@ fun TransactionDetailModal(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Category
-                    Text("Category", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = SlateDarkTextSecondary)
+                    Text("Category", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textSecondary)
                     Spacer(modifier = Modifier.height(4.dp))
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
@@ -613,21 +571,13 @@ fun TransactionDetailModal(
                             FilterChip(
                                 selected = editCategory == cat,
                                 onClick = { editCategory = cat },
-                                label = {
-                                    Text(
-                                        text = cat,
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        softWrap = false
-                                    )
-                                }
+                                label = { Text(text = cat, fontSize = 11.sp, maxLines = 1, softWrap = false) }
                             )
                         }
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Payment Method Dropdown
                     PaymentMethodDropdown(
                         selectedMethod = editPaymentMethod,
                         onMethodSelected = { editPaymentMethod = it },
@@ -636,7 +586,6 @@ fun TransactionDetailModal(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Note
                     OutlinedTextField(
                         value = editNote,
                         onValueChange = { editNote = it },
@@ -647,7 +596,6 @@ fun TransactionDetailModal(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Save / Cancel Edit
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -672,6 +620,7 @@ fun TransactionDetailModal(
                                         amount = parsedAmt,
                                         type = editType,
                                         category = editCategory,
+                                        categoryIconName = CategoryIconHelper.iconNameForCategory(editCategory),
                                         paymentMethod = editPaymentMethod,
                                         note = editNote,
                                         updatedAt = System.currentTimeMillis()
@@ -688,9 +637,9 @@ fun TransactionDetailModal(
                                 .testTag("btn_save_tx_edit"),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                            colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                         ) {
-                            Text("Save Changes", fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                            Text("Save Changes", fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, color = Color.White)
                         }
                     }
                 }
@@ -698,15 +647,14 @@ fun TransactionDetailModal(
         }
     }
 
-    // --- DELETE CONFIRMATION DIALOG ---
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete Transaction?", fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary) },
+            title = { Text("Delete Transaction?", fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary) },
             text = {
                 Text(
-                    text = "Are you sure you want to permanently delete \"${transaction.title}\"? This transaction and its attached receipt details will be removed.",
-                    color = SlateDarkTextSecondary,
+                    text = "Are you sure you want to delete \"${transaction.title}\"? This transaction and its attached receipt details will be removed.",
+                    color = ZenithTheme.textSecondary,
                     fontSize = 13.sp
                 )
             },
@@ -716,11 +664,10 @@ fun TransactionDetailModal(
                         onDelete(transaction)
                         showDeleteConfirm = false
                         onDismiss()
-                        Toast.makeText(context, "Transaction and receipt details deleted", Toast.LENGTH_SHORT).show()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidRed)
                 ) {
-                    Text("Delete", fontWeight = FontWeight.Bold)
+                    Text("Delete", fontWeight = FontWeight.Bold, color = Color.White)
                 }
             },
             dismissButton = {
@@ -728,7 +675,7 @@ fun TransactionDetailModal(
                     Text("Cancel")
                 }
             },
-            containerColor = SlateDarkSurface,
+            containerColor = ZenithTheme.cardSurface,
             shape = RoundedCornerShape(20.dp)
         )
     }
@@ -754,13 +701,15 @@ fun TransactionDetailModal(
 }
 
 @Composable
-private fun ReceiptSummaryRow(label: String, amount: String, color: Color = SlateDarkTextPrimary) {
+private fun ReceiptSummaryRow(label: String, amount: String, color: Color = ZenithTheme.textPrimary) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label, fontSize = 11.sp, color = SlateDarkTextSecondary)
+        Text(text = label, fontSize = 11.sp, color = ZenithTheme.textSecondary)
         Text(text = amount, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = color)
     }
 }
@@ -781,14 +730,14 @@ private fun DetailItemRow(label: String, value: String, icon: ImageVector) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = SlateDarkTextSecondary,
+                tint = ZenithTheme.textSecondary,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = label,
                 fontSize = 13.sp,
-                color = SlateDarkTextSecondary,
+                color = ZenithTheme.textSecondary,
                 maxLines = 1
             )
         }
@@ -797,7 +746,7 @@ private fun DetailItemRow(label: String, value: String, icon: ImageVector) {
             text = value,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
-            color = SlateDarkTextPrimary,
+            color = ZenithTheme.textPrimary,
             textAlign = TextAlign.End,
             modifier = Modifier.weight(1f, fill = false),
             softWrap = true,
@@ -806,7 +755,6 @@ private fun DetailItemRow(label: String, value: String, icon: ImageVector) {
     }
 }
 
-// --- DEDICATED FULL RECEIPT VIEWER MODAL ---
 @Composable
 fun FullReceiptViewerDialog(
     transaction: TransactionEntity,
@@ -815,13 +763,11 @@ fun FullReceiptViewerDialog(
     currencySymbol: String,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
-
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f)),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.accentPurple.copy(alpha = 0.45f)),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp)
@@ -832,7 +778,6 @@ fun FullReceiptViewerDialog(
                     .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -842,22 +787,21 @@ fun FullReceiptViewerDialog(
                         text = "RECEIPT VOUCHER",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFC4B5FD),
+                        color = ZenithTheme.accentPurple,
                         letterSpacing = 1.5.sp
                     )
 
                     IconButton(onClick = onDismiss, modifier = Modifier.size(30.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SlateDarkTextSecondary)
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = ZenithTheme.textSecondary)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Paper-style receipt container
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF1E293B),
-                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                    color = ZenithTheme.cardVariantSurface,
+                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -868,7 +812,7 @@ fun FullReceiptViewerDialog(
                             text = receipt?.merchantName ?: transaction.title,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            color = SlateDarkTextPrimary,
+                            color = ZenithTheme.textPrimary,
                             textAlign = TextAlign.Center
                         )
 
@@ -876,7 +820,7 @@ fun FullReceiptViewerDialog(
                             Text(
                                 text = "Invoice: ${receipt?.receiptNumber}",
                                 fontSize = 11.sp,
-                                color = SlateDarkTextSecondary,
+                                color = ZenithTheme.textSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                         }
@@ -884,14 +828,14 @@ fun FullReceiptViewerDialog(
                         Text(
                             text = "Date: ${receipt?.receiptDate?.ifBlank { "N/A" }} ${receipt?.receiptTime ?: ""}",
                             fontSize = 11.sp,
-                            color = SlateDarkTextSecondary,
+                            color = ZenithTheme.textSecondary,
                             modifier = Modifier.padding(top = 2.dp)
                         )
 
                         Text(
                             text = "Payment: ${receipt?.paymentMethod ?: transaction.paymentMethod}",
                             fontSize = 11.sp,
-                            color = SlateDarkTextSecondary,
+                            color = ZenithTheme.textSecondary,
                             modifier = Modifier.padding(top = 2.dp)
                         )
 
@@ -899,19 +843,18 @@ fun FullReceiptViewerDialog(
                         Text(
                             text = "- - - - - - - - - - - - - - - - - - - - - - - - - - - -",
                             fontSize = 10.sp,
-                            color = SlateDarkTextMuted,
+                            color = ZenithTheme.textMuted,
                             maxLines = 1
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Item Table Header
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("ITEM", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextSecondary)
-                            Text("QTY × PRICE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextSecondary)
-                            Text("TOTAL", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextSecondary)
+                            Text("ITEM", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textSecondary)
+                            Text("QTY × PRICE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textSecondary)
+                            Text("TOTAL", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textSecondary)
                         }
 
                         Spacer(modifier = Modifier.height(6.dp))
@@ -929,13 +872,13 @@ fun FullReceiptViewerDialog(
                                         text = itm.name,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium,
-                                        color = SlateDarkTextPrimary,
+                                        color = ZenithTheme.textPrimary,
                                         modifier = Modifier.weight(1.2f)
                                     )
                                     Text(
                                         text = "${if (itm.quantity % 1.0 == 0.0) itm.quantity.toInt().toString() else itm.quantity} × $currencySymbol${String.format(Locale.US, "%.2f", itm.unitPrice)}",
                                         fontSize = 11.sp,
-                                        color = SlateDarkTextSecondary,
+                                        color = ZenithTheme.textSecondary,
                                         modifier = Modifier.weight(1f),
                                         textAlign = TextAlign.Center
                                     )
@@ -943,7 +886,7 @@ fun FullReceiptViewerDialog(
                                         text = "$currencySymbol${String.format(Locale.US, "%.2f", itm.totalPrice)}",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = SlateDarkTextPrimary,
+                                        color = ZenithTheme.textPrimary,
                                         modifier = Modifier.weight(0.8f),
                                         textAlign = TextAlign.End
                                     )
@@ -951,12 +894,14 @@ fun FullReceiptViewerDialog(
                             }
                         } else {
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text(transaction.title, fontSize = 12.sp, color = SlateDarkTextPrimary)
-                                Text("1 × $currencySymbol${transaction.amount}", fontSize = 11.sp, color = SlateDarkTextSecondary)
-                                Text("$currencySymbol${transaction.amount}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
+                                Text(transaction.title, fontSize = 12.sp, color = ZenithTheme.textPrimary)
+                                Text("1 × $currencySymbol${transaction.amount}", fontSize = 11.sp, color = ZenithTheme.textSecondary)
+                                Text("$currencySymbol${transaction.amount}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
                             }
                         }
 
@@ -964,33 +909,32 @@ fun FullReceiptViewerDialog(
                         Text(
                             text = "- - - - - - - - - - - - - - - - - - - - - - - - - - - -",
                             fontSize = 10.sp,
-                            color = SlateDarkTextMuted,
+                            color = ZenithTheme.textMuted,
                             maxLines = 1
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Totals section
                         val subtotal = receipt?.subtotal ?: transaction.amount
                         val tax = receipt?.tax ?: 0.0
                         val discount = receipt?.discount ?: 0.0
                         val total = receipt?.total ?: transaction.amount
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Subtotal", fontSize = 12.sp, color = SlateDarkTextSecondary)
-                            Text("$currencySymbol${String.format(Locale.US, "%.2f", subtotal)}", fontSize = 12.sp, color = SlateDarkTextPrimary)
+                            Text("Subtotal", fontSize = 12.sp, color = ZenithTheme.textSecondary)
+                            Text("$currencySymbol${String.format(Locale.US, "%.2f", subtotal)}", fontSize = 12.sp, color = ZenithTheme.textPrimary)
                         }
 
                         if (tax > 0) {
                             Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Tax / GST", fontSize = 12.sp, color = SlateDarkTextSecondary)
-                                Text("+$currencySymbol${String.format(Locale.US, "%.2f", tax)}", fontSize = 12.sp, color = SlateDarkTextPrimary)
+                                Text("Tax / GST", fontSize = 12.sp, color = ZenithTheme.textSecondary)
+                                Text("+$currencySymbol${String.format(Locale.US, "%.2f", tax)}", fontSize = 12.sp, color = ZenithTheme.textPrimary)
                             }
                         }
 
                         if (discount > 0) {
                             Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Discount", fontSize = 12.sp, color = IncomeGreen)
-                                Text("-$currencySymbol${String.format(Locale.US, "%.2f", discount)}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = IncomeGreen)
+                                Text("Discount", fontSize = 12.sp, color = ZenithTheme.accentGreen)
+                                Text("-$currencySymbol${String.format(Locale.US, "%.2f", discount)}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentGreen)
                             }
                         }
 
@@ -1001,12 +945,12 @@ fun FullReceiptViewerDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("GRAND TOTAL", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = SlateDarkTextPrimary)
+                            Text("GRAND TOTAL", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = ZenithTheme.textPrimary)
                             Text(
                                 text = "$currencySymbol${String.format(Locale.US, "%.2f", total)}",
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = EmeraldDarkPrimary
+                                color = ZenithTheme.accentGreen
                             )
                         }
 
@@ -1015,7 +959,7 @@ fun FullReceiptViewerDialog(
                             text = "ZENITH SECURE LEDGER VERIFIED",
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextMuted,
+                            color = ZenithTheme.textMuted,
                             letterSpacing = 1.sp
                         )
                     }
@@ -1025,11 +969,13 @@ fun FullReceiptViewerDialog(
 
                 Button(
                     onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                 ) {
-                    Text("Close Receipt", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("Close Receipt", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
                 }
             }
         }
@@ -1162,20 +1108,5 @@ fun ReceiptImageViewerDialog(
                     .padding(bottom = 30.dp)
             )
         }
-    }
-}
-
-private fun getCategoryDetailIcon(iconName: String): ImageVector {
-    return when (iconName.lowercase()) {
-        "restaurant", "food", "dining" -> Icons.Default.Restaurant
-        "shopping_bag", "shopping", "groceries" -> Icons.Default.ShoppingBag
-        "directions_car", "transport", "petrol", "fuel" -> Icons.Default.DirectionsCar
-        "home", "housing", "rent" -> Icons.Default.Home
-        "bolt", "utilities", "bills" -> Icons.Default.Bolt
-        "movie", "entertainment" -> Icons.Default.Movie
-        "medical_services", "health", "healthcare" -> Icons.Default.MedicalServices
-        "account_balance", "salary", "income", "payments" -> Icons.Default.AccountBalance
-        "trending_up", "investments", "investment" -> Icons.AutoMirrored.Filled.TrendingUp
-        else -> Icons.Default.Receipt
     }
 }

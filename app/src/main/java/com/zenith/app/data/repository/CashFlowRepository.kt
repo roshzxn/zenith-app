@@ -10,8 +10,6 @@ class CashFlowRepository(
     private val budgetDao: BudgetDao,
     private val savingsGoalDao: SavingsGoalDao,
     private val scannedItemDao: ScannedItemDao,
-    private val familyDao: FamilyDao,
-    private val familyMemberDao: FamilyMemberDao,
     private val receiptDao: ReceiptDao,
     private val autoPayReminderDao: AutoPayReminderDao? = null
 ) {
@@ -24,12 +22,15 @@ class CashFlowRepository(
     val allReceiptItems: Flow<List<ReceiptItemEntity>> = receiptDao.getAllReceiptItems()
     val allAutoPayReminders: Flow<List<AutoPayReminderEntity>> = autoPayReminderDao?.getAllReminders() ?: kotlinx.coroutines.flow.flowOf(emptyList())
 
-    // Auto-Pay Reminders scoping & operations
+    // Auto-Pay Reminders operations
     fun getAutoPayRemindersByScope(scope: FinanceScope): Flow<List<AutoPayReminderEntity>> =
         autoPayReminderDao?.getRemindersByScope(scope) ?: kotlinx.coroutines.flow.flowOf(emptyList())
 
     fun getUpcomingAutoPayReminders(untilMillis: Long): Flow<List<AutoPayReminderEntity>> =
         autoPayReminderDao?.getUpcomingReminders(untilMillis) ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
+    suspend fun getAutoPayReminderById(id: Long): AutoPayReminderEntity? =
+        autoPayReminderDao?.getReminderById(id)
 
     suspend fun saveAutoPayReminder(reminder: AutoPayReminderEntity): Long {
         return autoPayReminderDao?.insertReminder(reminder) ?: 0L
@@ -51,7 +52,7 @@ class CashFlowRepository(
         autoPayReminderDao?.markAsPaid(id, nextDueDateMillis, lastPaidMillis)
     }
 
-    // Receipt scoping & operations
+    // Receipt operations
     fun getReceiptForTransaction(transactionId: Long): Flow<ReceiptEntity?> = receiptDao.getReceiptForTransaction(transactionId)
     suspend fun getReceiptByTransactionIdDirect(transactionId: Long): ReceiptEntity? = receiptDao.getReceiptByTransactionIdDirect(transactionId)
     fun getItemsForTransaction(transactionId: Long): Flow<List<ReceiptItemEntity>> = receiptDao.getItemsForTransaction(transactionId)
@@ -79,36 +80,14 @@ class CashFlowRepository(
     // Transaction scoping
     fun getTransactionsByScope(scope: FinanceScope): Flow<List<TransactionEntity>> = transactionDao.getTransactionsByScope(scope)
     fun getTransactionsByScopeAndType(scope: FinanceScope, type: TransactionType): Flow<List<TransactionEntity>> = transactionDao.getTransactionsByScopeAndType(scope, type)
-    fun getFamilyTransactions(familyId: String): Flow<List<TransactionEntity>> = transactionDao.getFamilyTransactions(familyId)
-    suspend fun getFamilyTransactionsOnce(familyId: String): List<TransactionEntity> = transactionDao.getFamilyTransactionsOnce(familyId)
-    fun getFamilyTransactionsByMember(familyId: String, userId: String): Flow<List<TransactionEntity>> = transactionDao.getFamilyTransactionsByMember(familyId, userId)
-    fun getFamilyIncome(familyId: String): Flow<List<TransactionEntity>> = transactionDao.getFamilyIncome(familyId)
-    fun getFamilyExpenses(familyId: String): Flow<List<TransactionEntity>> = transactionDao.getFamilyExpenses(familyId)
 
-    // Budget scoping
+    // Budget queries
     fun getBudgetsByScope(scope: FinanceScope): Flow<List<BudgetEntity>> = budgetDao.getBudgetsByScope(scope)
-    fun getBudgetsByFamilyId(familyId: String): Flow<List<BudgetEntity>> = budgetDao.getBudgetsByFamilyId(familyId)
+    suspend fun getBudgetById(id: Long): BudgetEntity? = budgetDao.getBudgetById(id)
 
-    // Savings Goals scoping
+    // Savings Goals queries
     fun getGoalsByScope(scope: FinanceScope): Flow<List<SavingsGoalEntity>> = savingsGoalDao.getGoalsByScope(scope)
-    fun getGoalsByFamilyId(familyId: String): Flow<List<SavingsGoalEntity>> = savingsGoalDao.getGoalsByFamilyId(familyId)
-
-    // Families
-    suspend fun insertFamily(family: FamilyEntity) = familyDao.insertFamily(family)
-    suspend fun updateFamily(family: FamilyEntity) = familyDao.updateFamily(family)
-    suspend fun deleteFamily(family: FamilyEntity) = familyDao.deleteFamily(family)
-    suspend fun getFamilyById(id: String): FamilyEntity? = familyDao.getFamilyById(id)
-    suspend fun getFirstFamily(): FamilyEntity? = familyDao.getFirstFamily()
-    fun getAllFamilies(): Flow<List<FamilyEntity>> = familyDao.getAllFamilies()
-    fun getAllFamiliesForUser(userId: String): Flow<List<FamilyEntity>> = familyDao.getAllFamiliesForUser(userId)
-
-    // Family Members
-    suspend fun insertMember(member: FamilyMemberEntity) = familyMemberDao.insertMember(member)
-    suspend fun updateMember(member: FamilyMemberEntity) = familyMemberDao.updateMember(member)
-    suspend fun deleteMember(member: FamilyMemberEntity) = familyMemberDao.deleteMember(member)
-    fun getMembersByFamilyId(familyId: String): Flow<List<FamilyMemberEntity>> = familyMemberDao.getMembersByFamilyId(familyId)
-    fun getMemberByUserId(userId: String): Flow<List<FamilyMemberEntity>> = familyMemberDao.getMemberByUserId(userId)
-    suspend fun getMemberByFamilyAndUser(familyId: String, userId: String): FamilyMemberEntity? = familyMemberDao.getMemberByFamilyAndUser(familyId, userId)
+    suspend fun getGoalById(id: Long): SavingsGoalEntity? = savingsGoalDao.getGoalById(id)
 
     fun getBudgetsForMonth(monthYear: String): Flow<List<BudgetEntity>> {
         return budgetDao.getBudgetsForMonth(monthYear)
@@ -124,6 +103,10 @@ class CashFlowRepository(
 
     suspend fun getTransactionByServerId(serverId: String): TransactionEntity? {
         return transactionDao.getTransactionByServerId(serverId)
+    }
+
+    suspend fun getTransactionByUtr(utr: String): TransactionEntity? {
+        return transactionDao.getTransactionByUtr(utr)
     }
 
     suspend fun findPotentialDuplicates(
@@ -162,6 +145,14 @@ class CashFlowRepository(
 
     suspend fun updateTransaction(transaction: TransactionEntity) {
         transactionDao.updateTransaction(transaction.copy(syncStatus = "PENDING_UPDATE", updatedAt = System.currentTimeMillis()))
+    }
+
+    /**
+     * Soft-deletes any transaction so Snackbar Undo can cleanly restore both the transaction row
+     * and any linked receipt/items regardless of whether it was already synced or purely local.
+     */
+    suspend fun softDeleteForUndo(transaction: TransactionEntity) {
+        transactionDao.markTransactionDeleted(transaction.id)
     }
 
     suspend fun deleteTransaction(transaction: TransactionEntity) {
@@ -229,8 +220,8 @@ class CashFlowRepository(
         scannedItemDao.deleteAllScannedItems()
         receiptDao.deleteAllReceiptItems()
         receiptDao.deleteAllReceipts()
-        familyDao.deleteAllFamilies()
-        familyMemberDao.deleteAllFamilyMembers()
+        autoPayReminderDao?.deleteAllReminders()
+        categoryDao.deleteAllCategories()
     }
 
     suspend fun reseedDefaultCategories() {

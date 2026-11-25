@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
+import com.zenith.app.data.util.CategoryIconHelper
 import com.zenith.app.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.*
@@ -33,19 +34,22 @@ fun TransactionItemCard(
     transaction: TransactionEntity,
     currencySymbol: String,
     modifier: Modifier = Modifier,
-    creatorName: String? = null,
+    isMasked: Boolean = false,
     onClick: ((TransactionEntity) -> Unit)? = null,
     onLongClick: ((TransactionEntity) -> Unit)? = null
 ) {
     val isExpense = transaction.type == TransactionType.EXPENSE
-    val icon = getCategoryIcon(transaction.categoryIconName)
+    val icon = categoryVectorFor(transaction.categoryIconName, transaction.category)
     val formattedDate = rememberFormattedDate(transaction.dateMillis)
     val hasReceiptAttached = !transaction.receiptImageUri.isNullOrBlank() || transaction.note.contains("Receipt", ignoreCase = true)
 
+    val typeColor = if (isExpense) ZenithTheme.accentRed else ZenithTheme.accentGreen
+    val containerAlpha = if (ZenithTheme.isDark) 0.16f else 0.11f
+
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = SlateDarkSurface.copy(alpha = 0.85f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
+        color = ZenithTheme.cardGlassBackground,
+        border = androidx.compose.foundation.BorderStroke(1.dp, ZenithTheme.borderColor),
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
@@ -62,17 +66,15 @@ fun TransactionItemCard(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Category Icon Badge (Pastel container)
+            // Category Icon Badge
             Box(
                 modifier = Modifier
                     .size(44.dp)
                     .clip(RoundedCornerShape(14.dp))
-                    .background(
-                        if (isExpense) PastelRoseContainer else PastelGreenContainer
-                    )
+                    .background(typeColor.copy(alpha = containerAlpha))
                     .border(
                         1.dp,
-                        if (isExpense) PastelRose.copy(alpha = 0.35f) else PastelGreen.copy(alpha = 0.35f),
+                        typeColor.copy(alpha = 0.35f),
                         RoundedCornerShape(14.dp)
                     ),
                 contentAlignment = Alignment.Center
@@ -80,7 +82,7 @@ fun TransactionItemCard(
                 Icon(
                     imageVector = icon,
                     contentDescription = transaction.category,
-                    tint = if (isExpense) PastelRose else PastelGreen,
+                    tint = typeColor,
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -97,7 +99,7 @@ fun TransactionItemCard(
                         text = transaction.title,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextPrimary,
+                        color = ZenithTheme.textPrimary,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
@@ -107,14 +109,14 @@ fun TransactionItemCard(
                         Spacer(modifier = Modifier.width(6.dp))
                         Surface(
                             shape = RoundedCornerShape(6.dp),
-                            color = PastelPurpleContainer,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, PastelPurple.copy(alpha = 0.3f))
+                            color = ZenithTheme.accentPurple.copy(alpha = containerAlpha),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ZenithTheme.accentPurple.copy(alpha = 0.3f))
                         ) {
                             Text(
-                                text = "🧾 Receipt",
+                                text = "Receipt",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = PastelPurple,
+                                color = ZenithTheme.accentPurple,
                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                             )
                         }
@@ -130,14 +132,14 @@ fun TransactionItemCard(
                     // Category Badge Pill
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = SlateDarkSurfaceVariant,
+                        color = ZenithTheme.cardVariantSurface,
                         modifier = Modifier.padding(end = 6.dp)
                     ) {
                         Text(
                             text = transaction.category,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = SlateDarkTextSecondary,
+                            color = ZenithTheme.textSecondary,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -147,21 +149,10 @@ fun TransactionItemCard(
                     Text(
                         text = "• ${transaction.paymentMethod}",
                         fontSize = 11.sp,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
-
-                    if (!creatorName.isNullOrBlank()) {
-                        Text(
-                            text = " • 👤 $creatorName",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = PastelCyan,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                        )
-                    }
                 }
             }
 
@@ -173,27 +164,33 @@ fun TransactionItemCard(
                 modifier = Modifier.widthIn(min = 65.dp)
             ) {
                 Text(
-                    text = "${if (isExpense) "-" else "+"}$currencySymbol${String.format(Locale.US, "%,.2f", transaction.amount)}",
+                    text = if (isMasked) {
+                        "${if (isExpense) "-" else "+"}$currencySymbol••••"
+                    } else {
+                        "${if (isExpense) "-" else "+"}$currencySymbol${String.format(Locale.US, "%,.2f", transaction.amount)}"
+                    },
                     fontSize = 15.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    color = if (isExpense) PastelRose else PastelGreen,
+                    color = typeColor,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(3.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (transaction.syncStatus != "SYNCED") {
-                        Text(
-                            text = "⏳",
-                            fontSize = 10.sp,
-                            modifier = Modifier.padding(end = 4.dp)
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 5.dp)
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(ZenithTheme.accentAmber)
                         )
                     }
                     Text(
                         text = formattedDate,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
-                        color = SlateDarkTextMuted,
+                        color = ZenithTheme.textMuted,
                         maxLines = 1
                     )
                 }
@@ -218,17 +215,44 @@ private fun rememberFormattedDate(millis: Long): String {
     }
 }
 
-private fun getCategoryIcon(iconName: String): ImageVector {
-    return when (iconName.lowercase()) {
+internal fun categoryVectorFor(iconName: String, category: String = ""): ImageVector {
+    val normalized = iconName.trim().lowercase().replace("_", "")
+    val resolvedName = if (
+        normalized.isBlank() ||
+        normalized == "category" ||
+        (normalized == "receipt" && !category.equals("Bills & Utilities", ignoreCase = true))
+    ) {
+        CategoryIconHelper.iconNameForCategory(category).lowercase().replace("_", "")
+    } else {
+        normalized
+    }
+
+    return when (resolvedName) {
         "restaurant", "food", "dining" -> Icons.Default.Restaurant
-        "shopping_bag", "shopping", "groceries" -> Icons.Default.ShoppingBag
-        "directions_car", "transport", "petrol", "fuel" -> Icons.Default.DirectionsCar
+        "shoppingbag", "shoppingcart", "shopping", "groceries" -> Icons.Default.ShoppingBag
+        "directionscar", "transport", "transportation", "petrol", "fuel" -> Icons.Default.DirectionsCar
+        "flight", "travel" -> Icons.Default.Flight
         "home", "housing", "rent" -> Icons.Default.Home
-        "bolt", "utilities", "bills" -> Icons.Default.Bolt
+        "bolt", "utilities", "bills", "receipt" -> Icons.Default.Bolt
         "movie", "entertainment" -> Icons.Default.Movie
-        "medical_services", "health", "healthcare" -> Icons.Default.MedicalServices
-        "account_balance", "salary", "income", "payments" -> Icons.Default.AccountBalance
-        "trending_up", "investments", "investment" -> Icons.AutoMirrored.Filled.TrendingUp
-        else -> Icons.Default.Receipt
+        "medicalservices", "fitnesscenter", "health", "healthcare" -> Icons.Default.MedicalServices
+        "school", "education" -> Icons.Default.School
+        "work", "freelance" -> Icons.Default.Work
+        "accountbalance", "salary", "income", "payments" -> Icons.Default.AccountBalance
+        "trendingup", "investments", "investment" -> Icons.AutoMirrored.Filled.TrendingUp
+        else -> when (category.trim().lowercase()) {
+            "food & dining" -> Icons.Default.Restaurant
+            "shopping", "groceries" -> Icons.Default.ShoppingBag
+            "transportation" -> Icons.Default.DirectionsCar
+            "housing & rent" -> Icons.Default.Home
+            "bills & utilities" -> Icons.Default.Bolt
+            "entertainment" -> Icons.Default.Movie
+            "healthcare", "health", "health & fitness" -> Icons.Default.MedicalServices
+            "education" -> Icons.Default.School
+            "freelance / business", "freelance" -> Icons.Default.Work
+            "salary & income", "salary" -> Icons.Default.AccountBalance
+            "investments", "investment" -> Icons.AutoMirrored.Filled.TrendingUp
+            else -> Icons.AutoMirrored.Filled.ReceiptLong
+        }
     }
 }

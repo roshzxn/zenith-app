@@ -303,7 +303,7 @@ fun QrCameraView(
         Box(
             modifier = modifier
                 .fillMaxSize()
-                .background(SlateDarkSurface)
+                .background(ZenithTheme.cardSurface)
                 .padding(24.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -315,13 +315,13 @@ fun QrCameraView(
                     modifier = Modifier
                         .size(64.dp)
                         .clip(CircleShape)
-                        .background(EmeraldDarkPrimary.copy(alpha = 0.15f)),
+                        .background(ZenithTheme.accentIndigo.copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.CameraAlt,
                         contentDescription = null,
-                        tint = EmeraldDarkPrimary,
+                        tint = ZenithTheme.accentIndigo,
                         modifier = Modifier.size(32.dp)
                     )
                 }
@@ -330,13 +330,13 @@ fun QrCameraView(
                     text = "Camera Permission Required",
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = "To scan any UPI QR code instantly, please enable camera access.",
                     fontSize = 13.sp,
-                    color = SlateDarkTextSecondary,
+                    color = ZenithTheme.textSecondary,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
@@ -344,7 +344,10 @@ fun QrCameraView(
                 Button(
                     onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White
+                    )
                 ) {
                     Text("Grant Permission", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }

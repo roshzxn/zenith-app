@@ -1,10 +1,11 @@
 package com.zenith.app.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
-import androidx.compose.animation.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,10 +15,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.*
-import androidx.compose.material.icons.automirrored.outlined.*
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,21 +34,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.zenith.app.data.models.FinanceScope
 import com.zenith.app.data.upi.UpiNotificationListenerService
 import com.zenith.app.ui.components.BackupRestoreModal
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.ExportDataModal
-import com.zenith.app.ui.components.FamilyMembersDialog
-import com.zenith.app.ui.components.GlassCard
 import com.zenith.app.ui.components.ImportDataModal
 import com.zenith.app.ui.components.PaymentMethodDropdown
 import com.zenith.app.ui.components.ZenithLogo
-import com.zenith.app.ui.theme.*
+import com.zenith.app.ui.theme.ZenithTheme
+import com.zenith.app.ui.theme.ZenithThemeMode
 import com.zenith.app.ui.viewmodel.CashFlowUiState
 import com.zenith.app.ui.viewmodel.CashFlowViewModel
-import kotlinx.coroutines.launch
 
 @Composable
 fun ProfileScreen(
@@ -64,14 +64,12 @@ fun ProfileScreen(
     val isGuestMode by viewModel.isGuestMode.collectAsStateWithLifecycle()
     val activeUserEmail by viewModel.activeUserEmail.collectAsStateWithLifecycle()
     val activeUserName by viewModel.activeUserName.collectAsStateWithLifecycle()
-    val activeFamily by viewModel.activeFamily.collectAsStateWithLifecycle(initialValue = null)
-    val activeFamilyId by viewModel.activeFamilyId.collectAsStateWithLifecycle()
-    val familyMembers by viewModel.familyMembers.collectAsStateWithLifecycle(initialValue = emptyList())
     val defaultPaymentMethod by viewModel.defaultPaymentMethod.collectAsStateWithLifecycle()
     val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
     val isOledBlack by viewModel.isOledBlack.collectAsStateWithLifecycle()
     val isHapticsOn by viewModel.isHapticsEnabled.collectAsStateWithLifecycle()
     val isNotificationsOn by viewModel.isNotificationsEnabled.collectAsStateWithLifecycle()
+    val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
     val isUpiAutoDetectionEnabled by viewModel.isUpiAutoDetectionEnabled.collectAsStateWithLifecycle()
 
     val syncState by viewModel.syncUiState.collectAsStateWithLifecycle()
@@ -79,7 +77,6 @@ fun ProfileScreen(
     var showAuthDialog by remember { mutableStateOf(false) }
     var initialAuthModeIsSignUp by remember { mutableStateOf(false) }
     var showEditNameDialog by remember { mutableStateOf(false) }
-    var showFamilyDialog by remember { mutableStateOf(false) }
     var showUpiSettingsDialog by remember { mutableStateOf(false) }
     var showClearDataDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
@@ -90,10 +87,28 @@ fun ProfileScreen(
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var isUpiNotifGranted by remember { mutableStateOf(UpiNotificationListenerService.isPermissionGranted(context)) }
+    var isPostNotificationsGranted by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        isPostNotificationsGranted = granted
+        if (!granted) {
+            Toast.makeText(context, "Notification permission declined. Enable in Android Settings for alert shade.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                 isUpiNotifGranted = UpiNotificationListenerService.isPermissionGranted(context)
+                isPostNotificationsGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -101,8 +116,6 @@ fun ProfileScreen(
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
-
-    val coroutineScope = rememberCoroutineScope()
 
     LazyColumn(
         modifier = Modifier
@@ -147,123 +160,24 @@ fun ProfileScreen(
             Spacer(modifier = Modifier.height(18.dp))
         }
 
-        // --- 2. FAMILY VAULT CARD ---
-        item {
-            ProfileSectionTitle("Family Vault Status")
-
-            val currentFamId = activeFamily?.inviteCode?.takeIf { it.isNotBlank() } ?: activeFamily?.id ?: activeFamilyId ?: ""
-            val currentFamName = activeFamily?.name ?: "${activeUserName ?: "Zenith"} Family Vault"
-
-            CleanCard(
-                modifier = Modifier.fillMaxWidth().testTag("profile_family_card"),
-                backgroundColor = SlateDarkSurface.copy(alpha = 0.85f)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFF8B5CF6).copy(alpha = 0.2f))
-                                .border(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.Groups, contentDescription = null, tint = Color(0xFFC4B5FD), modifier = Modifier.size(24.dp))
-                        }
-
-                        Column {
-                            Text(
-                                text = currentFamName,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
-                            )
-                            Text(
-                                text = "${familyMembers.size.coerceAtLeast(1)} connected member${if (familyMembers.size > 1) "s" else ""}",
-                                fontSize = 12.sp,
-                                color = SlateDarkTextSecondary
-                            )
-                        }
-                    }
-
-                    Button(
-                        onClick = { showFamilyDialog = true },
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.height(34.dp)
-                    ) {
-                        Text("Manage", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                if (currentFamId.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    HorizontalDivider(color = GlassBorderColor)
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Vault ID: ", fontSize = 12.sp, color = SlateDarkTextSecondary)
-                            Text(currentFamId, fontSize = 12.sp, fontWeight = FontWeight.Black, color = Color(0xFFE9D5FF), letterSpacing = 0.5.sp)
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF8B5CF6).copy(alpha = 0.15f),
-                            border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.35f)),
-                            modifier = Modifier.clickable {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Zenith Family ID", currentFamId))
-                                Toast.makeText(context, "Family ID ($currentFamId) copied!", Toast.LENGTH_SHORT).show()
-                            }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color(0xFFC4B5FD), modifier = Modifier.size(12.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Copy Code", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC4B5FD))
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(18.dp))
-        }
-
-        // --- 3. FINANCE PREFERENCES SECTION ---
+        // --- 2. FINANCE PREFERENCES SECTION ---
         item {
             ProfileSectionTitle("Finance Preferences")
 
             CleanCard(
                 modifier = Modifier.fillMaxWidth(),
-                backgroundColor = SlateDarkSurface.copy(alpha = 0.85f)
+                backgroundColor = ZenithTheme.cardGlassBackground
             ) {
-                // Currency Selector
                 Text(
                     text = "Display Currency",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
                 Text(
-                    text = "Applies across all ledgers, budgets & insights",
+                    text = "Applies across ledgers, budgets & insights",
                     fontSize = 11.sp,
-                    color = SlateDarkTextSecondary
+                    color = ZenithTheme.textSecondary
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(
@@ -293,10 +207,9 @@ fun ProfileScreen(
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
-                HorizontalDivider(color = GlassBorderColor)
+                HorizontalDivider(color = ZenithTheme.borderColor)
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Default Payment Method Dropdown
                 PaymentMethodDropdown(
                     selectedMethod = defaultPaymentMethod,
                     onMethodSelected = { method ->
@@ -310,41 +223,105 @@ fun ProfileScreen(
             Spacer(modifier = Modifier.height(18.dp))
         }
 
-        // --- 4. APP PREFERENCES SECTION ---
+        // --- 3. APP PREFERENCES SECTION (3-Mode Theme + Security + Notifications) ---
         item {
-            ProfileSectionTitle("App Preferences")
+            ProfileSectionTitle("Appearance & Security")
 
             CleanCard(
                 modifier = Modifier.fillMaxWidth(),
-                backgroundColor = SlateDarkSurface.copy(alpha = 0.85f)
+                backgroundColor = ZenithTheme.cardGlassBackground
             ) {
-                // Dark Mode Switch
+                Text(
+                    text = "Theme Mode",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ZenithTheme.textPrimary
+                )
+                Text(
+                    text = "Switch cleanly between Crisp Light, Obsidian Navy, or OLED Black",
+                    fontSize = 11.sp,
+                    color = ZenithTheme.textSecondary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+
+                val currentMode = ZenithTheme.mode
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ZenithTheme.cardVariantSurface)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf(
+                        Triple(ZenithThemeMode.LIGHT, "Light", Icons.Default.LightMode),
+                        Triple(ZenithThemeMode.OBSIDIAN_NAVY, "Obsidian", Icons.Default.DarkMode),
+                        Triple(ZenithThemeMode.OLED_BLACK, "OLED", Icons.Default.Brightness2)
+                    ).forEach { (mode, label, icon) ->
+                        val isSelected = currentMode == mode
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(38.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(if (isSelected) ZenithTheme.solidIndigo else Color.Transparent)
+                                .clickable {
+                                    when (mode) {
+                                        ZenithThemeMode.LIGHT -> viewModel.setDarkMode(false)
+                                        ZenithThemeMode.OBSIDIAN_NAVY -> {
+                                            viewModel.setOledBlack(false)
+                                            viewModel.setDarkMode(true)
+                                        }
+                                        ZenithThemeMode.OLED_BLACK -> viewModel.setOledBlack(true)
+                                    }
+                                }
+                                .testTag("theme_mode_${mode.name.lowercase()}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = label,
+                                    tint = if (isSelected) Color.White else ZenithTheme.textSecondary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = label,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) Color.White else ZenithTheme.textSecondary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(10.dp))
+
                 PreferenceSwitchRow(
-                    icon = Icons.Default.DarkMode,
-                    title = "Obsidian Dark Mode",
-                    subtitle = "Sleek obsidian navy interface with subtle specular glass",
-                    checked = isDarkMode,
-                    onCheckedChange = { viewModel.setDarkMode(it) }
+                    icon = Icons.Default.Fingerprint,
+                    title = "Biometric / PIN App Lock",
+                    subtitle = "Require device authentication on launch",
+                    checked = isAppLockEnabled,
+                    onCheckedChange = { enabled ->
+                        viewModel.setAppLockEnabled(enabled)
+                        Toast.makeText(
+                            context,
+                            if (enabled) "App Lock enabled for next launch." else "App Lock disabled.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(color = GlassBorderColor)
+                HorizontalDivider(color = ZenithTheme.borderColor)
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // OLED Pure Black Switch
-                PreferenceSwitchRow(
-                    icon = Icons.Default.Brightness2,
-                    title = "OLED Pure Black (#000000)",
-                    subtitle = "True pitch black for maximum AMOLED battery savings",
-                    checked = isOledBlack,
-                    onCheckedChange = { viewModel.setOledBlack(it) }
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(color = GlassBorderColor)
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Haptic Feedback Switch
                 PreferenceSwitchRow(
                     icon = Icons.Default.Vibration,
                     title = "Haptic Touch Feedback",
@@ -354,37 +331,49 @@ fun ProfileScreen(
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(color = GlassBorderColor)
+                HorizontalDivider(color = ZenithTheme.borderColor)
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Notifications Switch
                 PreferenceSwitchRow(
                     icon = Icons.Default.Notifications,
                     title = "Budget Alerts & Insights",
-                    subtitle = "Notify when approaching monthly spending limits",
-                    checked = isNotificationsOn,
-                    onCheckedChange = { viewModel.setNotificationsEnabled(it) }
+                    subtitle = if (isPostNotificationsGranted) {
+                        "Notify when approaching spending limits"
+                    } else {
+                        "Tap to grant notification permission for alerts"
+                    },
+                    checked = isNotificationsOn && isPostNotificationsGranted,
+                    onCheckedChange = { enabled ->
+                        if (enabled && !isPostNotificationsGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        viewModel.setNotificationsEnabled(enabled)
+                    }
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(color = GlassBorderColor)
+                HorizontalDivider(color = ZenithTheme.borderColor)
                 Spacer(modifier = Modifier.height(10.dp))
 
                 // Automatic UPI Payment Tracking (Notification Access)
-                val isServiceFullyActive = isUpiNotifGranted && isUpiAutoDetectionEnabled
+                val upiCardAccent = when {
+                    !isUpiNotifGranted -> ZenithTheme.accentAmber
+                    !isUpiAutoDetectionEnabled -> ZenithTheme.textSecondary
+                    else -> ZenithTheme.accentGreen
+                }
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = when {
-                        !isUpiNotifGranted -> GoalAmber.copy(alpha = 0.1f)
-                        !isUpiAutoDetectionEnabled -> SlateDarkSurfaceVariant.copy(alpha = 0.5f)
-                        else -> EmeraldDarkPrimary.copy(alpha = 0.1f)
+                        !isUpiNotifGranted -> ZenithTheme.accentAmber.copy(alpha = 0.12f)
+                        !isUpiAutoDetectionEnabled -> ZenithTheme.cardVariantSurface
+                        else -> ZenithTheme.accentGreen.copy(alpha = 0.12f)
                     },
                     border = BorderStroke(
                         1.dp,
                         when {
-                            !isUpiNotifGranted -> GoalAmber.copy(alpha = 0.35f)
-                            !isUpiAutoDetectionEnabled -> GlassBorderColor
-                            else -> EmeraldDarkPrimary.copy(alpha = 0.35f)
+                            !isUpiNotifGranted -> ZenithTheme.accentAmber.copy(alpha = 0.35f)
+                            !isUpiAutoDetectionEnabled -> ZenithTheme.borderColor
+                            else -> ZenithTheme.accentGreen.copy(alpha = 0.35f)
                         }
                     ),
                     modifier = Modifier
@@ -400,23 +389,13 @@ fun ProfileScreen(
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(CircleShape)
-                                .background(
-                                    when {
-                                        !isUpiNotifGranted -> GoalAmber.copy(alpha = 0.2f)
-                                        !isUpiAutoDetectionEnabled -> SlateDarkSurfaceVariant
-                                        else -> EmeraldDarkPrimary.copy(alpha = 0.2f)
-                                    }
-                                ),
+                                .background(upiCardAccent.copy(alpha = 0.16f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.NotificationsActive,
                                 contentDescription = null,
-                                tint = when {
-                                    !isUpiNotifGranted -> GoalAmber
-                                    !isUpiAutoDetectionEnabled -> SlateDarkTextSecondary
-                                    else -> EmeraldDarkPrimary
-                                },
+                                tint = upiCardAccent,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -427,16 +406,12 @@ fun ProfileScreen(
                                     text = "Auto-Track UPI Payments",
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextPrimary
+                                    color = ZenithTheme.textPrimary
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
                                     shape = RoundedCornerShape(4.dp),
-                                    color = when {
-                                        !isUpiNotifGranted -> GoalAmber.copy(alpha = 0.2f)
-                                        !isUpiAutoDetectionEnabled -> SlateDarkSurfaceVariant
-                                        else -> IncomeGreen.copy(alpha = 0.2f)
-                                    }
+                                    color = upiCardAccent.copy(alpha = 0.16f)
                                 ) {
                                     Text(
                                         text = when {
@@ -446,11 +421,7 @@ fun ProfileScreen(
                                         },
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = when {
-                                            !isUpiNotifGranted -> GoalAmber
-                                            !isUpiAutoDetectionEnabled -> SlateDarkTextSecondary
-                                            else -> IncomeGreen
-                                        },
+                                        color = upiCardAccent,
                                         modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                     )
                                 }
@@ -460,17 +431,17 @@ fun ProfileScreen(
                                 text = when {
                                     !isUpiNotifGranted -> "Tap to grant Android Notification Access so Zenith can auto-detect receipts."
                                     !isUpiAutoDetectionEnabled -> "Detection is temporarily paused in settings. Tap to configure."
-                                    else -> "Active: Intercepts GPay, PhonePe, Paytm, CRED & Bank payment notifications on-device."
+                                    else -> "Active: Intercepts GPay, PhonePe, Paytm, CRED & Bank notifications on-device."
                                 },
                                 fontSize = 11.sp,
-                                color = SlateDarkTextSecondary,
+                                color = ZenithTheme.textSecondary,
                                 lineHeight = 14.sp
                             )
                         }
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
                             contentDescription = null,
-                            tint = SlateDarkTextSecondary,
+                            tint = ZenithTheme.textSecondary,
                             modifier = Modifier.size(14.dp)
                         )
                     }
@@ -480,15 +451,14 @@ fun ProfileScreen(
             Spacer(modifier = Modifier.height(18.dp))
         }
 
-        // --- 5. DATA & PRIVACY SECTION ---
+        // --- 4. DATA & PRIVACY SECTION ---
         item {
             ProfileSectionTitle("Data & Privacy")
 
             CleanCard(
                 modifier = Modifier.fillMaxWidth(),
-                backgroundColor = SlateDarkSurface.copy(alpha = 0.85f)
+                backgroundColor = ZenithTheme.cardGlassBackground
             ) {
-                // Export Data
                 PreferenceActionRow(
                     icon = Icons.Default.FileDownload,
                     title = "Export Financial Data",
@@ -498,10 +468,9 @@ fun ProfileScreen(
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(color = GlassBorderColor)
+                HorizontalDivider(color = ZenithTheme.borderColor)
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Import Data
                 PreferenceActionRow(
                     icon = Icons.Default.FileUpload,
                     title = "Import Transactions",
@@ -511,29 +480,27 @@ fun ProfileScreen(
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(color = GlassBorderColor)
+                HorizontalDivider(color = ZenithTheme.borderColor)
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Backup & Restore
                 PreferenceActionRow(
                     icon = Icons.Default.CloudSync,
                     title = "Backup & Restore",
-                    subtitle = "Full encrypted snapshot of budgets & history",
+                    subtitle = "Full JSON snapshot of budgets, goals & history",
                     actionLabel = "Backup",
                     onClick = { showBackupModal = true }
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(color = GlassBorderColor)
+                HorizontalDivider(color = ZenithTheme.borderColor)
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Clear Local Data
                 PreferenceActionRow(
                     icon = Icons.Default.DeleteOutline,
                     title = "Clear Local Transactions",
-                    subtitle = "Reset device transaction history",
+                    subtitle = "Reset device ledger history",
                     actionLabel = "Clear",
-                    accentColor = ExpenseRed,
+                    accentColor = ZenithTheme.accentRed,
                     onClick = { showClearDataDialog = true }
                 )
             }
@@ -541,24 +508,24 @@ fun ProfileScreen(
             Spacer(modifier = Modifier.height(18.dp))
         }
 
-        // --- 6. SUPPORT & ABOUT SECTION ---
+        // --- 5. SUPPORT & ABOUT SECTION ---
         item {
             ProfileSectionTitle("Support & About")
 
             CleanCard(
                 modifier = Modifier.fillMaxWidth(),
-                backgroundColor = SlateDarkSurface.copy(alpha = 0.85f)
+                backgroundColor = ZenithTheme.cardGlassBackground
             ) {
                 PreferenceActionRow(
                     icon = Icons.AutoMirrored.Outlined.HelpOutline,
                     title = "Help & Voice Guide",
-                    subtitle = "How to speak Tanglish & English voice entries",
+                    subtitle = "How to speak natural voice expense entries",
                     actionLabel = "Guide",
                     onClick = { showHelpDialog = true }
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(color = GlassBorderColor)
+                HorizontalDivider(color = ZenithTheme.borderColor)
                 Spacer(modifier = Modifier.height(10.dp))
 
                 PreferenceActionRow(
@@ -573,37 +540,21 @@ fun ProfileScreen(
             Spacer(modifier = Modifier.height(18.dp))
         }
 
-        // --- 7. ACCOUNT ACTIONS SECTION ---
+        // --- 6. ACCOUNT ACTIONS SECTION ---
         item {
             ProfileSectionTitle("Account Actions")
 
             CleanCard(
                 modifier = Modifier.fillMaxWidth(),
-                backgroundColor = SlateDarkSurface.copy(alpha = 0.85f)
+                backgroundColor = ZenithTheme.cardGlassBackground
             ) {
                 if (isAuthenticated && !isGuestMode) {
                     PreferenceActionRow(
-                        icon = Icons.AutoMirrored.Filled.Logout,
-                        title = "Sign Out",
-                        subtitle = "Sign out of your synced account on this device",
-                        actionLabel = "Sign Out",
-                        accentColor = GoldAccent,
-                        onClick = {
-                            viewModel.signOut()
-                            Toast.makeText(context, "Signed out of Zenith account.", Toast.LENGTH_SHORT).show()
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-                    HorizontalDivider(color = GlassBorderColor)
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    PreferenceActionRow(
                         icon = Icons.Default.DeleteForever,
                         title = "Reset Device Account",
-                        subtitle = "Clear account session and local vault records",
+                        subtitle = "Clear account session and local ledger records",
                         actionLabel = "Reset",
-                        accentColor = ExpenseRed,
+                        accentColor = ZenithTheme.accentRed,
                         onClick = {
                             viewModel.signOut()
                             viewModel.clearAllLocalData()
@@ -614,9 +565,9 @@ fun ProfileScreen(
                     PreferenceActionRow(
                         icon = Icons.Default.AccountCircle,
                         title = "Sign In / Register",
-                        subtitle = "Sync across devices and connect family vault",
+                        subtitle = "Sync your personal wealth ledger across devices",
                         actionLabel = "Sign In",
-                        accentColor = EmeraldDarkPrimary,
+                        accentColor = ZenithTheme.accentGreen,
                         onClick = {
                             initialAuthModeIsSignUp = false
                             showAuthDialog = true
@@ -631,7 +582,6 @@ fun ProfileScreen(
 
     // --- MODALS & DIALOGS ---
 
-    // Edit Name Dialog
     if (showEditNameDialog) {
         EditNameDialog(
             currentName = activeUserName ?: viewModel.currentUserName,
@@ -644,53 +594,16 @@ fun ProfileScreen(
         )
     }
 
-    // Family Members Dialog
-    if (showFamilyDialog) {
-        FamilyMembersDialog(
-            familyMembers = familyMembers,
-            familyName = activeFamily?.name ?: "Family Vault",
-            familyId = activeFamily?.id ?: activeFamilyId ?: "",
-            inviteCode = activeFamily?.inviteCode ?: "",
-            onDismiss = { showFamilyDialog = false },
-            onAddMember = { name, role ->
-                viewModel.addFamilyMember(name, role)
-            },
-            onJoinFamily = { code ->
-                viewModel.handleScannedVaultQr(code) { success, msg ->
-                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                }
-            },
-            onSyncNow = {
-                viewModel.syncFamilyLedgerNow { success ->
-                    Toast.makeText(
-                        context,
-                        if (success) "Family ledger synchronized!" else "Sync complete (offline mode).",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            },
-            onExportVaultFile = {
-                viewModel.exportVaultSyncFile(context) { shareIntent ->
-                    if (shareIntent != null) {
-                        context.startActivity(shareIntent)
-                    } else {
-                        Toast.makeText(context, "Could not export vault file.", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            },
-            onImportVaultFile = { jsonPayload ->
-                viewModel.importVaultSyncFile(jsonPayload) { success, msg ->
-                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                }
-            }
-        )
-    }
-
-    // UPI Notification Settings Dialog
     if (showUpiSettingsDialog) {
         UpiNotificationSettingsDialog(
             isPermissionGranted = isUpiNotifGranted,
             isAutoDetectEnabled = isUpiAutoDetectionEnabled,
+            isPostNotificationsGranted = isPostNotificationsGranted,
+            onRequestPostNotifications = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            },
             onToggleAutoDetect = { enabled ->
                 viewModel.setUpiAutoDetectionEnabled(enabled)
                 Toast.makeText(context, if (enabled) "UPI auto-detection enabled." else "UPI auto-detection paused.", Toast.LENGTH_SHORT).show()
@@ -706,40 +619,47 @@ fun ProfileScreen(
         )
     }
 
-    // Clear Local Data Confirmation Dialog
     if (showClearDataDialog) {
         AlertDialog(
             onDismissRequest = { showClearDataDialog = false },
-            title = { Text("Reset Local Database & Vaults?") },
-            text = { Text("This will permanently wipe all local transactions, budgets, goals, and cached family vaults, and re-initialize clean default categories. Ideal when reconnecting to a reset backend.") },
+            title = { Text("Reset Local Database?", color = ZenithTheme.textPrimary) },
+            text = {
+                Text(
+                    "This will permanently wipe all local transactions, budgets, goals, and auto-pay reminders, and re-initialize clean default categories.",
+                    color = ZenithTheme.textSecondary
+                )
+            },
             confirmButton = {
                 Button(
                     onClick = {
                         viewModel.clearAllLocalData()
                         showClearDataDialog = false
-                        Toast.makeText(context, "Local database and family ledger reset successfully.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Local database reset successfully.", Toast.LENGTH_SHORT).show()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidRed)
                 ) {
-                    Text("Reset Database")
+                    Text("Reset Database", color = Color.White)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearDataDialog = false }) {
-                    Text("Cancel")
+                    Text("Cancel", color = ZenithTheme.textSecondary)
                 }
-            }
+            },
+            containerColor = ZenithTheme.cardSurface,
+            shape = RoundedCornerShape(20.dp)
         )
     }
 
-    // About Dialog
     if (showAboutDialog) {
         Dialog(onDismissRequest = { showAboutDialog = false }) {
             Surface(
                 shape = RoundedCornerShape(24.dp),
-                color = SlateDarkSurface,
-                border = BorderStroke(1.dp, GlassBorderColor),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                color = ZenithTheme.cardSurface,
+                border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(24.dp),
@@ -747,40 +667,44 @@ fun ProfileScreen(
                 ) {
                     ZenithLogo(size = 48.dp)
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text("ZENITH", fontSize = 20.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp, color = SlateDarkTextPrimary)
-                    Text("Your money. Your clarity.", fontSize = 12.sp, color = GoldAccent, fontWeight = FontWeight.SemiBold)
+                    Text("ZENITH", fontSize = 20.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp, color = ZenithTheme.textPrimary)
+                    Text("Your money. Your clarity.", fontSize = 12.sp, color = ZenithTheme.accentAmber, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Zenith is a high-performance offline-first personal & family finance manager powered by Gemini AI, real-time voice expense intelligence, and cloud synchronization.",
+                        text = "Zenith is a high-performance offline-first personal finance manager powered by on-device OCR, Gemini voice intelligence, UPI automation, and encrypted cloud sync.",
                         fontSize = 13.sp,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         lineHeight = 18.sp
                     )
                     Spacer(modifier = Modifier.height(20.dp))
                     Button(
                         onClick = { showAboutDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
-                        shape = RoundedCornerShape(12.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                     ) {
-                        Text("Close", fontWeight = FontWeight.Bold)
+                        Text("Close", fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
             }
         }
     }
 
-    // Help & Voice Guide Dialog
     if (showHelpDialog) {
         Dialog(onDismissRequest = { showHelpDialog = false }) {
             Surface(
                 shape = RoundedCornerShape(24.dp),
-                color = SlateDarkSurface,
-                border = BorderStroke(1.dp, GlassBorderColor),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                color = ZenithTheme.cardSurface,
+                border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
             ) {
                 Column(modifier = Modifier.padding(24.dp)) {
-                    Text("Voice Entry Guide", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
-                    Text("Speak your expense or income in English", fontSize = 12.sp, color = SlateDarkTextSecondary)
+                    Text("Voice Entry Guide", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
+                    Text("Speak your expense or income naturally", fontSize = 12.sp, color = ZenithTheme.textSecondary)
                     Spacer(modifier = Modifier.height(14.dp))
 
                     listOf(
@@ -789,24 +713,26 @@ fun ProfileScreen(
                         "• \"Received salary 50000 in bank\"" to "Records ₹50,000 Income",
                         "• \"Got 200 cashback on Google Pay\"" to "Records ₹200 Income"
                     ).forEach { (cmd, desc) ->
-                        Text(cmd, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = GoldAccent)
-                        Text(desc, fontSize = 11.sp, color = SlateDarkTextSecondary, modifier = Modifier.padding(bottom = 8.dp))
+                        Text(cmd, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentAmber)
+                        Text(desc, fontSize = 11.sp, color = ZenithTheme.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
                     Button(
                         onClick = { showHelpDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
-                        shape = RoundedCornerShape(12.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                     ) {
-                        Text("Got it", fontWeight = FontWeight.Bold)
+                        Text("Got it", fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
             }
         }
     }
 
-    // Auth Dialog
     if (showAuthDialog) {
         AuthDialog(
             isSignUpInitial = initialAuthModeIsSignUp,
@@ -838,19 +764,17 @@ fun ProfileScreen(
         )
     }
 
-    // Export Data Modal
     if (showExportModal) {
         ExportDataModal(
-            transactions = state.transactions,
+            transactions = state.allTransactions,
             currencySymbol = state.currencySymbol,
             onDismiss = { showExportModal = false }
         )
     }
 
-    // Import Data Modal
     if (showImportModal) {
         ImportDataModal(
-            existingTransactions = state.transactions,
+            existingTransactions = state.allTransactions,
             currencySymbol = state.currencySymbol,
             onDismiss = { showImportModal = false },
             onImportConfirmed = { transactionsToImport ->
@@ -860,10 +784,9 @@ fun ProfileScreen(
         )
     }
 
-    // Backup & Restore Modal
     if (showBackupModal) {
         BackupRestoreModal(
-            transactions = state.transactions,
+            transactions = state.allTransactions,
             categories = state.categories,
             budgets = state.budgets,
             savingsGoals = state.savingsGoals,
@@ -882,7 +805,7 @@ fun ProfileSectionTitle(title: String) {
         fontSize = 12.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = 1.2.sp,
-        color = SlateDarkTextSecondary,
+        color = ZenithTheme.textSecondary,
         modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
     )
 }
@@ -902,28 +825,29 @@ fun UserProfileGlassHeader(
     val initial = userName.trim().firstOrNull()?.uppercase() ?: "Z"
 
     CleanCard(
-        modifier = Modifier.fillMaxWidth().testTag("profile_header_card"),
-        backgroundColor = SlateDarkSurface.copy(alpha = 0.85f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("profile_header_card"),
+        backgroundColor = ZenithTheme.cardGlassBackground,
         contentPadding = PaddingValues(20.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Avatar Circle
             Box(
                 modifier = Modifier
                     .size(56.dp)
                     .clip(CircleShape)
                     .background(
                         Brush.linearGradient(
-                            if (!isGuest) listOf(EmeraldDarkPrimary, PastelCyan)
-                            else listOf(SlateDarkSurfaceVariant, SlateDarkBorder)
+                            if (!isGuest) listOf(ZenithTheme.accentGreen, ZenithTheme.accentCyan)
+                            else listOf(ZenithTheme.cardVariantSurface, ZenithTheme.borderColor)
                         )
                     )
                     .border(
                         1.5.dp,
-                        if (!isGuest) PastelIndigo.copy(alpha = 0.6f) else GlassBorderColor,
+                        if (!isGuest) ZenithTheme.accentIndigo.copy(alpha = 0.6f) else ZenithTheme.borderColor,
                         CircleShape
                     ),
                 contentAlignment = Alignment.Center
@@ -939,7 +863,7 @@ fun UserProfileGlassHeader(
                     Icon(
                         imageVector = Icons.Default.PersonOutline,
                         contentDescription = null,
-                        tint = PastelIndigo,
+                        tint = ZenithTheme.accentIndigo,
                         modifier = Modifier.size(26.dp)
                     )
                 }
@@ -947,23 +871,28 @@ fun UserProfileGlassHeader(
 
             Spacer(modifier = Modifier.width(14.dp))
 
-            // User Info Column
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = if (!isGuest) userName else "Offline Vault (Private)",
                         fontSize = 17.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = SlateDarkTextPrimary
+                        color = ZenithTheme.textPrimary
                     )
 
                     if (!isGuest) {
-                        Spacer(modifier = Modifier.width(6.dp))
                         IconButton(
                             onClick = onEditNameClick,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier
+                                .padding(start = 4.dp)
+                                .size(24.dp)
                         ) {
-                            Icon(Icons.Default.Edit, contentDescription = "Edit Name", tint = PastelCyan, modifier = Modifier.size(14.dp))
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit Name",
+                                tint = ZenithTheme.accentIndigo,
+                                modifier = Modifier.size(14.dp)
+                            )
                         }
                     }
                 }
@@ -971,23 +900,24 @@ fun UserProfileGlassHeader(
                 Text(
                     text = if (!isGuest) (userEmail ?: "Cloud Account") else "Private Vault • 100% Stored On Device",
                     fontSize = 12.sp,
-                    color = SlateDarkTextSecondary
+                    color = ZenithTheme.textSecondary
                 )
 
                 Row(
                     modifier = Modifier.padding(top = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val statusColor = if (!isGuest) ZenithTheme.accentGreen else ZenithTheme.accentCyan
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = if (!isGuest) PastelGreenContainer else PastelCyanContainer,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (!isGuest) PastelGreen.copy(alpha = 0.3f) else PastelCyan.copy(alpha = 0.3f))
+                        color = statusColor.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, statusColor.copy(alpha = 0.3f))
                     ) {
                         Text(
                             text = if (!isGuest) "● Cloud Synced" else "● Local Offline",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (!isGuest) PastelGreen else PastelCyan,
+                            color = statusColor,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
@@ -996,7 +926,7 @@ fun UserProfileGlassHeader(
         }
 
         Spacer(modifier = Modifier.height(14.dp))
-        HorizontalDivider(color = GlassBorderColor)
+        HorizontalDivider(color = ZenithTheme.borderColor)
         Spacer(modifier = Modifier.height(12.dp))
 
         if (!isGuest) {
@@ -1007,24 +937,28 @@ fun UserProfileGlassHeader(
                 Button(
                     onClick = onSyncClick,
                     enabled = !isSyncing,
-                    modifier = Modifier.weight(1f).height(40.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                 ) {
                     if (isSyncing) {
                         CircularProgressIndicator(modifier = Modifier.size(14.dp), color = Color.White, strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Syncing...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Syncing...", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     } else {
-                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Sync Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Sync Now", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
 
                 OutlinedButton(
                     onClick = onSignOutClick,
-                    modifier = Modifier.weight(1f).height(40.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text("Sign Out", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -1037,16 +971,20 @@ fun UserProfileGlassHeader(
             ) {
                 Button(
                     onClick = onSignInClick,
-                    modifier = Modifier.weight(1f).height(40.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                 ) {
-                    Text("Sign In", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("Sign In", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
                 }
 
                 OutlinedButton(
                     onClick = onCreateAccountClick,
-                    modifier = Modifier.weight(1.2f).height(40.dp),
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .height(40.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text("Create Account", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -1067,13 +1005,15 @@ fun EditNameDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(20.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
-                Text("Edit Display Name", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
-                Text("Change how your name appears on family ledger entries", fontSize = 12.sp, color = SlateDarkTextSecondary, modifier = Modifier.padding(top = 4.dp))
+                Text("Edit Display Name", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
+                Text("Personalize your greeting in Zenith", fontSize = 12.sp, color = ZenithTheme.textSecondary, modifier = Modifier.padding(top = 4.dp))
 
                 Spacer(modifier = Modifier.height(14.dp))
 
@@ -1094,22 +1034,24 @@ fun EditNameDialog(
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        modifier = Modifier.weight(1f).height(44.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp),
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Text("Cancel")
                     }
 
                     Button(
-                        onClick = {
-                            if (name.isNotBlank()) onSave(name.trim())
-                        },
+                        onClick = { if (name.isNotBlank()) onSave(name.trim()) },
                         enabled = name.isNotBlank(),
-                        modifier = Modifier.weight(1f).height(44.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp),
                         shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                     ) {
-                        Text("Save", fontWeight = FontWeight.Bold)
+                        Text("Save", fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
             }
@@ -1138,7 +1080,7 @@ fun PreferenceSwitchRow(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = EmeraldDarkPrimary,
+                tint = ZenithTheme.accentGreen,
                 modifier = Modifier.size(22.dp)
             )
             Column {
@@ -1146,12 +1088,12 @@ fun PreferenceSwitchRow(
                     text = title,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
                 Text(
                     text = subtitle,
                     fontSize = 11.sp,
-                    color = SlateDarkTextSecondary
+                    color = ZenithTheme.textSecondary
                 )
             }
         }
@@ -1161,9 +1103,9 @@ fun PreferenceSwitchRow(
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
-                checkedTrackColor = EmeraldDarkPrimary,
-                uncheckedThumbColor = SlateDarkTextSecondary,
-                uncheckedTrackColor = SlateDarkSurfaceVariant
+                checkedTrackColor = ZenithTheme.solidGreen,
+                uncheckedThumbColor = ZenithTheme.textSecondary,
+                uncheckedTrackColor = ZenithTheme.cardVariantSurface
             )
         )
     }
@@ -1176,8 +1118,9 @@ fun PreferenceActionRow(
     subtitle: String,
     actionLabel: String,
     onClick: () -> Unit,
-    accentColor: Color = SlateDarkTextPrimary
+    accentColor: Color = ZenithTheme.textPrimary
 ) {
+    val defaultTextColor = ZenithTheme.textPrimary
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1193,7 +1136,7 @@ fun PreferenceActionRow(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (accentColor != SlateDarkTextPrimary) accentColor else EmeraldDarkPrimary,
+                tint = if (accentColor != defaultTextColor) accentColor else ZenithTheme.accentGreen,
                 modifier = Modifier.size(22.dp)
             )
             Column {
@@ -1206,7 +1149,7 @@ fun PreferenceActionRow(
                 Text(
                     text = subtitle,
                     fontSize = 11.sp,
-                    color = SlateDarkTextSecondary
+                    color = ZenithTheme.textSecondary
                 )
             }
         }
@@ -1214,7 +1157,7 @@ fun PreferenceActionRow(
         Icon(
             imageVector = Icons.AutoMirrored.Filled.ArrowForward,
             contentDescription = actionLabel,
-            tint = SlateDarkTextMuted,
+            tint = ZenithTheme.textMuted,
             modifier = Modifier.size(16.dp)
         )
     }
@@ -1235,8 +1178,8 @@ fun AuthDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
@@ -1254,12 +1197,12 @@ fun AuthDialog(
                     text = if (isSignUp) "Create Zenith Account" else "Sign In to Zenith",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
                 Text(
-                    text = if (isSignUp) "Cloud backup & family vault synchronization" else "Access your synced financial vaults",
+                    text = if (isSignUp) "Encrypted cloud backup & device sync" else "Access your synced personal wealth vault",
                     fontSize = 12.sp,
-                    color = SlateDarkTextSecondary,
+                    color = ZenithTheme.textSecondary,
                     modifier = Modifier.padding(top = 2.dp)
                 )
 
@@ -1312,11 +1255,13 @@ fun AuthDialog(
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                 ) {
-                    Text(if (isSignUp) "Create Account" else "Sign In", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(if (isSignUp) "Create Account" else "Sign In", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -1325,7 +1270,7 @@ fun AuthDialog(
                     Text(
                         text = if (isSignUp) "Already have an account? Sign In" else "Don't have an account? Create one",
                         fontSize = 12.sp,
-                        color = GoldAccent
+                        color = ZenithTheme.accentAmber
                     )
                 }
             }
@@ -1338,6 +1283,8 @@ fun AuthDialog(
 fun UpiNotificationSettingsDialog(
     isPermissionGranted: Boolean,
     isAutoDetectEnabled: Boolean,
+    isPostNotificationsGranted: Boolean = true,
+    onRequestPostNotifications: () -> Unit = {},
     onToggleAutoDetect: (Boolean) -> Unit,
     onOpenSystemSettings: () -> Unit,
     onSimulateTestPayment: () -> Unit,
@@ -1346,8 +1293,8 @@ fun UpiNotificationSettingsDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 6.dp)
@@ -1357,7 +1304,6 @@ fun UpiNotificationSettingsDialog(
                     .fillMaxWidth()
                     .padding(20.dp)
             ) {
-                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1367,18 +1313,19 @@ fun UpiNotificationSettingsDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        val headerColor = if (isPermissionGranted && isAutoDetectEnabled) ZenithTheme.accentGreen else ZenithTheme.accentAmber
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(if (isPermissionGranted && isAutoDetectEnabled) IncomeGreen.copy(alpha = 0.2f) else GoalAmber.copy(alpha = 0.2f))
-                                .border(1.dp, if (isPermissionGranted && isAutoDetectEnabled) IncomeGreen.copy(alpha = 0.4f) else GoalAmber.copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
+                                .background(headerColor.copy(alpha = 0.16f))
+                                .border(1.dp, headerColor.copy(alpha = 0.35f), RoundedCornerShape(12.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.NotificationsActive,
                                 contentDescription = null,
-                                tint = if (isPermissionGranted && isAutoDetectEnabled) IncomeGreen else GoalAmber,
+                                tint = headerColor,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
@@ -1388,39 +1335,32 @@ fun UpiNotificationSettingsDialog(
                                 text = "Auto-Track UPI Payments",
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
+                                color = ZenithTheme.textPrimary
                             )
                             Text(
                                 text = "Instant zero-click expense logging",
                                 fontSize = 11.sp,
-                                color = SlateDarkTextSecondary
+                                color = ZenithTheme.textSecondary
                             )
                         }
                     }
 
                     IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SlateDarkTextSecondary)
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = ZenithTheme.textSecondary)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Status Banner
+                val statusAccent = when {
+                    !isPermissionGranted -> ZenithTheme.accentAmber
+                    !isAutoDetectEnabled -> ZenithTheme.textSecondary
+                    else -> ZenithTheme.accentGreen
+                }
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = when {
-                        !isPermissionGranted -> GoalAmber.copy(alpha = 0.12f)
-                        !isAutoDetectEnabled -> SlateDarkSurfaceVariant.copy(alpha = 0.5f)
-                        else -> IncomeGreen.copy(alpha = 0.12f)
-                    },
-                    border = BorderStroke(
-                        1.dp,
-                        when {
-                            !isPermissionGranted -> GoalAmber.copy(alpha = 0.35f)
-                            !isAutoDetectEnabled -> GlassBorderColor
-                            else -> IncomeGreen.copy(alpha = 0.35f)
-                        }
-                    ),
+                    color = statusAccent.copy(alpha = 0.10f),
+                    border = BorderStroke(1.dp, statusAccent.copy(alpha = 0.35f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
@@ -1428,23 +1368,19 @@ fun UpiNotificationSettingsDialog(
                             Icon(
                                 imageVector = if (isPermissionGranted && isAutoDetectEnabled) Icons.Default.CheckCircle else Icons.Default.Warning,
                                 contentDescription = null,
-                                tint = if (isPermissionGranted && isAutoDetectEnabled) IncomeGreen else GoalAmber,
+                                tint = statusAccent,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = when {
-                                    !isPermissionGranted -> "Android Permission Required"
+                                    !isPermissionGranted -> "Notification Listener Required"
                                     !isAutoDetectEnabled -> "Detection Paused in App"
                                     else -> "Service Active & Listening"
                                 },
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = when {
-                                    !isPermissionGranted -> GoalAmber
-                                    !isAutoDetectEnabled -> SlateDarkTextSecondary
-                                    else -> IncomeGreen
-                                }
+                                color = statusAccent
                             )
                         }
 
@@ -1457,7 +1393,7 @@ fun UpiNotificationSettingsDialog(
                                 else -> "Zenith is actively monitoring UPI receipts. When you make a payment in GPay, PhonePe, Paytm, or your banking app, Zenith will prompt you with one tap to save it."
                             },
                             fontSize = 11.sp,
-                            color = SlateDarkTextSecondary,
+                            color = ZenithTheme.textSecondary,
                             lineHeight = 15.sp
                         )
 
@@ -1466,12 +1402,28 @@ fun UpiNotificationSettingsDialog(
                             Button(
                                 onClick = onOpenSystemSettings,
                                 shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = GoalAmber),
-                                modifier = Modifier.fillMaxWidth().height(38.dp)
+                                colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.accentAmber),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(38.dp)
                             ) {
-                                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Grant Permission in Settings", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                Text("Grant Listener in Settings", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            }
+                        } else if (!isPostNotificationsGranted) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = onRequestPostNotifications,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidIndigo),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(38.dp)
+                            ) {
+                                Icon(Icons.Default.Notifications, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Allow Shade Confirmations", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                             }
                         }
                     }
@@ -1479,10 +1431,9 @@ fun UpiNotificationSettingsDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // In-App Master Toggle
                 CleanCard(
                     modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = SlateDarkSurfaceVariant.copy(alpha = 0.5f)
+                    backgroundColor = ZenithTheme.cardVariantSurface
                 ) {
                     PreferenceSwitchRow(
                         icon = Icons.Default.PowerSettingsNew,
@@ -1495,17 +1446,16 @@ fun UpiNotificationSettingsDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Supported Apps section
                 Text(
-                    text = "Supported Indian Payment Apps",
+                    text = "Supported Payment Apps",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
                 Spacer(modifier = Modifier.height(6.dp))
 
                 val supportedApps = listOf("Google Pay", "PhonePe", "Paytm", "CRED", "BHIM", "Amazon Pay", "SBI YONO", "HDFC PayZapp", "ICICI iMobile", "Axis Mobile")
-                androidx.compose.foundation.layout.FlowRow(
+                FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -1513,18 +1463,21 @@ fun UpiNotificationSettingsDialog(
                     supportedApps.forEach { appName ->
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = SlateDarkSurfaceVariant,
-                            border = BorderStroke(1.dp, GlassBorderColor)
+                            color = ZenithTheme.cardVariantSurface,
+                            border = BorderStroke(1.dp, ZenithTheme.borderColor)
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Box(
-                                    modifier = Modifier.size(6.dp).clip(CircleShape).background(IncomeGreen)
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(ZenithTheme.accentGreen)
                                 )
                                 Spacer(modifier = Modifier.width(5.dp))
-                                Text(appName, fontSize = 11.sp, color = SlateDarkTextSecondary)
+                                Text(appName, fontSize = 11.sp, color = ZenithTheme.textSecondary)
                             }
                         }
                     }
@@ -1532,14 +1485,15 @@ fun UpiNotificationSettingsDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Action Buttons: Simulate Test & Done
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     OutlinedButton(
                         onClick = onSimulateTestPayment,
-                        modifier = Modifier.weight(1f).height(44.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1549,15 +1503,16 @@ fun UpiNotificationSettingsDialog(
 
                     Button(
                         onClick = onDismiss,
-                        modifier = Modifier.weight(1f).height(44.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                     ) {
-                        Text("Done", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("Done", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
                     }
                 }
             }
         }
     }
 }
-

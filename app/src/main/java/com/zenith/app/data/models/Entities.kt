@@ -13,51 +13,6 @@ enum class FinanceScope {
     FAMILY
 }
 
-enum class FamilyRole {
-    ADMIN,
-    MEMBER,
-    VIEWER
-}
-
-@Entity(
-    tableName = "families",
-    indices = [
-        Index(value = ["inviteCode"])
-    ]
-)
-data class FamilyEntity(
-    @PrimaryKey
-    val id: String,
-    val name: String,
-    val createdByUserId: String,
-    val createdAt: Long,
-    val inviteCode: String = "",
-    val serverId: String? = null,
-    val syncStatus: String = "PENDING_CREATE",
-    val updatedAt: Long = System.currentTimeMillis(),
-    val isDeleted: Boolean = false
-)
-
-@Entity(
-    tableName = "family_members",
-    indices = [
-        Index(value = ["familyId", "userId"])
-    ]
-)
-data class FamilyMemberEntity(
-    @PrimaryKey
-    val id: String,
-    val familyId: String,
-    val userId: String,
-    val name: String,
-    val role: FamilyRole,
-    val joinedAt: Long,
-    val serverId: String? = null,
-    val syncStatus: String = "PENDING_CREATE",
-    val updatedAt: Long = System.currentTimeMillis(),
-    val isDeleted: Boolean = false
-)
-
 @Entity(
     tableName = "transactions",
     indices = [
@@ -92,7 +47,10 @@ data class TransactionEntity(
     val isDeleted: Boolean = false
 )
 
-@Entity(tableName = "categories")
+@Entity(
+    tableName = "categories",
+    indices = [Index(value = ["name"], unique = true)]
+)
 data class CategoryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -243,7 +201,7 @@ data class AutoPayReminderEntity(
     val lastPaidDateMillis: Long? = null,
     val notes: String = "",
     val serverId: String? = null,
-    val syncStatus: String = "SYNCED",
+    val syncStatus: String = "PENDING_CREATE",
     val updatedAt: Long = System.currentTimeMillis(),
     val isDeleted: Boolean = false
 )

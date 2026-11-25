@@ -13,9 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Payment
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,31 +24,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.zenith.app.data.models.FamilyMemberEntity
-import com.zenith.app.data.models.FinanceScope
 import com.zenith.app.data.upi.ExtractedUpiPayment
-import com.zenith.app.ui.theme.*
+import com.zenith.app.ui.theme.LightIncomeGreen
+import com.zenith.app.ui.theme.ZenithTheme
+import java.util.Locale
 
 @Composable
 fun UpiPaymentDetectedModal(
     payment: ExtractedUpiPayment,
     currencySymbol: String,
-    familyMembers: List<FamilyMemberEntity>,
     onDismiss: () -> Unit,
     onConfirmSave: (
         title: String,
         amount: Double,
         category: String,
-        scope: FinanceScope,
-        memberId: String?,
         upiId: String?,
         upiTransactionId: String?
     ) -> Unit
 ) {
     var titleText by remember { mutableStateOf(payment.payeeName) }
     var selectedCategory by remember { mutableStateOf(payment.detectedCategory) }
-    var selectedScope by remember { mutableStateOf(FinanceScope.PERSONAL) }
-    var selectedMemberId by remember { mutableStateOf<String?>(null) }
     var isSubmitting by remember { mutableStateOf(false) }
 
     val categories = listOf(
@@ -67,8 +60,8 @@ fun UpiPaymentDetectedModal(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, IncomeGreen.copy(alpha = 0.5f)),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.5f)),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp)
@@ -90,13 +83,13 @@ fun UpiPaymentDetectedModal(
                             modifier = Modifier
                                 .size(38.dp)
                                 .clip(CircleShape)
-                                .background(IncomeGreen.copy(alpha = 0.2f)),
+                                .background(ZenithTheme.accentGreen.copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Payment,
                                 contentDescription = null,
-                                tint = IncomeGreen,
+                                tint = ZenithTheme.accentGreen,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
@@ -104,13 +97,13 @@ fun UpiPaymentDetectedModal(
                         Column {
                             Text(
                                 text = "UPI Payment Detected",
-                                color = Color.White,
+                                color = ZenithTheme.textPrimary,
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = "via ${payment.sourceApp}",
-                                color = IncomeGreen,
+                                color = ZenithTheme.accentGreen,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
                             )
@@ -123,7 +116,7 @@ fun UpiPaymentDetectedModal(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Dismiss",
-                            tint = SlateDarkTextSecondary,
+                            tint = ZenithTheme.textSecondary,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -134,7 +127,7 @@ fun UpiPaymentDetectedModal(
                 // Amount Display Card
                 Card(
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                    colors = CardDefaults.cardColors(containerColor = ZenithTheme.cardVariantSurface),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -145,13 +138,13 @@ fun UpiPaymentDetectedModal(
                     ) {
                         Text(
                             text = "Amount Paid",
-                            color = SlateDarkTextSecondary,
+                            color = ZenithTheme.textSecondary,
                             fontSize = 12.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "$currencySymbol${String.format(java.util.Locale.US, "%.2f", payment.amount)}",
-                            color = Color.White,
+                            text = "$currencySymbol${String.format(Locale.US, "%.2f", payment.amount)}",
+                            color = ZenithTheme.textPrimary,
                             fontSize = 28.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -159,7 +152,7 @@ fun UpiPaymentDetectedModal(
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "UTR: ${payment.upiTransactionId}",
-                                color = SlateDarkTextSecondary,
+                                color = ZenithTheme.textSecondary,
                                 fontSize = 11.sp
                             )
                         }
@@ -172,13 +165,13 @@ fun UpiPaymentDetectedModal(
                 OutlinedTextField(
                     value = titleText,
                     onValueChange = { titleText = it },
-                    label = { Text("Merchant / Title", color = SlateDarkTextSecondary, fontSize = 13.sp) },
+                    label = { Text("Merchant / Title", color = ZenithTheme.textSecondary, fontSize = 13.sp) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = IncomeGreen,
-                        unfocusedBorderColor = GlassBorderColor,
+                        focusedTextColor = ZenithTheme.textPrimary,
+                        unfocusedTextColor = ZenithTheme.textPrimary,
+                        focusedBorderColor = ZenithTheme.accentGreen,
+                        unfocusedBorderColor = ZenithTheme.borderColor,
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent
                     ),
@@ -191,7 +184,7 @@ fun UpiPaymentDetectedModal(
                 // Category Chips
                 Text(
                     text = "Category",
-                    color = SlateDarkTextSecondary,
+                    color = ZenithTheme.textSecondary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -205,88 +198,15 @@ fun UpiPaymentDetectedModal(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(20.dp))
-                                .background(if (isSelected) IncomeGreen else Color(0xFF1E293B))
+                                .background(if (isSelected) LightIncomeGreen else ZenithTheme.cardVariantSurface)
                                 .clickable { selectedCategory = category }
                                 .padding(horizontal = 14.dp, vertical = 7.dp)
                         ) {
                             Text(
                                 text = category,
-                                color = if (isSelected) Color.Black else Color.White,
+                                color = if (isSelected) Color.White else ZenithTheme.textPrimary,
                                 fontSize = 12.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // Scope Selector: Personal Vault vs Family
-                Text(
-                    text = "Finance Scope",
-                    color = SlateDarkTextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Personal Vault Button
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (selectedScope == FinanceScope.PERSONAL) IncomeGreen.copy(alpha = 0.15f) else Color(0xFF1E293B),
-                        border = BorderStroke(1.dp, if (selectedScope == FinanceScope.PERSONAL) IncomeGreen else Color.Transparent),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { selectedScope = FinanceScope.PERSONAL }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Person,
-                                contentDescription = null,
-                                tint = if (selectedScope == FinanceScope.PERSONAL) IncomeGreen else SlateDarkTextSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Personal",
-                                color = if (selectedScope == FinanceScope.PERSONAL) Color.White else SlateDarkTextSecondary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-
-                    // Family Button
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (selectedScope == FinanceScope.FAMILY) IncomeGreen.copy(alpha = 0.15f) else Color(0xFF1E293B),
-                        border = BorderStroke(1.dp, if (selectedScope == FinanceScope.FAMILY) IncomeGreen else Color.Transparent),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { selectedScope = FinanceScope.FAMILY }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Group,
-                                contentDescription = null,
-                                tint = if (selectedScope == FinanceScope.FAMILY) IncomeGreen else SlateDarkTextSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Family",
-                                color = if (selectedScope == FinanceScope.FAMILY) Color.White else SlateDarkTextSecondary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
@@ -302,10 +222,10 @@ fun UpiPaymentDetectedModal(
                     OutlinedButton(
                         onClick = onDismiss,
                         shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, GlassBorderColor),
+                        border = BorderStroke(1.dp, ZenithTheme.borderColor),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Ignore", color = SlateDarkTextSecondary)
+                        Text("Ignore", color = ZenithTheme.textSecondary)
                     }
 
                     Button(
@@ -316,28 +236,29 @@ fun UpiPaymentDetectedModal(
                                     titleText.ifBlank { payment.payeeName },
                                     payment.amount,
                                     selectedCategory,
-                                    selectedScope,
-                                    selectedMemberId,
                                     payment.upiId,
                                     payment.upiTransactionId
                                 )
                             }
                         },
                         enabled = !isSubmitting,
-                        colors = ButtonDefaults.buttonColors(containerColor = IncomeGreen),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = LightIncomeGreen,
+                            contentColor = Color.White
+                        ),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1.5f)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Check,
                             contentDescription = null,
-                            tint = Color.Black,
+                            tint = Color.White,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Record Expense",
-                            color = Color.Black,
+                            color = Color.White,
                             fontWeight = FontWeight.Bold
                         )
                     }

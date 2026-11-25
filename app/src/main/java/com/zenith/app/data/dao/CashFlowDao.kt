@@ -22,6 +22,9 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE serverId = :serverId LIMIT 1")
     suspend fun getTransactionByServerId(serverId: String): TransactionEntity?
 
+    @Query("SELECT * FROM transactions WHERE upiTransactionId = :utr AND isDeleted = 0 LIMIT 1")
+    suspend fun getTransactionByUtr(utr: String): TransactionEntity?
+
     @Query("SELECT * FROM transactions WHERE amount = :amount AND type = :type AND financeScope = :scope AND isDeleted = 0 AND dateMillis BETWEEN :startMillis AND :endMillis")
     suspend fun findPotentialDuplicates(
         amount: Double,
@@ -76,7 +79,7 @@ interface TransactionDao {
     @Query("UPDATE transactions SET isDeleted = 1, syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE serverId = :serverId")
     suspend fun markTransactionDeletedByServerId(serverId: String, updatedAt: Long = System.currentTimeMillis())
 
-    @Query("UPDATE transactions SET isDeleted = 0, syncStatus = 'PENDING_UPDATE', updatedAt = :updatedAt WHERE id = :id")
+    @Query("UPDATE transactions SET isDeleted = 0, syncStatus = CASE WHEN serverId IS NULL OR serverId = '' THEN 'PENDING_CREATE' ELSE 'PENDING_UPDATE' END, updatedAt = :updatedAt WHERE id = :id")
     suspend fun restoreTransaction(id: Long, updatedAt: Long = System.currentTimeMillis())
 
     @Query("UPDATE transactions SET isDeleted = 0, syncStatus = 'PENDING_UPDATE', updatedAt = :updatedAt WHERE serverId = :serverId")
@@ -145,6 +148,9 @@ interface BudgetDao {
     @Query("SELECT * FROM budgets WHERE serverId = :serverId LIMIT 1")
     suspend fun getBudgetByServerId(serverId: String): BudgetEntity?
 
+    @Query("SELECT * FROM budgets WHERE id = :id LIMIT 1")
+    suspend fun getBudgetById(id: Long): BudgetEntity?
+
     @Query("UPDATE budgets SET isDeleted = 1, syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE id = :id")
     suspend fun markBudgetDeleted(id: Long, updatedAt: Long = System.currentTimeMillis())
 
@@ -186,6 +192,9 @@ interface SavingsGoalDao {
 
     @Query("SELECT * FROM savings_goals WHERE serverId = :serverId LIMIT 1")
     suspend fun getGoalByServerId(serverId: String): SavingsGoalEntity?
+
+    @Query("SELECT * FROM savings_goals WHERE id = :id LIMIT 1")
+    suspend fun getGoalById(id: Long): SavingsGoalEntity?
 
     @Query("UPDATE savings_goals SET isDeleted = 1, syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE id = :id")
     suspend fun markGoalDeleted(id: Long, updatedAt: Long = System.currentTimeMillis())

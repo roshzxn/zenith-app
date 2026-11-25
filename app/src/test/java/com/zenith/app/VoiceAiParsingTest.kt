@@ -131,9 +131,9 @@ class VoiceAiParsingTest {
     }
 
     @Test
-    fun testVoiceExpense_FamilyScopeDetection() {
+    fun testVoiceExpense_PersonalScopeForFamilyKeywords() {
         val result = GeminiAiService.fallbackParseVoiceCommand("Family groceries 2500 credit card")
-        assertEquals(com.zenith.app.data.models.FinanceScope.FAMILY, result.scope)
+        assertEquals(com.zenith.app.data.models.FinanceScope.PERSONAL, result.scope)
         assertEquals("Groceries", result.title)
         assertEquals(2500.0, result.amount, 0.01)
         assertEquals("Shopping", result.category)
@@ -141,9 +141,9 @@ class VoiceAiParsingTest {
     }
 
     @Test
-    fun testVoiceExpense_SharedVaultScopeDetection() {
+    fun testVoiceExpense_SharedTextDefaultsToPersonalScope() {
         val result = GeminiAiService.fallbackParseVoiceCommand("Shared house rent 15000 bank transfer")
-        assertEquals(com.zenith.app.data.models.FinanceScope.FAMILY, result.scope)
+        assertEquals(com.zenith.app.data.models.FinanceScope.PERSONAL, result.scope)
         assertEquals("House Rent", result.title)
         assertEquals(15000.0, result.amount, 0.01)
         assertEquals("Housing & Rent", result.category)
@@ -182,12 +182,12 @@ class VoiceAiParsingTest {
     }
 
     @Test
-    fun testVoiceExpense_TanglishVeetuVaadagai_FamilyScope() {
+    fun testVoiceExpense_TanglishVeetuVaadagai_PersonalScope() {
         val result = GeminiAiService.fallbackParseVoiceCommand("Veetu vaadagai 15000 bank transfer")
         assertEquals(15000.0, result.amount, 0.01)
         assertEquals(TransactionType.EXPENSE, result.type)
         assertEquals("Housing & Rent", result.category)
-        assertEquals(com.zenith.app.data.models.FinanceScope.FAMILY, result.scope)
+        assertEquals(com.zenith.app.data.models.FinanceScope.PERSONAL, result.scope)
         assertEquals("Bank Transfer", result.paymentMethod)
     }
 
@@ -197,7 +197,7 @@ class VoiceAiParsingTest {
         assertEquals(450.0, result.amount, 0.01)
         assertEquals(TransactionType.EXPENSE, result.type)
         assertEquals("Healthcare", result.category)
-        assertEquals(com.zenith.app.data.models.FinanceScope.FAMILY, result.scope)
+        assertEquals(com.zenith.app.data.models.FinanceScope.PERSONAL, result.scope)
         assertEquals("UPI", result.paymentMethod)
     }
 
@@ -226,34 +226,19 @@ class VoiceAiParsingTest {
     }
 
     @Test
-    fun testFamilyInviteCodeUtils_WhatsAppShareText() {
-        val sharedText = "Join our shared Family Ledger 'Roshan Family' on Zenith Finance!\n\nInvite Code: FAM-8F4A2B\n\nOpen Zenith > Family Ledger > Join Vault and enter FAM-8F4A2B to connect instantly."
-        val extracted = com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode(sharedText)
-        assertEquals("FAM-8F4A2B", extracted)
-    }
-
-    @Test
-    fun testFamilyInviteCodeUtils_DirectCode() {
-        assertEquals("FAM-X8K9L2", com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode("FAM-X8K9L2"))
-        assertEquals("FAM-X8K9L2", com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode("fam-x8k9l2"))
-    }
-
-    @Test
-    fun testFamilyInviteCodeUtils_ShortCode() {
-        assertEquals("FAM-8F4A2B", com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode("8F4A2B"))
-    }
-
-    @Test
-    fun testFamilyInviteCodeUtils_UrlDeepLink() {
-        val url = "https://zenith.cashflow.app/family/join?code=FAM-7A9B3C"
-        assertEquals("FAM-7A9B3C", com.zenith.app.data.util.FamilyInviteCodeUtils.extractInviteCode(url))
+    fun testVoiceExpense_MissingAmountReturnsZeroAndUniqueRequestId() {
+        val first = GeminiAiService.fallbackParseVoiceCommand("Lunch at cafe")
+        val second = GeminiAiService.fallbackParseVoiceCommand("Lunch at cafe")
+        assertEquals(0.0, first.amount, 0.001)
+        assertEquals(com.zenith.app.data.models.FinanceScope.PERSONAL, first.scope)
+        assertNotEquals(first.requestId, second.requestId)
     }
 
     @Test
     fun testVoiceExpense_SpokenEnglishNumberWords() {
         val result = GeminiAiService.fallbackParseVoiceCommand("Two thousand for dinner with family")
         assertEquals(2000.0, result.amount, 0.01)
-        assertEquals(com.zenith.app.data.models.FinanceScope.FAMILY, result.scope)
+        assertEquals(com.zenith.app.data.models.FinanceScope.PERSONAL, result.scope)
         assertEquals("Dinner", result.title)
         assertEquals("Food & Dining", result.category)
     }
@@ -268,10 +253,10 @@ class VoiceAiParsingTest {
     }
 
     @Test
-    fun testVoiceExpense_FamilyScopeWithRelatives() {
+    fun testVoiceExpense_RelativesDefaultToPersonalScope() {
         val result = GeminiAiService.fallbackParseVoiceCommand("Medicines for mother 750")
         assertEquals(750.0, result.amount, 0.01)
-        assertEquals(com.zenith.app.data.models.FinanceScope.FAMILY, result.scope)
+        assertEquals(com.zenith.app.data.models.FinanceScope.PERSONAL, result.scope)
         assertEquals("Medicines", result.title)
         assertEquals("Healthcare", result.category)
     }

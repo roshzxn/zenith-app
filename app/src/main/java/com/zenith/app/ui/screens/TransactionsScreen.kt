@@ -1,33 +1,35 @@
 package com.zenith.app.ui.screens
 
-import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.zenith.app.data.models.FamilyMemberEntity
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.ui.components.CleanCard
-import com.zenith.app.ui.components.GlassCard
 import com.zenith.app.ui.components.TransactionDetailModal
 import com.zenith.app.ui.components.TransactionItemCard
-import com.zenith.app.ui.theme.*
+import com.zenith.app.ui.theme.ZenithTheme
 import com.zenith.app.ui.viewmodel.CashFlowUiState
 import java.util.*
 
@@ -37,16 +39,18 @@ fun TransactionsScreen(
     onSearchQueryChange: (String) -> Unit,
     onFilterTypeChange: (TransactionType?) -> Unit,
     onFilterCategoryChange: (String?) -> Unit,
-    onFilterMemberChange: (String?) -> Unit,
     onDeleteTransaction: (TransactionEntity) -> Unit,
     onOpenAddTransaction: () -> Unit,
     onOpenVoiceAssistant: (() -> Unit)? = null,
-    onUpdateTransaction: ((TransactionEntity) -> Unit)? = null,
-    familyMembers: List<FamilyMemberEntity> = emptyList()
+    onUpdateTransaction: ((TransactionEntity) -> Unit)? = null
 ) {
     var selectedTransactionForDetails by remember { mutableStateOf<TransactionEntity?>(null) }
     var transactionToDelete by remember { mutableStateOf<TransactionEntity?>(null) }
     var selectedDateRange by remember { mutableStateOf("ALL") }
+
+    val distinctCategories = remember(state.categories) {
+        state.categories.distinctBy { it.name.trim() }
+    }
 
     val filteredTransactions = remember(state.transactions, selectedDateRange) {
         val now = Calendar.getInstance()
@@ -67,261 +71,291 @@ fun TransactionsScreen(
         }
     }
 
+    val groupedTransactions = remember(filteredTransactions) {
+        val now = Calendar.getInstance()
+        val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+        val fmt = java.text.SimpleDateFormat("EEEE, dd MMMM yyyy", Locale.getDefault())
+        filteredTransactions.groupBy { tx ->
+            val date = Date(tx.dateMillis)
+            val txCal = Calendar.getInstance().apply { time = date }
+            when {
+                now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
+                    now.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Today"
+                yesterday.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
+                    yesterday.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
+                else -> fmt.format(date)
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp)
     ) {
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        // --- 1. TITLE & QUICK ADD ---
+        // --- 1. COMPACT TOP HEADER BAR (Always reachable without covering rows) ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Activity",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
                 Text(
-                    text = "${state.transactions.size} records • Tap & hold for details",
+                    text = "${filteredTransactions.size} records • Tap for details",
                     fontSize = 12.sp,
-                    color = SlateDarkTextSecondary
+                    color = ZenithTheme.textSecondary
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 if (onOpenVoiceAssistant != null) {
-                    IconButton(onClick = { onOpenVoiceAssistant.invoke() }, modifier = Modifier.padding(end = 8.dp)) {
-                        Icon(Icons.Default.Mic, contentDescription = "Voice Entry", tint = EmeraldDarkPrimary)
-                    }
-                }
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = GlassCardBg,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor)
-                ) {
-                    Text(
-                        text = "${state.transactions.size} entries",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = EmeraldDarkPrimary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // --- 2. GLASS SEARCH BAR ---
-        OutlinedTextField(
-            value = state.searchQuery,
-            onValueChange = onSearchQueryChange,
-            placeholder = { Text("Search title, category, payment method or note...", fontSize = 12.sp, color = SlateDarkTextSecondary) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = SlateDarkTextSecondary) },
-            trailingIcon = {
-                if (state.searchQuery.isNotBlank()) {
-                    IconButton(onClick = { onSearchQueryChange("") }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Clear search", tint = SlateDarkTextSecondary)
-                    }
-                }
-            },
-            shape = RoundedCornerShape(16.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                unfocusedBorderColor = GlassBorderColor,
-                focusedBorderColor = EmeraldDarkPrimary,
-                unfocusedContainerColor = GlassCardBg,
-                focusedContainerColor = GlassCardBg,
-                focusedTextColor = SlateDarkTextPrimary,
-                unfocusedTextColor = SlateDarkTextPrimary
-            ),
-            modifier = Modifier.fillMaxWidth().testTag("search_transactions_input"),
-            singleLine = true
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // --- 3. TYPE FILTER CHIPS (All, Expenses, Income) ---
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(
-                selected = state.selectedFilterType == null,
-                onClick = { onFilterTypeChange(null) },
-                label = { Text("All", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) },
-                modifier = Modifier.testTag("filter_all_chip")
-            )
-            FilterChip(
-                selected = state.selectedFilterType == TransactionType.EXPENSE,
-                onClick = { onFilterTypeChange(TransactionType.EXPENSE) },
-                label = { Text("Expenses", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) },
-                modifier = Modifier.testTag("filter_expense_chip")
-            )
-            FilterChip(
-                selected = state.selectedFilterType == TransactionType.INCOME,
-                onClick = { onFilterTypeChange(TransactionType.INCOME) },
-                label = { Text("Income", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) },
-                modifier = Modifier.testTag("filter_income_chip")
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // --- 3.5 DATE RANGE ROW ---
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            val dateRanges = listOf(
-                "ALL" to "All Time",
-                "THIS_MONTH" to "This Month",
-                "THIS_WEEK" to "This Week",
-                "TODAY" to "Today"
-            )
-            items(dateRanges) { (key, label) ->
-                FilterChip(
-                    selected = selectedDateRange == key,
-                    onClick = { selectedDateRange = key },
-                    label = { Text(label, fontSize = 11.sp, fontWeight = if (selectedDateRange == key) FontWeight.Bold else FontWeight.Normal) }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // --- 4. CATEGORY HORIZONTAL ROW ---
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            item {
-                FilterChip(
-                    selected = state.selectedFilterCategory == null,
-                    onClick = { onFilterCategoryChange(null) },
-                    label = { Text("All Categories", fontSize = 11.sp) }
-                )
-            }
-            items(state.categories, key = { "cat_${it.id}" }) { cat ->
-                FilterChip(
-                    selected = state.selectedFilterCategory == cat.name,
-                    onClick = {
-                        if (state.selectedFilterCategory == cat.name) onFilterCategoryChange(null)
-                        else onFilterCategoryChange(cat.name)
-                    },
-                    label = { Text(cat.name, fontSize = 11.sp) },
-                    modifier = Modifier.animateItem()
-                )
-            }
-        }
-
-        // --- 5. MEMBER FILTER ROW (If Family Members present) ---
-        if (familyMembers.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(6.dp))
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                item {
-                    FilterChip(
-                        selected = state.selectedFilterMember == null,
-                        onClick = { onFilterMemberChange(null) },
-                        label = { Text("All Members", fontSize = 11.sp) }
-                    )
-                }
-                items(familyMembers, key = { "member_${it.id}" }) { member ->
-                    FilterChip(
-                        selected = state.selectedFilterMember == member.userId,
-                        onClick = {
-                            if (state.selectedFilterMember == member.userId) onFilterMemberChange(null)
-                            else onFilterMemberChange(member.userId)
-                        },
-                        label = { Text("👤 ${member.name}", fontSize = 11.sp) }
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // --- 6. TRANSACTION LIST (Grouped by Date) ---
-        if (filteredTransactions.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
-                CleanCard(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    backgroundColor = SlateDarkSurface.copy(alpha = 0.8f)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.fillMaxWidth().padding(16.dp)
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = ZenithTheme.accentIndigo.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, ZenithTheme.accentIndigo.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onOpenVoiceAssistant.invoke() }
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
-                            contentDescription = null,
-                            modifier = Modifier.size(44.dp),
-                            tint = SlateDarkTextMuted
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = "No transactions found",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
-                        )
-                        Text(
-                            text = if (state.searchQuery.isNotBlank() || selectedDateRange != "ALL") "Try clearing filters to see more results." else "Your financial activity will appear here.",
-                            fontSize = 12.sp,
-                            color = SlateDarkTextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Button(
-                            onClick = onOpenAddTransaction,
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
-                        ) {
-                            Text("Add Transaction", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.Mic,
+                                contentDescription = "Voice Entry",
+                                tint = ZenithTheme.accentIndigo,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
                 }
-            }
-        } else {
-            val groupedTransactions = remember(filteredTransactions) {
-                filteredTransactions.groupBy { tx ->
-                    val date = Date(tx.dateMillis)
-                    val now = Calendar.getInstance()
-                    val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
-                    val txCal = Calendar.getInstance().apply { time = date }
-                    when {
-                        now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
-                                now.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Today"
-                        yesterday.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
-                                yesterday.get(Calendar.DAY_OF_YEAR) == txCal.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
-                        else -> java.text.SimpleDateFormat("EEEE, dd MMMM yyyy", Locale.getDefault()).format(date)
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = ZenithTheme.solidGreen,
+                    modifier = Modifier
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onOpenAddTransaction() }
+                        .testTag("fab_add_transaction")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "Add Transaction",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Add",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
                     }
                 }
             }
+        }
 
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(bottom = 144.dp)
-            ) {
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // --- 2. UNIFIED SCROLLABLE FEED (Search, Filters, Categories scroll cleanly with transactions) ---
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 116.dp)
+        ) {
+            item(key = "activity_search") {
+                OutlinedTextField(
+                    value = state.searchQuery,
+                    onValueChange = onSearchQueryChange,
+                    placeholder = {
+                        Text(
+                            text = "Search title, category, method or note...",
+                            fontSize = 12.sp,
+                            color = ZenithTheme.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = "Search", tint = ZenithTheme.textSecondary)
+                    },
+                    trailingIcon = {
+                        if (state.searchQuery.isNotBlank()) {
+                            IconButton(onClick = { onSearchQueryChange("") }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear search", tint = ZenithTheme.textSecondary)
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = ZenithTheme.borderColor,
+                        focusedBorderColor = ZenithTheme.solidGreen,
+                        unfocusedContainerColor = ZenithTheme.cardSurface,
+                        focusedContainerColor = ZenithTheme.cardSurface,
+                        focusedTextColor = ZenithTheme.textPrimary,
+                        unfocusedTextColor = ZenithTheme.textPrimary
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("search_transactions_input"),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            item(key = "activity_type_chips") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = state.selectedFilterType == null,
+                        onClick = { onFilterTypeChange(null) },
+                        label = { Text("All", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) },
+                        modifier = Modifier.testTag("filter_all_chip")
+                    )
+                    FilterChip(
+                        selected = state.selectedFilterType == TransactionType.EXPENSE,
+                        onClick = { onFilterTypeChange(TransactionType.EXPENSE) },
+                        label = { Text("Expenses", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) },
+                        modifier = Modifier.testTag("filter_expense_chip")
+                    )
+                    FilterChip(
+                        selected = state.selectedFilterType == TransactionType.INCOME,
+                        onClick = { onFilterTypeChange(TransactionType.INCOME) },
+                        label = { Text("Income", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) },
+                        modifier = Modifier.testTag("filter_income_chip")
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            item(key = "activity_date_chips") {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val dateRanges = listOf(
+                        "ALL" to "All Time",
+                        "THIS_MONTH" to "This Month",
+                        "THIS_WEEK" to "This Week",
+                        "TODAY" to "Today"
+                    )
+                    items(dateRanges, key = { it.first }) { (key, label) ->
+                        FilterChip(
+                            selected = selectedDateRange == key,
+                            onClick = { selectedDateRange = key },
+                            label = {
+                                Text(
+                                    label,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selectedDateRange == key) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            item(key = "activity_category_chips") {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    item {
+                        FilterChip(
+                            selected = state.selectedFilterCategory == null,
+                            onClick = { onFilterCategoryChange(null) },
+                            label = { Text("All Categories", fontSize = 11.sp) }
+                        )
+                    }
+                    items(distinctCategories, key = { "cat_${it.name}" }) { cat ->
+                        FilterChip(
+                            selected = state.selectedFilterCategory == cat.name,
+                            onClick = {
+                                if (state.selectedFilterCategory == cat.name) onFilterCategoryChange(null)
+                                else onFilterCategoryChange(cat.name)
+                            },
+                            label = { Text(cat.name, fontSize = 11.sp, maxLines = 1, softWrap = false) }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            if (filteredTransactions.isEmpty()) {
+                item(key = "activity_empty") {
+                    CleanCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 24.dp),
+                        backgroundColor = ZenithTheme.cardGlassBackground
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
+                                contentDescription = null,
+                                modifier = Modifier.size(44.dp),
+                                tint = ZenithTheme.textMuted
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "No transactions found",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZenithTheme.textPrimary
+                            )
+                            Text(
+                                text = if (state.searchQuery.isNotBlank() || selectedDateRange != "ALL" || state.selectedFilterCategory != null) {
+                                    "Try clearing filters to see more results."
+                                } else {
+                                    "Your financial activity will appear here."
+                                },
+                                fontSize = 12.sp,
+                                color = ZenithTheme.textSecondary
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = onOpenAddTransaction,
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
+                            ) {
+                                Text("Add Transaction", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                            }
+                        }
+                    }
+                }
+            } else {
                 groupedTransactions.forEach { (dateHeader, txList) ->
                     item(key = "header_$dateHeader") {
                         val dayExpense = txList.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 14.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
+                                .padding(top = 12.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -329,26 +363,29 @@ fun TransactionsScreen(
                                 text = dateHeader,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextSecondary,
+                                color = ZenithTheme.textSecondary,
                                 letterSpacing = 0.5.sp
                             )
                             if (dayExpense > 0) {
                                 Text(
-                                    text = "Spent: -${state.currencySymbol}${String.format(Locale.US, "%,.0f", dayExpense)}",
+                                    text = if (state.isBalanceHidden) {
+                                        "Spent: -${state.currencySymbol}••••"
+                                    } else {
+                                        "Spent: -${state.currencySymbol}${String.format(Locale.US, "%,.0f", dayExpense)}"
+                                    },
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = PastelRose
+                                    color = ZenithTheme.accentRed
                                 )
                             }
                         }
                     }
 
                     items(txList, key = { "tx_${it.id}" }) { tx ->
-                        val memberName = familyMembers.firstOrNull { it.userId == tx.createdByUserId }?.name
                         TransactionItemCard(
                             transaction = tx,
                             currencySymbol = state.currencySymbol,
-                            creatorName = memberName,
+                            isMasked = state.isBalanceHidden,
                             onClick = { selectedTransactionForDetails = it },
                             onLongClick = { selectedTransactionForDetails = it },
                             modifier = Modifier.animateItem()
@@ -359,9 +396,7 @@ fun TransactionsScreen(
         }
     }
 
-    // --- FULL TRANSACTION DETAIL MODAL ON TAP & HOLD ---
     selectedTransactionForDetails?.let { tx ->
-        val memberName = familyMembers.firstOrNull { it.userId == tx.createdByUserId }?.name
         TransactionDetailModal(
             transaction = tx,
             currencySymbol = state.currencySymbol,
@@ -373,34 +408,37 @@ fun TransactionsScreen(
             onUpdate = { updated ->
                 onUpdateTransaction?.invoke(updated)
                 selectedTransactionForDetails = null
-            },
-            creatorName = memberName
+            }
         )
     }
 
-    // Confirm Delete Transaction Dialog
     transactionToDelete?.let { tx ->
         AlertDialog(
             onDismissRequest = { transactionToDelete = null },
-            title = { Text("Delete Transaction", color = SlateDarkTextPrimary) },
-            text = { Text("Are you sure you want to delete '${tx.title}' (${state.currencySymbol}${String.format(Locale.US, "%.2f", tx.amount)})?", color = SlateDarkTextSecondary) },
+            title = { Text("Delete Transaction", color = ZenithTheme.textPrimary) },
+            text = {
+                Text(
+                    "Are you sure you want to delete '${tx.title}' (${state.currencySymbol}${String.format(Locale.US, "%.2f", tx.amount)})?",
+                    color = ZenithTheme.textSecondary
+                )
+            },
             confirmButton = {
                 Button(
                     onClick = {
                         onDeleteTransaction(tx)
                         transactionToDelete = null
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidRed)
                 ) {
-                    Text("Delete")
+                    Text("Delete", color = Color.White)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { transactionToDelete = null }) {
-                    Text("Cancel")
+                    Text("Cancel", color = ZenithTheme.textSecondary)
                 }
             },
-            containerColor = SlateDarkSurface,
+            containerColor = ZenithTheme.cardSurface,
             shape = RoundedCornerShape(20.dp)
         )
     }

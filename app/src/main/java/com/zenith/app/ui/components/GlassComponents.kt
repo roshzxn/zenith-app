@@ -28,15 +28,27 @@ import com.zenith.app.ui.theme.*
 fun GlassCard(
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(22.dp),
-    backgroundColor: Color = GlassCardBg,
-    borderColor: Color = GlassBorderColor,
+    backgroundColor: Color = ZenithTheme.glassCardBg,
+    borderColor: Color = ZenithTheme.borderColor,
     borderWidth: Dp = 1.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val isDark = ZenithTheme.isDark
+    val effectiveBg = if (!isDark && backgroundColor == ZenithTheme.glassCardBg) {
+        ZenithTheme.cardSurface
+    } else {
+        backgroundColor
+    }
     Card(
         shape = shape,
-        colors = CardDefaults.cardColors(containerColor = backgroundColor),
+        colors = CardDefaults.cardColors(containerColor = effectiveBg),
         modifier = modifier
+            .shadow(
+                elevation = if (isDark) 0.dp else 3.dp,
+                shape = shape,
+                ambientColor = Color.Black.copy(alpha = 0.06f),
+                spotColor = Color.Black.copy(alpha = 0.10f)
+            )
             .border(borderWidth, borderColor, shape)
     ) {
         Column(
@@ -51,17 +63,23 @@ fun CleanCard(
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(24.dp),
     backgroundColor: Color = ZenithTheme.cardSurface,
-    borderColor: Color = GlassBorderColor,
+    borderColor: Color = ZenithTheme.borderColor,
     borderWidth: Dp = 1.dp,
     elevation: Dp = 4.dp,
     contentPadding: PaddingValues = PaddingValues(18.dp),
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val isDark = ZenithTheme.isDark
     Card(
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = backgroundColor),
         modifier = modifier
-            .shadow(elevation, shape, ambientColor = Color.Black.copy(alpha = 0.3f), spotColor = Color.Black.copy(alpha = 0.4f))
+            .shadow(
+                elevation = if (ZenithTheme.isOled) 0.dp else elevation,
+                shape = shape,
+                ambientColor = Color.Black.copy(alpha = if (isDark) 0.30f else 0.08f),
+                spotColor = Color.Black.copy(alpha = if (isDark) 0.40f else 0.12f)
+            )
             .border(borderWidth, borderColor, shape)
     ) {
         Column(
@@ -76,8 +94,8 @@ fun PillBadge(
     text: String,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    backgroundColor: Color = EmeraldDarkPrimary.copy(alpha = 0.15f),
-    contentColor: Color = EmeraldDarkPrimary,
+    backgroundColor: Color = ZenithTheme.accentGreen.copy(alpha = 0.15f),
+    contentColor: Color = ZenithTheme.accentGreen,
     borderColor: Color = contentColor.copy(alpha = 0.3f)
 ) {
     Surface(
@@ -128,13 +146,13 @@ fun SectionHeader(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,
-                color = SlateDarkTextSecondary
+                color = ZenithTheme.textSecondary
             )
             if (!subtitle.isNullOrBlank()) {
                 Text(
                     text = subtitle,
                     fontSize = 11.sp,
-                    color = SlateDarkTextMuted
+                    color = ZenithTheme.textMuted
                 )
             }
         }
@@ -148,7 +166,7 @@ fun SectionHeader(
                     text = actionText,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = PastelIndigo
+                    color = ZenithTheme.accentIndigo
                 )
             }
         }

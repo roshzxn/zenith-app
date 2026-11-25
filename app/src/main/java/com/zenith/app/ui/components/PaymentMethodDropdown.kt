@@ -56,15 +56,15 @@ fun PaymentMethodDropdown(
                 text = label,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = SlateDarkTextSecondary,
+                color = ZenithTheme.textSecondary,
                 modifier = Modifier.padding(bottom = 6.dp, start = 2.dp)
             )
         }
 
         Surface(
             shape = RoundedCornerShape(14.dp),
-            color = SlateDarkSurfaceVariant.copy(alpha = 0.65f),
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardVariantSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp)
@@ -87,13 +87,13 @@ fun PaymentMethodDropdown(
                         modifier = Modifier
                             .size(28.dp)
                             .clip(CircleShape)
-                            .background(EmeraldDarkPrimary.copy(alpha = 0.15f)),
+                            .background(ZenithTheme.accentGreen.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = currentIcon,
                             contentDescription = null,
-                            tint = EmeraldDarkPrimary,
+                            tint = ZenithTheme.accentGreen,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -102,14 +102,14 @@ fun PaymentMethodDropdown(
                         text = if (selectedMethod.isBlank()) "Select Payment Method" else selectedMethod,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (selectedMethod.isBlank()) SlateDarkTextMuted else SlateDarkTextPrimary
+                        color = if (selectedMethod.isBlank()) ZenithTheme.textMuted else ZenithTheme.textPrimary
                     )
                 }
 
                 Icon(
                     imageVector = if (expanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
                     contentDescription = "Open payment methods",
-                    tint = SlateDarkTextSecondary,
+                    tint = ZenithTheme.textSecondary,
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -120,8 +120,8 @@ fun PaymentMethodDropdown(
         Dialog(onDismissRequest = { expanded = false }) {
             Surface(
                 shape = RoundedCornerShape(20.dp),
-                color = SlateDarkSurface,
-                border = BorderStroke(1.dp, GlassBorderColor),
+                color = ZenithTheme.cardSurface,
+                border = BorderStroke(1.dp, ZenithTheme.borderColor),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp)
@@ -140,7 +140,7 @@ fun PaymentMethodDropdown(
                             text = "Select Payment Method",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
 
                         IconButton(
@@ -150,7 +150,7 @@ fun PaymentMethodDropdown(
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Close",
-                                tint = SlateDarkTextSecondary,
+                                tint = ZenithTheme.textSecondary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -166,8 +166,8 @@ fun PaymentMethodDropdown(
                             val isSelected = methodName.equals(selectedMethod, ignoreCase = true)
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = if (isSelected) EmeraldDarkPrimary.copy(alpha = 0.15f) else Color.Transparent,
-                                border = if (isSelected) BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.4f)) else null,
+                                color = if (isSelected) ZenithTheme.accentGreen.copy(alpha = 0.15f) else Color.Transparent,
+                                border = if (isSelected) BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.4f)) else null,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
@@ -195,8 +195,8 @@ fun PaymentMethodDropdown(
                                                 expanded = false
                                             },
                                             colors = RadioButtonDefaults.colors(
-                                                selectedColor = EmeraldDarkPrimary,
-                                                unselectedColor = SlateDarkTextMuted
+                                                selectedColor = ZenithTheme.accentGreen,
+                                                unselectedColor = ZenithTheme.textMuted
                                             ),
                                             modifier = Modifier.size(20.dp)
                                         )
@@ -204,7 +204,7 @@ fun PaymentMethodDropdown(
                                         Icon(
                                             imageVector = icon,
                                             contentDescription = null,
-                                            tint = if (isSelected) EmeraldDarkPrimary else SlateDarkTextSecondary,
+                                            tint = if (isSelected) ZenithTheme.accentGreen else ZenithTheme.textSecondary,
                                             modifier = Modifier.size(18.dp)
                                         )
 
@@ -212,7 +212,7 @@ fun PaymentMethodDropdown(
                                             text = methodName,
                                             fontSize = 14.sp,
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (isSelected) SlateDarkTextPrimary else SlateDarkTextSecondary
+                                            color = if (isSelected) ZenithTheme.textPrimary else ZenithTheme.textSecondary
                                         )
                                     }
 
@@ -220,7 +220,7 @@ fun PaymentMethodDropdown(
                                         Icon(
                                             imageVector = Icons.Default.Check,
                                             contentDescription = null,
-                                            tint = EmeraldDarkPrimary,
+                                            tint = ZenithTheme.accentGreen,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }

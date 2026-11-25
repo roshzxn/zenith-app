@@ -32,27 +32,25 @@ class BackendSyncAndGuestMigrationTest {
 
     @Before
     fun setup() {
-        context = ApplicationProvider.getApplicationContext<Context>()
+        context = ApplicationProvider.getApplicationContext()
         db = Room.inMemoryDatabaseBuilder(context, CashFlowDatabase::class.java)
             .allowMainThreadQueries()
             .build()
         repo = CashFlowRepository(
-            db.transactionDao(),
-            db.categoryDao(),
-            db.budgetDao(),
-            db.savingsGoalDao(),
-            db.scannedItemDao(),
-            db.familyDao(),
-            db.familyMemberDao(),
-            db.receiptDao()
+            transactionDao = db.transactionDao(),
+            categoryDao = db.categoryDao(),
+            budgetDao = db.budgetDao(),
+            savingsGoalDao = db.savingsGoalDao(),
+            scannedItemDao = db.scannedItemDao(),
+            receiptDao = db.receiptDao(),
+            autoPayReminderDao = db.autoPayReminderDao()
         )
         syncEngine = SyncEngine(
             transactionDao = db.transactionDao(),
-            familyDao = db.familyDao(),
             authService = LocalAuthService(),
-            familyMemberDao = db.familyMemberDao(),
             budgetDao = db.budgetDao(),
-            savingsGoalDao = db.savingsGoalDao()
+            savingsGoalDao = db.savingsGoalDao(),
+            autoPayReminderDao = db.autoPayReminderDao()
         )
     }
 
@@ -75,7 +73,6 @@ class BackendSyncAndGuestMigrationTest {
 
     @Test
     fun testGuestToAccountDataMigration() = runBlocking {
-        // Step 1: User creates transactions in guest mode
         val guestTx1 = TransactionEntity(
             title = "Morning Coffee",
             amount = 120.0,
@@ -97,18 +94,51 @@ class BackendSyncAndGuestMigrationTest {
         repo.addTransaction(guestTx1)
         repo.addTransaction(guestTx2)
 
-        // Step 2: User authenticates with a Supabase UUID
         val authenticatedUserId = UUID.randomUUID().toString()
         val count = repo.reassignPersonalTransactionsToUser(authenticatedUserId)
         assertEquals(2, count)
 
-        // Step 3: Verify records are claimed by authenticated UUID and marked PENDING_CREATE
         val transactions = repo.getTransactionsByScope(FinanceScope.PERSONAL).first()
         assertEquals(2, transactions.size)
         for (tx in transactions) {
             assertEquals(authenticatedUserId, tx.createdByUserId)
             assertEquals("PENDING_CREATE", tx.syncStatus)
         }
+    }
+
+    @Test
+    fun testAutoPayDefaultsAndCategoryUniqueSeedingAndWipe() = runBlocking {
+        val reminder = AutoPayReminderEntity(
+            title = "Fiber Internet",
+            amount = 999.0,
+            category = "Bills & Utilities",
+            paymentMethod = "UPI",
+            nextDueDateMillis = System.currentTimeMillis() + 86_400_000L
+        )
+        assertEquals("PENDING_CREATE", reminder.syncStatus)
+        repo.saveAutoPayReminder(reminder)
+        assertEquals(1, db.autoPayReminderDao().getPendingCreates().size)
+
+        // Repeated reseeds should not create duplicate category names
+        CashFlowDatabase.seedDefaultData(db)
+        CashFlowDatabase.seedDefaultData(db)
+        val categories = db.categoryDao().getAllCategories().first()
+        assertEquals(categories.map { it.name }.distinct().size, categories.size)
+        assertEquals(10, categories.size)
+
+        repo.addTransaction(
+            TransactionEntity(
+                title = "Sample",
+                amount = 100.0,
+                type = TransactionType.EXPENSE,
+                category = "Shopping"
+            )
+        )
+        repo.wipeLocalDatabase()
+
+        assertTrue(repo.allTransactions.first().isEmpty())
+        assertTrue(repo.allAutoPayReminders.first().isEmpty())
+        assertTrue(db.categoryDao().getAllCategories().first().isEmpty())
     }
 
     @Test
@@ -124,16 +154,12 @@ class BackendSyncAndGuestMigrationTest {
             type = "bearer"
         )
 
-        // Save session
         sessionManager.saveSession(dummySession)
-
-        // Load session and verify tokens match
         val restoredSession = sessionManager.loadSession()
         assertNotNull("Session must be restored from SharedPreferences", restoredSession)
         assertEquals(dummySession.accessToken, restoredSession?.accessToken)
         assertEquals(dummySession.refreshToken, restoredSession?.refreshToken)
 
-        // Delete session and verify it is cleared
         sessionManager.deleteSession()
         val clearedSession = sessionManager.loadSession()
         assertNull("Session must be null after deleteSession", clearedSession)

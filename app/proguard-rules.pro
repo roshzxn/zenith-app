@@ -21,6 +21,9 @@
 
 # --- Kotlinx Serialization ---
 -dontnote kotlinx.serialization.SerializationKt
+-dontwarn kotlinx.atomicfu.**
+-dontwarn org.slf4j.**
+-dontwarn java.lang.invoke.**
 -keepclassmembers class * {
     @kotlinx.serialization.SerialName <fields>;
 }
@@ -48,36 +51,18 @@
     <init>();
 }
 
-# --- Moshi & Retrofit ---
--keepclasseswithmembers class * {
-    @com.squareup.moshi.* <methods>;
-}
--keepclasseswithmembers class * {
-    @com.squareup.moshi.* <fields>;
-}
--keepclasseswithmembers class * {
-    @com.squareup.moshi.* <init>(...);
-}
--keepclassmembers class * {
-    @com.squareup.moshi.Json <fields>;
-}
--dontwarn retrofit2.**
--keep class retrofit2.** { *; }
-
-# --- Domain & Data Models (Preserve all fields for Room / JSON) ---
+# --- Domain, Sync DTOs, ViewModel & Components ---
 -keep class com.zenith.app.data.models.** { *; }
 -keep class com.zenith.app.data.network.** { *; }
 -keep class com.zenith.app.data.ai.** { *; }
 -keep class com.zenith.app.data.upi.** { *; }
+-keep class com.zenith.app.ui.viewmodel.** { *; }
+-keep class com.zenith.app.BuildConfig { *; }
 
-# --- Google ML Kit & Code Scanner ---
+# --- Google ML Kit ---
 -keep class com.google.mlkit.** { *; }
 -keep class com.google.android.gms.vision.** { *; }
 -dontwarn com.google.mlkit.**
-
-# --- ZXing Barcode Library ---
--keep class com.google.zxing.** { *; }
--dontwarn com.google.zxing.**
 
 # --- CameraX ---
 -dontwarn androidx.camera.**

@@ -1,14 +1,17 @@
 package com.zenith.app.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -19,19 +22,55 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.zenith.app.data.models.AutoPayReminderEntity
 import com.zenith.app.data.models.BudgetEntity
+import com.zenith.app.data.models.CategoryEntity
 import com.zenith.app.data.models.SavingsGoalEntity
+import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.ui.components.AddAutoPayReminderDialog
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.GlassCard
-import com.zenith.app.ui.theme.*
+import com.zenith.app.ui.theme.ZenithTheme
 import com.zenith.app.ui.viewmodel.CashFlowUiState
+import java.text.SimpleDateFormat
 import java.util.*
+
+/**
+ * Computes total expenses for [budget] inside its configured period window
+ * (`MONTHLY`, `WEEKLY`, `YEARLY`, or `CUSTOM`).
+ */
+internal fun calculateBudgetSpent(
+    budget: BudgetEntity,
+    transactions: List<TransactionEntity>,
+    nowMillis: Long = System.currentTimeMillis()
+): Double {
+    val sdfMonth = SimpleDateFormat("yyyy-MM", Locale.US)
+    val sdfYear = SimpleDateFormat("yyyy", Locale.US)
+    val nowCal = Calendar.getInstance().apply { timeInMillis = nowMillis }
+
+    return transactions
+        .asSequence()
+        .filter { it.type == TransactionType.EXPENSE && it.category == budget.categoryName }
+        .filter { tx ->
+            val date = Date(tx.dateMillis)
+            when (budget.periodType) {
+                "MONTHLY" -> budget.monthYear.isNotBlank() && sdfMonth.format(date) == budget.monthYear
+                "YEARLY" -> budget.monthYear.length >= 4 && sdfYear.format(date) == budget.monthYear.take(4)
+                "WEEKLY" -> {
+                    val txCal = Calendar.getInstance().apply { timeInMillis = tx.dateMillis }
+                    txCal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) &&
+                        txCal.get(Calendar.WEEK_OF_YEAR) == nowCal.get(Calendar.WEEK_OF_YEAR)
+                }
+                else -> true
+            }
+        }
+        .sumOf { it.amount }
+}
 
 @Composable
 fun BudgetsAndGoalsScreen(
@@ -70,34 +109,22 @@ fun BudgetsAndGoalsScreen(
         }
     }
 
-    val sdfMonth = remember { java.text.SimpleDateFormat("yyyy-MM", Locale.getDefault()) }
-    val sdfYear = remember { java.text.SimpleDateFormat("yyyy", Locale.getDefault()) }
-
-    // Helper to calculate spent for a specific budget
-    val calculateSpent = { budget: BudgetEntity, txs: List<com.zenith.app.data.models.TransactionEntity> ->
-        txs.filter { it.type == TransactionType.EXPENSE && it.category == budget.categoryName }
-            .filter { tx ->
-                val date = Date(tx.dateMillis)
-                when (budget.periodType) {
-                    "MONTHLY" -> budget.monthYear.isNotBlank() && sdfMonth.format(date) == budget.monthYear
-                    "YEARLY" -> budget.monthYear.length >= 4 && sdfYear.format(date) == budget.monthYear.take(4)
-                    else -> true
-                }
-            }
-            .sumOf { it.amount }
-    }
-
+    // Use allTransactions so Activity filters never skew Budget burn rates
     val totalBudgeted = remember(filteredBudgets) { filteredBudgets.sumOf { it.monthlyLimit } }
-    val totalSpentOnBudgets = remember(filteredBudgets, state.transactions) {
-        filteredBudgets.sumOf { budget -> calculateSpent(budget, state.transactions) }
+    val totalSpentOnBudgets = remember(filteredBudgets, state.allTransactions) {
+        filteredBudgets.sumOf { budget -> calculateBudgetSpent(budget, state.allTransactions) }
     }
     val totalRemaining = remember(totalBudgeted, totalSpentOnBudgets) { totalBudgeted - totalSpentOnBudgets }
     val overallProgress = remember(totalBudgeted, totalSpentOnBudgets) {
         if (totalBudgeted > 0) (totalSpentOnBudgets / totalBudgeted).toFloat().coerceIn(0f, 1f) else 0f
     }
-    val overbudgetCount = remember(filteredBudgets, state.transactions) {
-        filteredBudgets.count { budget -> calculateSpent(budget, state.transactions) > budget.monthlyLimit }
+    val overbudgetCount = remember(filteredBudgets, state.allTransactions) {
+        filteredBudgets.count { budget -> calculateBudgetSpent(budget, state.allTransactions) > budget.monthlyLimit }
     }
+
+    fun formatMoneyOrMask(amount: Double, decimals: Int = 2): String =
+        if (state.isBalanceHidden) "${state.currencySymbol}••••"
+        else "${state.currencySymbol}${String.format(Locale.US, "%,.${decimals}f", amount)}"
 
     LazyColumn(
         modifier = Modifier
@@ -111,7 +138,7 @@ fun BudgetsAndGoalsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 20.dp),
-                backgroundColor = SlateDarkSurface.copy(alpha = 0.85f)
+                backgroundColor = ZenithTheme.cardGlassBackground
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -123,20 +150,20 @@ fun BudgetsAndGoalsScreen(
                             text = "Budget Overview",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
                         Text(
                             text = "Tracking ${state.budgets.size} active spending limits",
                             fontSize = 12.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                     }
 
                     AnimatedVisibility(visible = overbudgetCount > 0) {
                         Surface(
-                            color = PastelRoseContainer,
+                            color = ZenithTheme.accentRed.copy(alpha = 0.14f),
                             shape = RoundedCornerShape(10.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, PastelRose.copy(alpha = 0.35f))
+                            border = BorderStroke(1.dp, ZenithTheme.accentRed.copy(alpha = 0.35f))
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
@@ -145,13 +172,13 @@ fun BudgetsAndGoalsScreen(
                                 Icon(
                                     Icons.Default.Warning,
                                     contentDescription = null,
-                                    tint = PastelRose,
+                                    tint = ZenithTheme.accentRed,
                                     modifier = Modifier.size(13.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = "$overbudgetCount Over",
-                                    color = PastelRose,
+                                    color = ZenithTheme.accentRed,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -170,13 +197,13 @@ fun BudgetsAndGoalsScreen(
                         Text(
                             text = "Total Spent",
                             fontSize = 11.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                         Text(
-                            text = "${state.currencySymbol}${String.format(Locale.US, "%,.2f", totalSpentOnBudgets)}",
+                            text = formatMoneyOrMask(totalSpentOnBudgets),
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (totalSpentOnBudgets > totalBudgeted && totalBudgeted > 0) PastelRose else SlateDarkTextPrimary
+                            color = if (totalSpentOnBudgets > totalBudgeted && totalBudgeted > 0) ZenithTheme.accentRed else ZenithTheme.textPrimary
                         )
                     }
 
@@ -184,13 +211,13 @@ fun BudgetsAndGoalsScreen(
                         Text(
                             text = "Total Budgeted",
                             fontSize = 11.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                         Text(
-                            text = "${state.currencySymbol}${String.format(Locale.US, "%,.2f", totalBudgeted)}",
+                            text = formatMoneyOrMask(totalBudgeted),
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
                     }
                 }
@@ -204,11 +231,11 @@ fun BudgetsAndGoalsScreen(
                         .height(10.dp)
                         .clip(CircleShape),
                     color = when {
-                        overallProgress >= 1.0f -> PastelRose
-                        overallProgress >= 0.8f -> PastelAmber
-                        else -> PastelGreen
+                        overallProgress >= 1.0f -> ZenithTheme.accentRed
+                        overallProgress >= 0.8f -> ZenithTheme.accentAmber
+                        else -> ZenithTheme.accentGreen
                     },
-                    trackColor = SlateDarkSurfaceVariant
+                    trackColor = ZenithTheme.cardVariantSurface
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -218,18 +245,21 @@ fun BudgetsAndGoalsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = if (totalRemaining >= 0) "Remaining: ${state.currencySymbol}${String.format(Locale.US, "%,.2f", totalRemaining)}"
-                        else "Over budget by ${state.currencySymbol}${String.format(Locale.US, "%,.2f", -totalRemaining)}",
+                        text = if (totalRemaining >= 0) {
+                            "Remaining: ${formatMoneyOrMask(totalRemaining)}"
+                        } else {
+                            "Over budget by ${formatMoneyOrMask(-totalRemaining)}"
+                        },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (totalRemaining < 0) PastelRose else PastelGreen
+                        color = if (totalRemaining < 0) ZenithTheme.accentRed else ZenithTheme.accentGreen
                     )
 
                     Text(
                         text = "${(overallProgress * 100).toInt()}% Used",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextPrimary
+                        color = ZenithTheme.textPrimary
                     )
                 }
             }
@@ -247,12 +277,12 @@ fun BudgetsAndGoalsScreen(
                         text = "Category Budgets",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextPrimary
+                        color = ZenithTheme.textPrimary
                     )
                     Text(
-                        text = "Set spending limits for monthly or custom periods",
+                        text = "Set spending limits for monthly, weekly or custom periods",
                         fontSize = 12.sp,
-                        color = SlateDarkTextSecondary
+                        color = ZenithTheme.textSecondary
                     )
                 }
 
@@ -265,11 +295,12 @@ fun BudgetsAndGoalsScreen(
                         .height(42.dp)
                         .testTag("add_budget_btn"),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
+                    contentPadding = PaddingValues(horizontal = 12.dp)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("New Budget", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("New Budget", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
                 }
             }
 
@@ -317,17 +348,21 @@ fun BudgetsAndGoalsScreen(
         if (filteredBudgets.isEmpty()) {
             item {
                 GlassCard(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                    backgroundColor = GlassCardBg
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    backgroundColor = ZenithTheme.glassCardBg
                 ) {
                     Column(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
                             Icons.Default.PieChart,
                             contentDescription = null,
-                            tint = SlateDarkTextMuted,
+                            tint = ZenithTheme.textMuted,
                             modifier = Modifier.size(36.dp)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
@@ -335,12 +370,12 @@ fun BudgetsAndGoalsScreen(
                             text = "No budgets yet",
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
                         Text(
                             text = "Set your first spending limit to start controlling expenses.",
                             fontSize = 12.sp,
-                            color = SlateDarkTextSecondary,
+                            color = ZenithTheme.textSecondary,
                             modifier = Modifier.padding(top = 4.dp)
                         )
                     }
@@ -348,8 +383,8 @@ fun BudgetsAndGoalsScreen(
             }
         } else {
             items(filteredBudgets, key = { "budget_${it.id}" }) { budget ->
-                val categorySpent = remember(state.transactions, budget) {
-                    calculateSpent(budget, state.transactions)
+                val categorySpent = remember(state.allTransactions, budget) {
+                    calculateBudgetSpent(budget, state.allTransactions)
                 }
 
                 val remaining = budget.monthlyLimit - categorySpent
@@ -369,7 +404,7 @@ fun BudgetsAndGoalsScreen(
                         .fillMaxWidth()
                         .padding(vertical = 5.dp)
                         .animateItem(),
-                    backgroundColor = if (isOver) ExpenseRed.copy(alpha = 0.05f) else GlassCardBg
+                    backgroundColor = if (isOver) ZenithTheme.accentRed.copy(alpha = 0.06f) else ZenithTheme.glassCardBg
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -385,20 +420,20 @@ fun BudgetsAndGoalsScreen(
                                     text = budget.categoryName,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextPrimary,
+                                    color = ZenithTheme.textPrimary,
                                     maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
-                                    color = SlateDarkSurfaceVariant,
+                                    color = ZenithTheme.cardVariantSurface,
                                     shape = RoundedCornerShape(6.dp)
                                 ) {
                                     Text(
                                         text = periodLabel,
                                         fontSize = 10.sp,
-                                        color = SlateDarkTextSecondary,
+                                        color = ZenithTheme.textSecondary,
                                         modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
                                         maxLines = 1
                                     )
@@ -406,13 +441,13 @@ fun BudgetsAndGoalsScreen(
 
                                 Spacer(modifier = Modifier.width(4.dp))
 
-                                // Status Badge
+                                val badgeColor = when {
+                                    isOver -> ZenithTheme.accentRed
+                                    isNearLimit -> ZenithTheme.accentAmber
+                                    else -> ZenithTheme.accentGreen
+                                }
                                 Surface(
-                                    color = when {
-                                        isOver -> ExpenseRed.copy(alpha = 0.15f)
-                                        isNearLimit -> GoalAmber.copy(alpha = 0.15f)
-                                        else -> IncomeGreen.copy(alpha = 0.15f)
-                                    },
+                                    color = badgeColor.copy(alpha = 0.15f),
                                     shape = RoundedCornerShape(6.dp)
                                 ) {
                                     Text(
@@ -423,11 +458,7 @@ fun BudgetsAndGoalsScreen(
                                         },
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = when {
-                                            isOver -> ExpenseRed
-                                            isNearLimit -> GoalAmber
-                                            else -> IncomeGreen
-                                        },
+                                        color = badgeColor,
                                         modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
                                         maxLines = 1
                                     )
@@ -438,20 +469,20 @@ fun BudgetsAndGoalsScreen(
 
                             if (isOver) {
                                 Text(
-                                    text = "Over limit by ${state.currencySymbol}${String.format(Locale.US, "%.2f", categorySpent - budget.monthlyLimit)}!",
+                                    text = "Over limit by ${formatMoneyOrMask(categorySpent - budget.monthlyLimit)}!",
                                     fontSize = 12.sp,
-                                    color = ExpenseRed,
+                                    color = ZenithTheme.accentRed,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             } else {
                                 Text(
-                                    text = "${state.currencySymbol}${String.format(Locale.US, "%.2f", remaining)} left of ${state.currencySymbol}${String.format(Locale.US, "%.2f", budget.monthlyLimit)} limit",
+                                    text = "${formatMoneyOrMask(remaining)} left of ${formatMoneyOrMask(budget.monthlyLimit)} limit",
                                     fontSize = 12.sp,
-                                    color = SlateDarkTextSecondary,
+                                    color = ZenithTheme.textSecondary,
                                     maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -470,7 +501,7 @@ fun BudgetsAndGoalsScreen(
                                 Icon(
                                     Icons.Default.Edit,
                                     contentDescription = "Edit",
-                                    tint = EmeraldDarkPrimary,
+                                    tint = ZenithTheme.accentGreen,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -482,7 +513,7 @@ fun BudgetsAndGoalsScreen(
                                 Icon(
                                     Icons.Default.Delete,
                                     contentDescription = "Delete",
-                                    tint = ExpenseRed.copy(alpha = 0.7f),
+                                    tint = ZenithTheme.accentRed.copy(alpha = 0.8f),
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -497,9 +528,9 @@ fun BudgetsAndGoalsScreen(
                         label = "budget_progress"
                     )
                     val progressColor = when {
-                        isOver -> ExpenseRed
-                        progress >= 0.75f -> PastelAmber
-                        else -> EmeraldDarkPrimary
+                        isOver -> ZenithTheme.accentRed
+                        progress >= 0.75f -> ZenithTheme.accentAmber
+                        else -> ZenithTheme.accentGreen
                     }
 
                     Row(
@@ -507,9 +538,9 @@ fun BudgetsAndGoalsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "Spent: ${state.currencySymbol}${String.format(Locale.US, "%.2f", categorySpent)}",
+                            text = "Spent: ${formatMoneyOrMask(categorySpent)}",
                             fontSize = 12.sp,
-                            color = SlateDarkTextSecondary,
+                            color = ZenithTheme.textSecondary,
                             maxLines = 1
                         )
                         Text(
@@ -530,7 +561,7 @@ fun BudgetsAndGoalsScreen(
                             .height(8.dp)
                             .clip(CircleShape),
                         color = progressColor,
-                        trackColor = SlateDarkSurfaceVariant
+                        trackColor = ZenithTheme.cardVariantSurface
                     )
                 }
             }
@@ -542,59 +573,65 @@ fun BudgetsAndGoalsScreen(
 
         // --- 4. SAVINGS GOALS SECTION ---
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f, fill = false)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
                         text = "Savings Goals",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextPrimary,
+                        color = ZenithTheme.textPrimary,
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
-                    Text(
-                        text = "Track your savings progress towards big purchases",
-                        fontSize = 12.sp,
-                        color = SlateDarkTextSecondary,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                    )
-                }
 
-                Button(
-                    onClick = {
-                        editingGoal = null
-                        showAddGoalModal = true
-                    },
-                    modifier = Modifier
-                        .height(42.dp)
-                        .testTag("add_goal_btn"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("New Goal", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            editingGoal = null
+                            showAddGoalModal = true
+                        },
+                        modifier = Modifier
+                            .height(38.dp)
+                            .testTag("add_goal_btn"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
+                        contentPadding = PaddingValues(horizontal = 12.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("New Goal", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
+                    }
                 }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Track your savings progress towards big purchases",
+                    fontSize = 12.sp,
+                    color = ZenithTheme.textSecondary,
+                    maxLines = 2
+                )
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
         if (state.savingsGoals.isEmpty()) {
             item {
                 GlassCard(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                    backgroundColor = GlassCardBg
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    backgroundColor = ZenithTheme.glassCardBg
                 ) {
                     Text(
                         text = "No savings goals added yet. Click 'New Goal' to set target savings milestones!",
                         fontSize = 13.sp,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         modifier = Modifier.padding(14.dp)
                     )
                 }
@@ -609,7 +646,7 @@ fun BudgetsAndGoalsScreen(
                         .fillMaxWidth()
                         .padding(vertical = 5.dp)
                         .animateItem(),
-                    backgroundColor = GlassCardBg
+                    backgroundColor = ZenithTheme.glassCardBg
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -624,13 +661,13 @@ fun BudgetsAndGoalsScreen(
                                 modifier = Modifier
                                     .size(38.dp)
                                     .clip(CircleShape)
-                                    .background(EmeraldDarkContainer),
+                                    .background(ZenithTheme.accentGreen.copy(alpha = 0.14f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     Icons.Default.Savings,
                                     contentDescription = null,
-                                    tint = EmeraldDarkPrimary,
+                                    tint = ZenithTheme.accentGreen,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -640,14 +677,14 @@ fun BudgetsAndGoalsScreen(
                                     text = goal.title,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextPrimary,
+                                    color = ZenithTheme.textPrimary,
                                     maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = "$percentInt% Achieved",
                                     fontSize = 12.sp,
-                                    color = EmeraldDarkPrimary,
+                                    color = ZenithTheme.accentGreen,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1
                                 )
@@ -674,14 +711,14 @@ fun BudgetsAndGoalsScreen(
                                 },
                                 modifier = Modifier.size(30.dp)
                             ) {
-                                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = EmeraldDarkPrimary, modifier = Modifier.size(15.dp))
+                                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = ZenithTheme.accentGreen, modifier = Modifier.size(15.dp))
                             }
 
                             IconButton(
                                 onClick = { goalToDelete = goal },
                                 modifier = Modifier.size(30.dp)
                             ) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = ExpenseRed.copy(alpha = 0.7f), modifier = Modifier.size(15.dp))
+                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = ZenithTheme.accentRed.copy(alpha = 0.8f), modifier = Modifier.size(15.dp))
                             }
                         }
                     }
@@ -693,15 +730,15 @@ fun BudgetsAndGoalsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            "Saved: ${state.currencySymbol}${String.format(Locale.US, "%,.2f", goal.currentAmount)}",
+                            text = "Saved: ${formatMoneyOrMask(goal.currentAmount)}",
                             fontSize = 12.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                         Text(
-                            "Target: ${state.currencySymbol}${String.format(Locale.US, "%,.2f", goal.targetAmount)}",
+                            text = "Target: ${formatMoneyOrMask(goal.targetAmount)}",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
                     }
 
@@ -719,8 +756,8 @@ fun BudgetsAndGoalsScreen(
                             .fillMaxWidth()
                             .height(8.dp)
                             .clip(CircleShape),
-                        color = if (progress >= 1f) GoldAccent else EmeraldDarkPrimary,
-                        trackColor = SlateDarkSurfaceVariant
+                        color = if (progress >= 1f) ZenithTheme.accentAmber else ZenithTheme.accentGreen,
+                        trackColor = ZenithTheme.cardVariantSurface
                     )
                 }
             }
@@ -728,76 +765,86 @@ fun BudgetsAndGoalsScreen(
 
         // --- 5. AUTO-PAY & RECURRING BILLS SECTION ---
         item {
-            Spacer(modifier = Modifier.height(24.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f, fill = false)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(modifier = Modifier.height(22.dp))
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = "Auto-Pay & Recurring Bills",
+                            text = "Auto-Pay & Bills",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary,
+                            color = ZenithTheme.textPrimary,
                             maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF8B5CF6).copy(alpha = 0.2f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.4f))
+                            color = ZenithTheme.accentPurple.copy(alpha = 0.16f),
+                            border = BorderStroke(1.dp, ZenithTheme.accentPurple.copy(alpha = 0.35f))
                         ) {
                             Text(
                                 text = "${state.autoPayReminders.count { !it.isPaused }} Active",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFFC4B5FD),
+                                color = ZenithTheme.accentPurple,
+                                maxLines = 1,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
                     }
-                    Text(
-                        text = "Track subscriptions, utilities & avoid late fees",
-                        fontSize = 12.sp,
-                        color = SlateDarkTextSecondary,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                    )
-                }
 
-                Button(
-                    onClick = {
-                        editingAutoPay = null
-                        showAddAutoPayModal = true
-                    },
-                    modifier = Modifier
-                        .height(42.dp)
-                        .testTag("add_autopay_btn"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("New Reminder", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            editingAutoPay = null
+                            showAddAutoPayModal = true
+                        },
+                        modifier = Modifier
+                            .height(38.dp)
+                            .testTag("add_autopay_btn"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
+                        contentPadding = PaddingValues(horizontal = 12.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("New Reminder", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
+                    }
                 }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Track subscriptions, utilities & avoid late fees",
+                    fontSize = 12.sp,
+                    color = ZenithTheme.textSecondary,
+                    maxLines = 2
+                )
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
         if (state.autoPayReminders.isEmpty()) {
             item {
                 GlassCard(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                    backgroundColor = GlassCardBg
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    backgroundColor = ZenithTheme.glassCardBg
                 ) {
                     Text(
                         text = "No recurring bills or subscriptions added yet. Tap '+ New Reminder' to track Wi-Fi, Netflix, rent, or electricity deadlines!",
                         fontSize = 13.sp,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         modifier = Modifier.padding(14.dp)
                     )
                 }
@@ -807,12 +854,14 @@ fun BudgetsAndGoalsScreen(
                 val now = System.currentTimeMillis()
                 val diffDays = ((reminder.nextDueDateMillis - now) / (1000 * 60 * 60 * 24)).toInt()
                 val dueDateFormatted = remember(reminder.nextDueDateMillis) {
-                    java.text.SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(reminder.nextDueDateMillis))
+                    SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(reminder.nextDueDateMillis))
                 }
 
                 CleanCard(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                    backgroundColor = SlateDarkSurface.copy(alpha = 0.85f)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 5.dp),
+                    backgroundColor = ZenithTheme.cardGlassBackground
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -824,13 +873,13 @@ fun BudgetsAndGoalsScreen(
                                 modifier = Modifier
                                     .size(44.dp)
                                     .clip(CircleShape)
-                                    .background(if (reminder.isAutoDebit) Color(0xFF8B5CF6).copy(alpha = 0.2f) else EmeraldDarkPrimary.copy(alpha = 0.2f)),
+                                    .background(if (reminder.isAutoDebit) ZenithTheme.accentPurple.copy(alpha = 0.16f) else ZenithTheme.accentGreen.copy(alpha = 0.16f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = if (reminder.isAutoDebit) Icons.Default.FlashOn else Icons.Default.Receipt,
                                     contentDescription = null,
-                                    tint = if (reminder.isAutoDebit) Color(0xFFC4B5FD) else EmeraldDarkPrimary,
+                                    tint = if (reminder.isAutoDebit) ZenithTheme.accentPurple else ZenithTheme.accentGreen,
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
@@ -843,18 +892,18 @@ fun BudgetsAndGoalsScreen(
                                         text = reminder.title,
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = SlateDarkTextPrimary
+                                        color = ZenithTheme.textPrimary
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Surface(
                                         shape = RoundedCornerShape(6.dp),
-                                        color = if (reminder.isAutoDebit) Color(0xFF8B5CF6).copy(alpha = 0.2f) else Color(0xFF06B6D4).copy(alpha = 0.2f)
+                                        color = if (reminder.isAutoDebit) ZenithTheme.accentPurple.copy(alpha = 0.16f) else ZenithTheme.accentCyan.copy(alpha = 0.16f)
                                     ) {
                                         Text(
                                             text = if (reminder.isAutoDebit) "Auto-Debit" else "Manual Pay",
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (reminder.isAutoDebit) Color(0xFFC4B5FD) else Color(0xFF67E8F9),
+                                            color = if (reminder.isAutoDebit) ZenithTheme.accentPurple else ZenithTheme.accentCyan,
                                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                         )
                                     }
@@ -865,30 +914,29 @@ fun BudgetsAndGoalsScreen(
                                 Text(
                                     text = "${reminder.frequency.lowercase().replaceFirstChar { it.uppercase() }} • Due $dueDateFormatted",
                                     fontSize = 11.sp,
-                                    color = SlateDarkTextSecondary
+                                    color = ZenithTheme.textSecondary
                                 )
                             }
                         }
 
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
-                                text = "${state.currencySymbol}${String.format(Locale.US, "%,.2f", reminder.amount)}",
+                                text = formatMoneyOrMask(reminder.amount),
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
+                                color = ZenithTheme.textPrimary
                             )
 
                             val badgeColor = when {
-                                reminder.isPaused -> SlateDarkTextMuted
-                                diffDays < 0 -> ExpenseRed
-                                diffDays == 0 -> ExpenseRed
-                                diffDays <= reminder.reminderDaysBefore -> PastelAmber
-                                else -> PastelGreen
+                                reminder.isPaused -> ZenithTheme.textMuted
+                                diffDays <= 0 -> ZenithTheme.accentRed
+                                diffDays <= reminder.reminderDaysBefore -> ZenithTheme.accentAmber
+                                else -> ZenithTheme.accentGreen
                             }
                             val badgeText = when {
-                                reminder.isPaused -> "Paused ⏸️"
-                                diffDays < 0 -> "Overdue ⚠️"
-                                diffDays == 0 -> "Due Today 🔔"
+                                reminder.isPaused -> "Paused"
+                                diffDays < 0 -> "Overdue"
+                                diffDays == 0 -> "Due Today"
                                 else -> "In $diffDays days"
                             }
 
@@ -917,7 +965,7 @@ fun BudgetsAndGoalsScreen(
                                 },
                                 modifier = Modifier.size(32.dp)
                             ) {
-                                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = SlateDarkTextSecondary, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = ZenithTheme.textSecondary, modifier = Modifier.size(16.dp))
                             }
 
                             IconButton(
@@ -927,7 +975,7 @@ fun BudgetsAndGoalsScreen(
                                 Icon(
                                     imageVector = if (reminder.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                                     contentDescription = if (reminder.isPaused) "Resume" else "Pause",
-                                    tint = SlateDarkTextSecondary,
+                                    tint = ZenithTheme.textSecondary,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -936,16 +984,17 @@ fun BudgetsAndGoalsScreen(
                                 onClick = { autoPayToDelete = reminder },
                                 modifier = Modifier.size(32.dp)
                             ) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = ExpenseRed.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = ZenithTheme.accentRed.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
                             }
                         }
 
                         Button(
-                            onClick = {
-                                onMarkAutoPayPaid?.invoke(reminder)
-                            },
+                            onClick = { onMarkAutoPayPaid?.invoke(reminder) },
                             shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary.copy(alpha = 0.2f), contentColor = EmeraldDarkPrimary),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = ZenithTheme.accentGreen.copy(alpha = 0.18f),
+                                contentColor = ZenithTheme.accentGreen
+                            ),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                             modifier = Modifier.height(34.dp)
                         ) {
@@ -961,7 +1010,6 @@ fun BudgetsAndGoalsScreen(
 
     // --- MODALS & DIALOGS ---
 
-    // Add or Edit Budget Modal
     if (showAddBudgetModal) {
         AddOrEditBudgetModal(
             categories = state.categories,
@@ -985,32 +1033,32 @@ fun BudgetsAndGoalsScreen(
         )
     }
 
-    // Confirm Delete Budget
     budgetToDelete?.let { budget ->
         AlertDialog(
             onDismissRequest = { budgetToDelete = null },
-            title = { Text("Delete Budget") },
-            text = { Text("Are you sure you want to delete the budget for '${budget.categoryName}'?") },
+            title = { Text("Delete Budget", color = ZenithTheme.textPrimary) },
+            text = { Text("Are you sure you want to delete the budget for '${budget.categoryName}'?", color = ZenithTheme.textSecondary) },
             confirmButton = {
                 Button(
                     onClick = {
                         onDeleteBudget(budget)
                         budgetToDelete = null
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidRed)
                 ) {
-                    Text("Delete")
+                    Text("Delete", color = Color.White)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { budgetToDelete = null }) {
-                    Text("Cancel")
+                    Text("Cancel", color = ZenithTheme.textSecondary)
                 }
-            }
+            },
+            containerColor = ZenithTheme.cardSurface,
+            shape = RoundedCornerShape(20.dp)
         )
     }
 
-    // Add or Edit Savings Goal Modal
     if (showAddGoalModal) {
         AddOrEditGoalModal(
             currencySymbol = state.currencySymbol,
@@ -1036,32 +1084,32 @@ fun BudgetsAndGoalsScreen(
         )
     }
 
-    // Confirm Delete Goal
     goalToDelete?.let { goal ->
         AlertDialog(
             onDismissRequest = { goalToDelete = null },
-            title = { Text("Delete Goal") },
-            text = { Text("Are you sure you want to delete the goal '${goal.title}'?") },
+            title = { Text("Delete Goal", color = ZenithTheme.textPrimary) },
+            text = { Text("Are you sure you want to delete the goal '${goal.title}'?", color = ZenithTheme.textSecondary) },
             confirmButton = {
                 Button(
                     onClick = {
                         onDeleteSavingsGoal(goal)
                         goalToDelete = null
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidRed)
                 ) {
-                    Text("Delete")
+                    Text("Delete", color = Color.White)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { goalToDelete = null }) {
-                    Text("Cancel")
+                    Text("Cancel", color = ZenithTheme.textSecondary)
                 }
-            }
+            },
+            containerColor = ZenithTheme.cardSurface,
+            shape = RoundedCornerShape(20.dp)
         )
     }
 
-    // Deposit to Goal Modal
     selectedGoalForDeposit?.let { goal ->
         DepositGoalModal(
             goal = goal,
@@ -1074,7 +1122,6 @@ fun BudgetsAndGoalsScreen(
         )
     }
 
-    // Add or Edit Auto-Pay Reminder Modal
     if (showAddAutoPayModal) {
         AddAutoPayReminderDialog(
             currencySymbol = state.currencySymbol,
@@ -1093,21 +1140,20 @@ fun BudgetsAndGoalsScreen(
         )
     }
 
-    // Confirm Delete Auto-Pay Reminder
     autoPayToDelete?.let { reminder ->
         AlertDialog(
             onDismissRequest = { autoPayToDelete = null },
-            title = { Text("Delete Reminder?", fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary) },
-            text = { Text("Are you sure you want to delete the reminder for '${reminder.title}'?", color = SlateDarkTextSecondary, fontSize = 13.sp) },
+            title = { Text("Delete Reminder?", fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary) },
+            text = { Text("Are you sure you want to delete the reminder for '${reminder.title}'?", color = ZenithTheme.textSecondary, fontSize = 13.sp) },
             confirmButton = {
                 Button(
                     onClick = {
                         onDeleteAutoPayReminder?.invoke(reminder)
                         autoPayToDelete = null
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidRed)
                 ) {
-                    Text("Delete", fontWeight = FontWeight.Bold)
+                    Text("Delete", fontWeight = FontWeight.Bold, color = Color.White)
                 }
             },
             dismissButton = {
@@ -1115,7 +1161,7 @@ fun BudgetsAndGoalsScreen(
                     Text("Cancel")
                 }
             },
-            containerColor = SlateDarkSurface,
+            containerColor = ZenithTheme.cardSurface,
             shape = RoundedCornerShape(20.dp)
         )
     }
@@ -1123,14 +1169,18 @@ fun BudgetsAndGoalsScreen(
 
 @Composable
 fun AddOrEditBudgetModal(
-    categories: List<com.zenith.app.data.models.CategoryEntity>,
+    categories: List<CategoryEntity>,
     existingBudget: BudgetEntity?,
     currencySymbol: String,
     onDismiss: () -> Unit,
     onSave: (categoryName: String, limit: Double, periodType: String, customPeriodName: String) -> Unit
 ) {
+    val selectableCategories = remember(categories) {
+        val expenseCats = categories.filter { it.type == TransactionType.EXPENSE || !it.name.equals("Income", ignoreCase = true) }
+        expenseCats.ifEmpty { categories }
+    }
     var selectedCat by remember {
-        mutableStateOf(existingBudget?.categoryName ?: categories.firstOrNull()?.name ?: "Food & Dining")
+        mutableStateOf(existingBudget?.categoryName ?: selectableCategories.firstOrNull()?.name ?: "Food & Dining")
     }
     var limitText by remember {
         mutableStateOf(existingBudget?.monthlyLimit?.let { if (it > 0) it.toString() else "" } ?: "")
@@ -1145,21 +1195,23 @@ fun AddOrEditBudgetModal(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor)
+            color = ZenithTheme.cardSurface,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            border = BorderStroke(1.dp, ZenithTheme.borderColor)
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
                 Text(
                     text = if (existingBudget == null) "Create Budget Limit" else "Edit Budget Limit",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
                 Text(
-                    text = "Track and limit spending for a category",
+                    text = "Track and limit spending for any category",
                     fontSize = 12.sp,
-                    color = SlateDarkTextSecondary
+                    color = ZenithTheme.textSecondary
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -1176,7 +1228,7 @@ fun AddOrEditBudgetModal(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Text("Budgeting Period", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = SlateDarkTextPrimary)
+                Text("Budgeting Period", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textPrimary)
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1204,14 +1256,21 @@ fun AddOrEditBudgetModal(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Text("Select Category", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = SlateDarkTextPrimary)
+                Text("Select Category", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textPrimary)
                 Spacer(modifier = Modifier.height(6.dp))
 
-                Column {
-                    categories.take(6).forEach { cat ->
+                // Scrollable list of ALL categories (no .take(6) truncation)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    selectableCategories.forEach { cat ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
                                 .clickable { selectedCat = cat.name }
                                 .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -1221,7 +1280,7 @@ fun AddOrEditBudgetModal(
                                 onClick = { selectedCat = cat.name }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(cat.name, fontSize = 14.sp, color = SlateDarkTextPrimary)
+                            Text(cat.name, fontSize = 14.sp, color = ZenithTheme.textPrimary)
                         }
                     }
                 }
@@ -1240,9 +1299,9 @@ fun AddOrEditBudgetModal(
                         .height(48.dp)
                         .testTag("save_budget_modal_btn"),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                 ) {
-                    Text(if (existingBudget == null) "Save Budget" else "Update Budget", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(if (existingBudget == null) "Save Budget" else "Update Budget", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }
@@ -1263,16 +1322,18 @@ fun AddOrEditGoalModal(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor)
+            color = ZenithTheme.cardSurface,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            border = BorderStroke(1.dp, ZenithTheme.borderColor)
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
                 Text(
                     if (existingGoal == null) "Create Savings Goal" else "Edit Savings Goal",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
-                    color = SlateDarkTextPrimary
+                    color = ZenithTheme.textPrimary
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -1321,9 +1382,9 @@ fun AddOrEditGoalModal(
                         .height(48.dp)
                         .testTag("save_goal_modal_btn"),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                 ) {
-                    Text(if (existingGoal == null) "Create Goal" else "Update Goal", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(if (existingGoal == null) "Create Goal" else "Update Goal", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }
@@ -1342,16 +1403,18 @@ fun DepositGoalModal(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor)
+            color = ZenithTheme.cardSurface,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            border = BorderStroke(1.dp, ZenithTheme.borderColor)
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
-                Text("Deposit to ${goal.title}", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
+                Text("Deposit to ${goal.title}", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
                 Text(
                     "Current Saved: $currencySymbol${String.format(Locale.US, "%,.2f", goal.currentAmount)} / $currencySymbol${String.format(Locale.US, "%,.2f", goal.targetAmount)}",
                     fontSize = 12.sp,
-                    color = SlateDarkTextSecondary
+                    color = ZenithTheme.textSecondary
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -1376,8 +1439,8 @@ fun DepositGoalModal(
                     listOf(500.0, 1000.0, 2500.0, 5000.0).forEach { quickAmt ->
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = SlateDarkSurfaceVariant,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorderColor),
+                            color = ZenithTheme.cardVariantSurface,
+                            border = BorderStroke(1.dp, ZenithTheme.borderColor),
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(RoundedCornerShape(8.dp))
@@ -1394,7 +1457,7 @@ fun DepositGoalModal(
                                     text = "+$currencySymbol${quickAmt.toInt()}",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = EmeraldDarkPrimary
+                                    color = ZenithTheme.accentGreen
                                 )
                             }
                         }
@@ -1413,9 +1476,9 @@ fun DepositGoalModal(
                         .height(48.dp)
                         .testTag("confirm_deposit_btn"),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                 ) {
-                    Text("Add Funds", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("Add Funds", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }

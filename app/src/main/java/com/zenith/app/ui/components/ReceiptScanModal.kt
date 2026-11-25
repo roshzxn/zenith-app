@@ -59,6 +59,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.util.*
 
 @Composable
@@ -153,23 +154,61 @@ fun ReceiptScanModal(
         }
     }
 
-    // Helper to generate a temp file and URI via FileProvider for high-resolution camera capture
-    fun createTempImageUri(): Uri? {
+    fun getReceiptsDir(): File {
+        return File(context.filesDir, "receipts").apply {
+            if (!exists()) mkdirs()
+        }
+    }
+
+    // Generate a permanent file + FileProvider URI under filesDir/receipts so saved receipt photos survive cache evictions
+    fun createPersistentReceiptUri(): Uri? {
         return try {
-            val cacheDir = context.cacheDir
-            val tempFile = File.createTempFile(
-                "zenith_receipt_${System.currentTimeMillis()}",
-                ".jpg",
-                cacheDir
-            ).apply {
-                createNewFile()
-                deleteOnExit()
-            }
+            val imageFile = File(
+                getReceiptsDir(),
+                "zenith_receipt_${System.currentTimeMillis()}.jpg"
+            )
             FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
-                tempFile
+                imageFile
             )
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    // Copy gallery or temporary image streams into permanent filesDir/receipts storage
+    suspend fun persistImageUriLocally(sourceUri: Uri): Uri = withContext(Dispatchers.IO) {
+        try {
+            val expectedAuthority = "${context.packageName}.fileprovider"
+            if (sourceUri.authority == expectedAuthority && sourceUri.path?.contains("receipts/") == true) {
+                return@withContext sourceUri
+            }
+            val destFile = File(getReceiptsDir(), "zenith_receipt_${System.currentTimeMillis()}.jpg")
+            context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (destFile.exists() && destFile.length() > 0L) {
+                FileProvider.getUriForFile(context, expectedAuthority, destFile)
+            } else {
+                sourceUri
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            sourceUri
+        }
+    }
+
+    suspend fun persistBitmapLocally(bitmap: Bitmap): Uri? = withContext(Dispatchers.IO) {
+        try {
+            val destFile = File(getReceiptsDir(), "zenith_receipt_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(destFile).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            }
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", destFile)
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -182,21 +221,22 @@ fun ReceiptScanModal(
             isOcrRunning = true
             ocrFailed = false
             try {
+                val persistedUri = persistImageUriLocally(uri)
                 val image = withContext(Dispatchers.IO) {
-                    InputImage.fromFilePath(context, uri)
+                    InputImage.fromFilePath(context, persistedUri)
                 }
-                selectedImageUri = uri
+                selectedImageUri = persistedUri
 
                 withContext(Dispatchers.IO) {
                     try {
                         val bm = if (Build.VERSION.SDK_INT >= 28) {
-                            val source = ImageDecoder.createSource(context.contentResolver, uri)
+                            val source = ImageDecoder.createSource(context.contentResolver, persistedUri)
                             ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
                                 decoder.isMutableRequired = true
                             }
                         } else {
                             @Suppress("DEPRECATION")
-                            MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+                            MediaStore.Images.Media.getBitmap(context.contentResolver, persistedUri)
                         }
                         selectedBitmap = bm
                     } catch (e: Exception) {
@@ -246,29 +286,32 @@ fun ReceiptScanModal(
             selectedBitmap = bitmap
             isOcrRunning = true
             ocrFailed = false
-            val image = InputImage.fromBitmap(bitmap, 0)
-            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-            recognizer.process(image)
-                .addOnSuccessListener { visionText ->
-                    val text = visionText.text.trim()
-                    if (text.isNotBlank()) {
-                        extractedRawText = text
-                        onProcessReceipt(text)
-                    } else {
-                        ocrFailed = true
+            coroutineScope.launch {
+                selectedImageUri = persistBitmapLocally(bitmap)
+                val image = InputImage.fromBitmap(bitmap, 0)
+                val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                recognizer.process(image)
+                    .addOnSuccessListener { visionText ->
+                        val text = visionText.text.trim()
+                        if (text.isNotBlank()) {
+                            extractedRawText = text
+                            onProcessReceipt(text)
+                        } else {
+                            ocrFailed = true
+                        }
+                        isOcrRunning = false
                     }
-                    isOcrRunning = false
-                }
-                .addOnFailureListener {
-                    ocrFailed = true
-                    isOcrRunning = false
-                }
+                    .addOnFailureListener {
+                        ocrFailed = true
+                        isOcrRunning = false
+                    }
+            }
         }
     }
 
     fun launchCameraFlow() {
         isCameraPermissionDenied = false
-        val uri = createTempImageUri()
+        val uri = createPersistentReceiptUri()
         if (uri != null) {
             tempCameraUri = uri
             try {
@@ -369,8 +412,8 @@ fun ReceiptScanModal(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 2.dp)
@@ -393,13 +436,13 @@ fun ReceiptScanModal(
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF8B5CF6).copy(alpha = 0.2f)),
+                                .background(ZenithTheme.accentPurple.copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
                                 contentDescription = null,
-                                tint = Color(0xFF8B5CF6),
+                                tint = ZenithTheme.accentPurple,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -409,18 +452,18 @@ fun ReceiptScanModal(
                                 text = "Receipt Scanner",
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
+                                color = ZenithTheme.textPrimary
                             )
                             Text(
                                 text = "Itemized expense & tax extraction",
                                 fontSize = 11.sp,
-                                color = SlateDarkTextSecondary
+                                color = ZenithTheme.textSecondary
                             )
                         }
                     }
 
                     IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp).testTag("close_receipt_modal")) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SlateDarkTextSecondary)
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = ZenithTheme.textSecondary)
                     }
                 }
 
@@ -430,20 +473,20 @@ fun ReceiptScanModal(
                 if (isCameraPermissionDenied) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = GoalAmber.copy(alpha = 0.15f),
-                        border = BorderStroke(1.dp, GoalAmber.copy(alpha = 0.3f)),
+                        color = ZenithTheme.accentAmber.copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, ZenithTheme.accentAmber.copy(alpha = 0.35f)),
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
                     ) {
                         Row(
                             modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Info, contentDescription = null, tint = GoalAmber, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Info, contentDescription = null, tint = ZenithTheme.accentAmber, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "Camera permission needed. Grant access or select receipt from gallery.",
                                 fontSize = 12.sp,
-                                color = SlateDarkTextPrimary,
+                                color = ZenithTheme.textPrimary,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -457,32 +500,32 @@ fun ReceiptScanModal(
                             .fillMaxWidth()
                             .height(180.dp)
                             .clip(RoundedCornerShape(16.dp))
-                            .background(GlassCardBg),
+                            .background(ZenithTheme.glassCardBg),
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = Color(0xFF8B5CF6), strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
+                            CircularProgressIndicator(color = ZenithTheme.accentPurple, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
                             Spacer(modifier = Modifier.height(14.dp))
-                            Text("Scanning receipt text...", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
-                            Text("Extracting items, quantities, taxes & total", fontSize = 12.sp, color = SlateDarkTextSecondary, modifier = Modifier.padding(top = 2.dp))
+                            Text("Scanning receipt text...", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
+                            Text("Extracting items, quantities, taxes & total", fontSize = 12.sp, color = ZenithTheme.textSecondary, modifier = Modifier.padding(top = 2.dp))
                         }
                     }
                 } else if (ocrFailed) {
                     // Failed OCR State
                     Surface(
                         shape = RoundedCornerShape(16.dp),
-                        color = ExpenseRed.copy(alpha = 0.1f),
-                        border = BorderStroke(1.dp, ExpenseRed.copy(alpha = 0.3f)),
+                        color = ZenithTheme.accentRed.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, ZenithTheme.accentRed.copy(alpha = 0.35f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
                             modifier = Modifier.padding(20.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Icon(Icons.Default.WarningAmber, contentDescription = null, tint = ExpenseRed, modifier = Modifier.size(40.dp))
+                            Icon(Icons.Default.WarningAmber, contentDescription = null, tint = ZenithTheme.accentRed, modifier = Modifier.size(40.dp))
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text("Couldn't read this receipt.", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
-                            Text("Ensure receipt is well-lit and not blurry.", fontSize = 12.sp, color = SlateDarkTextSecondary, modifier = Modifier.padding(top = 2.dp))
+                            Text("Couldn't read this receipt.", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
+                            Text("Ensure receipt is well-lit and not blurry.", fontSize = 12.sp, color = ZenithTheme.textSecondary, modifier = Modifier.padding(top = 2.dp))
 
                             Spacer(modifier = Modifier.height(16.dp))
 
@@ -515,7 +558,7 @@ fun ReceiptScanModal(
                                         onOpenManualAdd()
                                     }
                                 ) {
-                                    Text("Enter Manually →", color = EmeraldDarkPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    Text("Enter Manually →", color = ZenithTheme.accentIndigo, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -524,8 +567,8 @@ fun ReceiptScanModal(
                     // --- FULL OCR REVIEW & EDIT CARD ---
                     Surface(
                         shape = RoundedCornerShape(16.dp),
-                        color = GlassCardBg,
-                        border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.4f)),
+                        color = ZenithTheme.glassCardBg,
+                        border = BorderStroke(1.dp, ZenithTheme.accentPurple.copy(alpha = 0.4f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
@@ -534,12 +577,12 @@ fun ReceiptScanModal(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("REVIEW RECEIPT DETAILS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B5CF6), letterSpacing = 1.sp)
+                                Text("REVIEW RECEIPT DETAILS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentPurple, letterSpacing = 1.sp)
                                 Surface(
                                     shape = RoundedCornerShape(6.dp),
-                                    color = IncomeGreen.copy(alpha = 0.15f)
+                                    color = ZenithTheme.accentGreen.copy(alpha = 0.16f)
                                 ) {
-                                    Text("✓ OCR Extracted", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = IncomeGreen, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                    Text("✓ OCR Extracted", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentGreen, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                 }
                             }
 
@@ -591,7 +634,7 @@ fun ReceiptScanModal(
                             Spacer(modifier = Modifier.height(10.dp))
 
                             // Category Selector Chips
-                            Text("Category", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = SlateDarkTextSecondary)
+                            Text("Category", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textSecondary)
                             Spacer(modifier = Modifier.height(4.dp))
                             LazyRow(
                                 modifier = Modifier.fillMaxWidth(),
@@ -623,7 +666,7 @@ fun ReceiptScanModal(
                             )
 
                             Spacer(modifier = Modifier.height(14.dp))
-                            HorizontalDivider(color = GlassBorderColor)
+                            HorizontalDivider(color = ZenithTheme.borderColor)
                             Spacer(modifier = Modifier.height(10.dp))
 
                             // --- ITEM LIST HEADER ---
@@ -636,7 +679,7 @@ fun ReceiptScanModal(
                                     text = "RECEIPT ITEMS (${receiptItems.size})",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextSecondary,
+                                    color = ZenithTheme.textSecondary,
                                     letterSpacing = 1.sp
                                 )
 
@@ -649,7 +692,7 @@ fun ReceiptScanModal(
                                     },
                                     contentPadding = PaddingValues(0.dp)
                                 ) {
-                                    Text("+ Add Item", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EmeraldDarkPrimary)
+                                    Text("+ Add Item", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentIndigo)
                                 }
                             }
 
@@ -659,7 +702,7 @@ fun ReceiptScanModal(
                             receiptItems.forEachIndexed { index, item ->
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
-                                    color = SlateDarkSurfaceVariant,
+                                    color = ZenithTheme.cardVariantSurface,
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
                                 ) {
                                     Row(
@@ -671,12 +714,12 @@ fun ReceiptScanModal(
                                                 text = item.name,
                                                 fontSize = 13.sp,
                                                 fontWeight = FontWeight.SemiBold,
-                                                color = SlateDarkTextPrimary
+                                                color = ZenithTheme.textPrimary
                                             )
                                             Text(
                                                 text = "${if (item.quantity % 1.0 == 0.0) item.quantity.toInt().toString() else item.quantity} × $currencySymbol${String.format(Locale.US, "%.2f", item.unitPrice)}",
                                                 fontSize = 11.sp,
-                                                color = SlateDarkTextSecondary
+                                                color = ZenithTheme.textSecondary
                                             )
                                         }
 
@@ -684,7 +727,7 @@ fun ReceiptScanModal(
                                             text = "$currencySymbol${String.format(Locale.US, "%.2f", item.totalPrice)}",
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = SlateDarkTextPrimary
+                                            color = ZenithTheme.textPrimary
                                         )
 
                                         Spacer(modifier = Modifier.width(6.dp))
@@ -695,14 +738,14 @@ fun ReceiptScanModal(
                                             },
                                             modifier = Modifier.size(24.dp)
                                         ) {
-                                            Icon(Icons.Default.Close, contentDescription = "Remove", tint = ExpenseRed.copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
+                                            Icon(Icons.Default.Close, contentDescription = "Remove", tint = ZenithTheme.accentRed.copy(alpha = 0.75f), modifier = Modifier.size(14.dp))
                                         }
                                     }
                                 }
                             }
 
                             Spacer(modifier = Modifier.height(12.dp))
-                            HorizontalDivider(color = GlassBorderColor)
+                            HorizontalDivider(color = ZenithTheme.borderColor)
                             Spacer(modifier = Modifier.height(10.dp))
 
                             // Breakdown Fields (Subtotal, Tax, Discount, Total)
@@ -745,8 +788,8 @@ fun ReceiptScanModal(
                                 label = { Text("GRAND TOTAL ($currencySymbol)", fontWeight = FontWeight.Bold, fontSize = 12.sp) },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = EmeraldDarkPrimary,
-                                    unfocusedBorderColor = GlassBorderColor
+                                    focusedBorderColor = ZenithTheme.accentIndigo,
+                                    unfocusedBorderColor = ZenithTheme.borderColor
                                 ),
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
@@ -759,26 +802,26 @@ fun ReceiptScanModal(
                         Spacer(modifier = Modifier.height(12.dp))
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = GoalAmber.copy(alpha = 0.15f),
-                            border = BorderStroke(1.dp, GoalAmber.copy(alpha = 0.4f)),
+                            color = ZenithTheme.accentAmber.copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, ZenithTheme.accentAmber.copy(alpha = 0.4f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.WarningAmber, contentDescription = null, tint = GoalAmber, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.WarningAmber, contentDescription = null, tint = ZenithTheme.accentAmber, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = "Receipt Totals Warning",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 13.sp,
-                                        color = GoalAmber
+                                        color = ZenithTheme.accentAmber
                                     )
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = "Sum of items (${currencySymbol}${String.format(Locale.US, "%.2f", receiptItems.sumOf { it.totalPrice })}) differs from Grand Total ($currencySymbol$editTotal).",
                                     fontSize = 11.sp,
-                                    color = SlateDarkTextSecondary
+                                    color = ZenithTheme.textSecondary
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -791,7 +834,10 @@ fun ReceiptScanModal(
                                     Button(
                                         onClick = { handleSaveExecution(force = true) },
                                         modifier = Modifier.weight(1f).height(36.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = Color.White
+                                        )
                                     ) {
                                         Text("Save Anyway", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
@@ -807,7 +853,10 @@ fun ReceiptScanModal(
                         onClick = { handleSaveExecution(force = false) },
                         modifier = Modifier.fillMaxWidth().height(48.dp).testTag("confirm_receipt_save_button"),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = Color.White
+                        )
                     ) {
                         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
@@ -826,14 +875,14 @@ fun ReceiptScanModal(
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Scan Another Receipt", color = SlateDarkTextSecondary, fontSize = 12.sp)
+                        Text("Scan Another Receipt", color = ZenithTheme.textSecondary, fontSize = 12.sp)
                     }
                 } else {
                     // Empty Initial State
                     Surface(
                         shape = RoundedCornerShape(16.dp),
-                        color = GlassCardBg,
-                        border = BorderStroke(1.5.dp, GlassBorderColor),
+                        color = ZenithTheme.glassCardBg,
+                        border = BorderStroke(1.5.dp, ZenithTheme.borderColor),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
@@ -844,13 +893,13 @@ fun ReceiptScanModal(
                                 modifier = Modifier
                                     .size(54.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF8B5CF6).copy(alpha = 0.15f)),
+                                    .background(ZenithTheme.accentPurple.copy(alpha = 0.16f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.CameraAlt,
                                     contentDescription = null,
-                                    tint = Color(0xFF8B5CF6),
+                                    tint = ZenithTheme.accentPurple,
                                     modifier = Modifier.size(28.dp)
                                 )
                             }
@@ -861,13 +910,13 @@ fun ReceiptScanModal(
                                 text = "No receipt selected",
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = SlateDarkTextPrimary
+                                color = ZenithTheme.textPrimary
                             )
 
                             Text(
                                 text = "Take a photo or select a receipt image to begin.",
                                 fontSize = 12.sp,
-                                color = SlateDarkTextSecondary,
+                                color = ZenithTheme.textSecondary,
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
@@ -884,7 +933,10 @@ fun ReceiptScanModal(
                             onClick = { onTakePhotoClick() },
                             modifier = Modifier.weight(1f).height(46.dp).testTag("btn_take_photo"),
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6))
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = LightPurpleAccent,
+                                contentColor = Color.White
+                            )
                         ) {
                             Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
@@ -910,7 +962,7 @@ fun ReceiptScanModal(
                                 onOpenManualAdd()
                             }
                         ) {
-                            Text("Or Enter Transaction Manually →", color = EmeraldDarkPrimary, fontSize = 12.sp)
+                            Text("Or Enter Transaction Manually →", color = ZenithTheme.accentIndigo, fontSize = 12.sp)
                         }
                     }
                 }
@@ -926,7 +978,8 @@ fun ReceiptScanModal(
 
         AlertDialog(
             onDismissRequest = { showAddItemDialog = false },
-            title = { Text("Add Receipt Item", fontWeight = FontWeight.Bold) },
+            containerColor = ZenithTheme.cardSurface,
+            title = { Text("Add Receipt Item", fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
@@ -963,7 +1016,7 @@ fun ReceiptScanModal(
 
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = SlateDarkSurfaceVariant,
+                        color = ZenithTheme.cardVariantSurface,
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                     ) {
                         Row(
@@ -971,8 +1024,8 @@ fun ReceiptScanModal(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Calculated Total:", fontSize = 12.sp, color = SlateDarkTextSecondary)
-                            Text("$currencySymbol${String.format(Locale.US, "%.2f", calculatedTotal)}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = IncomeGreen)
+                            Text("Calculated Total:", fontSize = 12.sp, color = ZenithTheme.textSecondary)
+                            Text("$currencySymbol${String.format(Locale.US, "%.2f", calculatedTotal)}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentGreen)
                         }
                     }
                 }
@@ -994,7 +1047,10 @@ fun ReceiptScanModal(
                             Toast.makeText(context, "Please enter item name and price", Toast.LENGTH_SHORT).show()
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White
+                    )
                 ) {
                     Text("Add to Receipt")
                 }

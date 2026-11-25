@@ -61,53 +61,44 @@ fun ZenithFloatingNavigationBar(
 ) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
-    // Floating Capsule Container — completely transparent backdrop, zero solid bar backgrounds
+    val isDark = ZenithTheme.isDark
+    val isOled = ZenithTheme.isOled
+
+    // Bottom fade scrim + Floating Capsule Container so scrolled list items fade cleanly behind/under the bar
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        ZenithTheme.scrimFloor.copy(alpha = 0.88f),
+                        ZenithTheme.scrimFloor
+                    )
+                )
+            )
             .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
+
         // Floating Frosted Glass Capsule
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp)
                 .shadow(
-                    elevation = 20.dp,
+                    elevation = if (isOled) 0.dp else if (isDark) 18.dp else 10.dp,
                     shape = RoundedCornerShape(32.dp),
-                    spotColor = Color(0x99000000),
-                    ambientColor = Color(0x40000000)
+                    spotColor = if (isDark) Color(0x99000000) else Color(0x1F0F172A),
+                    ambientColor = if (isDark) Color(0x40000000) else Color(0x100F172A)
                 )
                 .clip(RoundedCornerShape(32.dp))
-                .background(
-                    brush = if (ZenithTheme.isOled) {
-                        Brush.verticalGradient(
-                            listOf(
-                                Color(0xFB0A0A0A),
-                                Color(0xFF000000)
-                            )
-                        )
-                    } else {
-                        Brush.verticalGradient(
-                            listOf(
-                                Color(0xEE101726), // Ultra-dense luxury obsidian navy
-                                Color(0xF6090D16)  // Midnight carbon floor
-                            )
-                        )
-                    }
-                )
+                .background(brush = ZenithTheme.navBarBrush)
                 .border(
                     BorderStroke(
                         width = 1.dp,
-                        brush = Brush.verticalGradient(
-                            listOf(
-                                Color.White.copy(alpha = 0.28f), // Crisp specular top light
-                                Color(0x33818CF8),              // Subtle electric indigo refraction
-                                Color.White.copy(alpha = 0.06f)  // Base reflection
-                            )
-                        )
+                        brush = ZenithTheme.navBarBorderBrush
                     ),
                     shape = RoundedCornerShape(32.dp)
                 )
@@ -132,8 +123,11 @@ fun ZenithFloatingNavigationBar(
                         label = "tab_scale"
                     )
 
+                    val selectedTextColor = if (isDark) Color(0xFFE0E7FF) else ZenithTheme.accentIndigo
+                    val unselectedTextColor = ZenithTheme.textSecondary
+
                     val activeContentColor by animateColorAsState(
-                        targetValue = if (isSelected) Color(0xFFE0E7FF) else SlateDarkTextSecondary,
+                        targetValue = if (isSelected) selectedTextColor else unselectedTextColor,
                         label = "tab_content_color"
                     )
 
@@ -148,15 +142,22 @@ fun ZenithFloatingNavigationBar(
                                     Modifier
                                         .background(
                                             brush = Brush.verticalGradient(
-                                                listOf(
-                                                    Color(0xFF6366F1).copy(alpha = 0.26f),
-                                                    Color(0xFF4F46E5).copy(alpha = 0.12f)
-                                                )
+                                                if (isDark) {
+                                                    listOf(
+                                                        Color(0xFF6366F1).copy(alpha = 0.26f),
+                                                        Color(0xFF4F46E5).copy(alpha = 0.12f)
+                                                    )
+                                                } else {
+                                                    listOf(
+                                                        ZenithTheme.accentIndigo.copy(alpha = 0.14f),
+                                                        ZenithTheme.accentIndigo.copy(alpha = 0.06f)
+                                                    )
+                                                }
                                             )
                                         )
                                         .border(
                                             1.dp,
-                                            Color(0xFF818CF8).copy(alpha = 0.40f),
+                                            ZenithTheme.accentIndigo.copy(alpha = if (isDark) 0.40f else 0.30f),
                                             RoundedCornerShape(22.dp)
                                         )
                                 } else {
@@ -206,8 +207,8 @@ fun ZenithFloatingNavigationBar(
                                             .background(
                                                 brush = Brush.horizontalGradient(
                                                     listOf(
-                                                        Color(0xFF818CF8),
-                                                        Color(0xFF38BDF8)
+                                                        ZenithTheme.accentIndigo,
+                                                        ZenithTheme.accentCyan
                                                     )
                                                 )
                                             )

@@ -1,15 +1,12 @@
 package com.zenith.app.ui.components
 
-import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -30,8 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.zenith.app.data.models.AutoPayReminderEntity
-import com.zenith.app.ui.theme.*
-import java.text.SimpleDateFormat
+import com.zenith.app.ui.theme.ZenithTheme
 import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,13 +60,12 @@ fun AddAutoPayReminderDialog(
     var reminderDaysBefore by remember { mutableIntStateOf(initialReminder?.reminderDaysBefore ?: 2) }
     var notes by remember { mutableStateOf(initialReminder?.notes ?: "") }
 
-    // Date calculation
     val calendar = remember {
         Calendar.getInstance().apply {
             if (initialReminder != null) {
                 timeInMillis = initialReminder.nextDueDateMillis
             } else {
-                add(Calendar.DAY_OF_MONTH, 5) // Default to 5 days ahead
+                add(Calendar.DAY_OF_MONTH, 5)
             }
         }
     }
@@ -95,8 +90,8 @@ fun AddAutoPayReminderDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp)
@@ -108,7 +103,6 @@ fun AddAutoPayReminderDialog(
                     .padding(22.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -119,48 +113,50 @@ fun AddAutoPayReminderDialog(
                             text = if (initialReminder != null) "Edit Auto-Pay Bill" else "Add Auto-Pay Reminder",
                             fontSize = 19.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
                         Text(
                             text = "Track subscriptions, utilities & avoid late fees",
                             fontSize = 11.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                     }
 
                     IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.size(32.dp).testTag("close_autopay_dialog")
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("close_autopay_dialog")
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SlateDarkTextSecondary)
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = ZenithTheme.textSecondary)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Title
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
                     label = { Text("Service / Bill Name") },
-                    placeholder = { Text("e.g. Netflix, Wi-Fi, Rent, Credit Card", color = SlateDarkTextMuted) },
+                    placeholder = { Text("e.g. Netflix, Wi-Fi, Rent, Credit Card", color = ZenithTheme.textMuted) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = EmeraldDarkPrimary,
-                        unfocusedBorderColor = GlassBorderColor,
-                        focusedContainerColor = SlateDarkSurfaceVariant,
-                        unfocusedContainerColor = SlateDarkSurfaceVariant,
-                        focusedTextColor = SlateDarkTextPrimary,
-                        unfocusedTextColor = SlateDarkTextPrimary
+                        focusedBorderColor = ZenithTheme.accentGreen,
+                        unfocusedBorderColor = ZenithTheme.borderColor,
+                        focusedContainerColor = ZenithTheme.cardVariantSurface,
+                        unfocusedContainerColor = ZenithTheme.cardVariantSurface,
+                        focusedTextColor = ZenithTheme.textPrimary,
+                        unfocusedTextColor = ZenithTheme.textPrimary
                     ),
-                    modifier = Modifier.fillMaxWidth().testTag("autopay_title_field")
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("autopay_title_field")
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Amount
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { input ->
@@ -169,29 +165,30 @@ fun AddAutoPayReminderDialog(
                         if (clean.count { it == '.' } <= 1) amountText = clean
                     },
                     label = { Text("Amount ($currencySymbol)") },
-                    placeholder = { Text("0.00", color = SlateDarkTextMuted) },
+                    placeholder = { Text("0.00", color = ZenithTheme.textMuted) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = EmeraldDarkPrimary,
-                        unfocusedBorderColor = GlassBorderColor,
-                        focusedContainerColor = SlateDarkSurfaceVariant,
-                        unfocusedContainerColor = SlateDarkSurfaceVariant,
-                        focusedTextColor = SlateDarkTextPrimary,
-                        unfocusedTextColor = SlateDarkTextPrimary
+                        focusedBorderColor = ZenithTheme.accentGreen,
+                        unfocusedBorderColor = ZenithTheme.borderColor,
+                        focusedContainerColor = ZenithTheme.cardVariantSurface,
+                        unfocusedContainerColor = ZenithTheme.cardVariantSurface,
+                        focusedTextColor = ZenithTheme.textPrimary,
+                        unfocusedTextColor = ZenithTheme.textPrimary
                     ),
-                    modifier = Modifier.fillMaxWidth().testTag("autopay_amount_field")
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("autopay_amount_field")
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Frequency Selector
                 Text(
                     text = "Billing Frequency",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = SlateDarkTextSecondary,
+                    color = ZenithTheme.textSecondary,
                     modifier = Modifier.padding(bottom = 6.dp)
                 )
 
@@ -218,11 +215,10 @@ fun AddAutoPayReminderDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Day of Month / Due Day Selector
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = SlateDarkSurfaceVariant,
-                    border = BorderStroke(1.dp, GlassBorderColor),
+                    color = ZenithTheme.cardVariantSurface,
+                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
@@ -235,18 +231,18 @@ fun AddAutoPayReminderDialog(
                                 text = "Due Day of Month",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = SlateDarkTextPrimary
+                                color = ZenithTheme.textPrimary
                             )
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = EmeraldDarkPrimary.copy(alpha = 0.2f),
-                                border = BorderStroke(1.dp, EmeraldDarkPrimary.copy(alpha = 0.4f))
+                                color = ZenithTheme.accentGreen.copy(alpha = 0.16f),
+                                border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.38f))
                             ) {
                                 Text(
                                     text = "Day $dueDayOfMonth",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = EmeraldDarkPrimary,
+                                    color = ZenithTheme.accentGreen,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                 )
                             }
@@ -258,9 +254,9 @@ fun AddAutoPayReminderDialog(
                             valueRange = 1f..31f,
                             steps = 29,
                             colors = SliderDefaults.colors(
-                                thumbColor = EmeraldDarkPrimary,
-                                activeTrackColor = EmeraldDarkPrimary,
-                                inactiveTrackColor = SlateDarkTextMuted.copy(alpha = 0.3f)
+                                thumbColor = ZenithTheme.accentGreen,
+                                activeTrackColor = ZenithTheme.accentGreen,
+                                inactiveTrackColor = ZenithTheme.textMuted.copy(alpha = 0.3f)
                             )
                         )
                     }
@@ -268,11 +264,10 @@ fun AddAutoPayReminderDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Auto-Debit vs Manual Switch Card
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = if (isAutoDebit) Color(0xFF8B5CF6).copy(alpha = 0.12f) else SlateDarkSurfaceVariant,
-                    border = BorderStroke(1.dp, if (isAutoDebit) Color(0xFF8B5CF6).copy(alpha = 0.4f) else GlassBorderColor),
+                    color = if (isAutoDebit) ZenithTheme.accentPurple.copy(alpha = 0.12f) else ZenithTheme.cardVariantSurface,
+                    border = BorderStroke(1.dp, if (isAutoDebit) ZenithTheme.accentPurple.copy(alpha = 0.38f) else ZenithTheme.borderColor),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -287,7 +282,7 @@ fun AddAutoPayReminderDialog(
                                 Icon(
                                     imageVector = if (isAutoDebit) Icons.Default.FlashOn else Icons.Default.EditCalendar,
                                     contentDescription = null,
-                                    tint = if (isAutoDebit) Color(0xFFC4B5FD) else SlateDarkTextSecondary,
+                                    tint = if (isAutoDebit) ZenithTheme.accentPurple else ZenithTheme.textSecondary,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -295,13 +290,13 @@ fun AddAutoPayReminderDialog(
                                     text = if (isAutoDebit) "Bank Auto-Debit (NACH/E-Mandate)" else "Manual Bill Payment",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextPrimary
+                                    color = ZenithTheme.textPrimary
                                 )
                             }
                             Text(
                                 text = if (isAutoDebit) "Zenith reminds you to keep sufficient balance" else "Zenith reminds you to pay manually on time",
                                 fontSize = 10.sp,
-                                color = SlateDarkTextSecondary,
+                                color = ZenithTheme.textSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                         }
@@ -311,7 +306,7 @@ fun AddAutoPayReminderDialog(
                             onCheckedChange = { isAutoDebit = it },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color.White,
-                                checkedTrackColor = Color(0xFF8B5CF6)
+                                checkedTrackColor = ZenithTheme.accentPurple
                             )
                         )
                     }
@@ -319,7 +314,6 @@ fun AddAutoPayReminderDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Payment Method Dropdown
                 PaymentMethodDropdown(
                     selectedMethod = selectedPaymentMethod,
                     onMethodSelected = { selectedPaymentMethod = it },
@@ -328,12 +322,11 @@ fun AddAutoPayReminderDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Category Chips
                 Text(
                     text = "Category",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = SlateDarkTextSecondary,
+                    color = ZenithTheme.textSecondary,
                     modifier = Modifier.padding(bottom = 6.dp)
                 )
 
@@ -352,12 +345,11 @@ fun AddAutoPayReminderDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Advance Warning Days
                 Text(
                     text = "Remind Me Before Due Date",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = SlateDarkTextSecondary,
+                    color = ZenithTheme.textSecondary,
                     modifier = Modifier.padding(bottom = 6.dp)
                 )
 
@@ -369,8 +361,8 @@ fun AddAutoPayReminderDialog(
                         val isSelected = reminderDaysBefore == days
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = if (isSelected) EmeraldDarkPrimary.copy(alpha = 0.25f) else SlateDarkSurfaceVariant,
-                            border = BorderStroke(1.dp, if (isSelected) EmeraldDarkPrimary else GlassBorderColor),
+                            color = if (isSelected) ZenithTheme.accentGreen.copy(alpha = 0.22f) else ZenithTheme.cardVariantSurface,
+                            border = BorderStroke(1.dp, if (isSelected) ZenithTheme.accentGreen else ZenithTheme.borderColor),
                             modifier = Modifier
                                 .weight(1f)
                                 .height(36.dp)
@@ -382,7 +374,7 @@ fun AddAutoPayReminderDialog(
                                     text = "$days d",
                                     fontSize = 12.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) EmeraldDarkPrimary else SlateDarkTextPrimary
+                                    color = if (isSelected) ZenithTheme.accentGreen else ZenithTheme.textPrimary
                                 )
                             }
                         }
@@ -391,35 +383,32 @@ fun AddAutoPayReminderDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Notes
                 OutlinedTextField(
                     value = notes,
                     onValueChange = { notes = it },
                     label = { Text("Notes (Optional)") },
-                    placeholder = { Text("Account number, consumer ID, or card used", color = SlateDarkTextMuted) },
+                    placeholder = { Text("Account number, consumer ID, or card used", color = ZenithTheme.textMuted) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = EmeraldDarkPrimary,
-                        unfocusedBorderColor = GlassBorderColor,
-                        focusedContainerColor = SlateDarkSurfaceVariant,
-                        unfocusedContainerColor = SlateDarkSurfaceVariant,
-                        focusedTextColor = SlateDarkTextPrimary,
-                        unfocusedTextColor = SlateDarkTextPrimary
+                        focusedBorderColor = ZenithTheme.accentGreen,
+                        unfocusedBorderColor = ZenithTheme.borderColor,
+                        focusedContainerColor = ZenithTheme.cardVariantSurface,
+                        unfocusedContainerColor = ZenithTheme.cardVariantSurface,
+                        focusedTextColor = ZenithTheme.textPrimary,
+                        unfocusedTextColor = ZenithTheme.textPrimary
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(modifier = Modifier.height(22.dp))
 
-                // Save Button
                 Button(
                     onClick = {
                         val parsedAmt = amountText.replace(',', '.').toDoubleOrNull() ?: 0.0
                         if (isValid) {
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                            // Calculate next due date timestamp
                             val now = Calendar.getInstance()
                             val nextDueCal = Calendar.getInstance().apply {
                                 set(Calendar.DAY_OF_MONTH, dueDayOfMonth.coerceAtMost(getActualMaximum(Calendar.DAY_OF_MONTH)))
@@ -427,7 +416,6 @@ fun AddAutoPayReminderDialog(
                                 set(Calendar.MINUTE, 0)
                                 set(Calendar.SECOND, 0)
                                 set(Calendar.MILLISECOND, 0)
-                                // If day has already passed this month, advance to next month
                                 if (timeInMillis < now.timeInMillis) {
                                     add(Calendar.MONTH, 1)
                                 }
@@ -453,15 +441,16 @@ fun AddAutoPayReminderDialog(
                         .height(50.dp)
                         .testTag("btn_save_autopay"),
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary),
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
                     enabled = isValid
                 ) {
-                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.White)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = if (initialReminder != null) "Update Reminder" else "Save Reminder",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
+                        fontSize = 14.sp,
+                        color = Color.White
                     )
                 }
             }

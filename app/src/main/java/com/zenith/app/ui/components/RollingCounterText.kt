@@ -9,19 +9,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import com.zenith.app.ui.theme.ZenithTheme
 import java.util.Locale
 
 /**
  * 120 FPS Rolling Number Odometer / Ticker for Jetpack Compose.
  *
  * Smoothly animates digit transitions up and down using spring physics,
- * mimicking high-end fintech apps (Robinhood, Apple Stocks).
- *
- * Uses tabular figures ("tnum") to prevent horizontal layout shift during roll transitions.
+ * uses tabular figures ("tnum"), and auto-scales font size when placed inside
+ * narrow pills/cards so wide numbers never overflow or wrap.
  */
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
@@ -34,7 +34,7 @@ fun RollingCounterText(
     isMasked: Boolean = false,
     fontSize: TextUnit = 32.sp,
     fontWeight: FontWeight = FontWeight.Bold,
-    color: Color = Color.White,
+    color: Color = ZenithTheme.textPrimary,
     letterSpacing: TextUnit = 0.sp
 ) {
     if (isMasked) {
@@ -44,6 +44,8 @@ fun RollingCounterText(
             fontWeight = fontWeight,
             color = color,
             letterSpacing = letterSpacing,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = modifier
         )
         return
@@ -60,28 +62,36 @@ fun RollingCounterText(
     val signStr = if (isNegative) "-" else prefix
     val fullText = "$signStr$currencySymbol$formattedNumber"
 
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        fullText.forEach { char ->
-            if (char.isDigit()) {
-                val digit = char.digitToInt()
-                RollingDigit(
-                    digit = digit,
-                    fontSize = fontSize,
-                    fontWeight = fontWeight,
-                    color = color,
-                    letterSpacing = letterSpacing
-                )
-            } else {
-                Text(
-                    text = char.toString(),
-                    fontSize = fontSize,
-                    fontWeight = fontWeight,
-                    color = color,
-                    letterSpacing = letterSpacing
-                )
+    BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.CenterStart) {
+        val effectiveFontSize = if (constraints.hasBoundedWidth && maxWidth.value > 0f && fullText.isNotEmpty()) {
+            // ~0.62dp per sp character estimate for tabular glyphs inside constrained cards
+            val maxAllowedSp = (maxWidth.value / (fullText.length * 0.62f)).coerceAtLeast(10f)
+            minOf(fontSize.value, maxAllowedSp).sp
+        } else {
+            fontSize
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            fullText.forEach { char ->
+                if (char.isDigit()) {
+                    val digit = char.digitToInt()
+                    RollingDigit(
+                        digit = digit,
+                        fontSize = effectiveFontSize,
+                        fontWeight = fontWeight,
+                        color = color,
+                        letterSpacing = letterSpacing
+                    )
+                } else {
+                    Text(
+                        text = char.toString(),
+                        fontSize = effectiveFontSize,
+                        fontWeight = fontWeight,
+                        color = color,
+                        letterSpacing = letterSpacing,
+                        maxLines = 1
+                    )
+                }
             }
         }
     }

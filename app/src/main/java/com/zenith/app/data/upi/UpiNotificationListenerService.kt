@@ -72,6 +72,18 @@ class UpiNotificationListenerService : NotificationListenerService() {
             context.startActivity(intent)
         }
 
+        fun notificationIdFor(amount: Double, payeeName: String): Int {
+            return (amount.toInt() * 31 + payeeName.hashCode()) and 0x7FFFFFFF
+        }
+
+        fun cancelNotificationFor(context: Context, amount: Double, payeeName: String) {
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(notificationIdFor(amount, payeeName))
+            } catch (_: Exception) {
+            }
+        }
+
         /**
          * Simulates a test UPI notification for verification and settings preview.
          */
@@ -127,8 +139,14 @@ class UpiNotificationListenerService : NotificationListenerService() {
         processedHashes[key] = now
         Log.i(tag, "Extracted UPI Payment: ${payment.amount} at ${payment.payeeName} via ${payment.sourceApp}")
 
-        // Broadcast to in-app event bus
+        // Broadcast to in-app event bus (always emit so open UpiPaymentFlow can capture UTR)
         UpiPaymentBus.post(payment)
+
+        // Skip posting a duplicate system notification if already recorded in-app within 5 mins
+        if (UpiPaymentBus.wasRecentlyRecorded(payment.amount, payment.upiTransactionId)) {
+            Log.d(tag, "Skipping system notification for already-recorded UPI payment: $key")
+            return
+        }
 
         // Post system notification with 1-tap quick action
         try {
@@ -154,7 +172,7 @@ class UpiNotificationListenerService : NotificationListenerService() {
             notificationManager.createNotificationChannel(channel)
         }
 
-        val notifId = (payment.amount.toInt() * 31 + payment.payeeName.hashCode()) and 0x7FFFFFFF
+        val notifId = notificationIdFor(payment.amount, payment.payeeName)
 
         // Intent to open MainActivity
         val openAppIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {

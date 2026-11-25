@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <queries>
         <intent>
@@ -17,6 +18,18 @@
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="upi" android:host="pay" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="gpay" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tez" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
             <data android:scheme="phonepe" />
         </intent>
         <intent>
@@ -25,19 +38,24 @@
         </intent>
         <!-- Top Indian UPI Apps for Android 11+ Package Visibility -->
         <package android:name="com.google.android.apps.nbu.paisa.user" /> <!-- Google Pay -->
+        <package android:name="com.google.android.apps.nbu.paisa.merchant" /> <!-- GPay for Business -->
         <package android:name="com.phonepe.app" /> <!-- PhonePe -->
+        <package android:name="com.phonepe.app.business" /> <!-- PhonePe Business -->
         <package android:name="net.one97.paytm" /> <!-- Paytm -->
         <package android:name="in.org.npci.upiapp" /> <!-- BHIM -->
         <package android:name="com.dreamplug.androidapp" /> <!-- CRED -->
-        <package android:name="in.amazon.mShop.android.shopping" /> <!-- Amazon Pay -->
+        <package android:name="in.amazon.mShop.android.shopping" /> <!-- Amazon Pay (IN) -->
+        <package android:name="com.amazon.mShop.android.shopping" /> <!-- Amazon Pay -->
         <package android:name="com.whatsapp" /> <!-- WhatsApp Pay -->
         <package android:name="com.mobikwik_new" /> <!-- MobiKwik -->
         <package android:name="com.naviapp" /> <!-- Navi -->
+        <package android:name="com.freecharge.android" /> <!-- Freecharge -->
+        <package android:name="money.super.upi" /> <!-- super.money -->
     </queries>
 
     <application
         android:name=".ZenithApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"

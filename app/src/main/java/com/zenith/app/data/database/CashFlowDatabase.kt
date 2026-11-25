@@ -13,6 +13,33 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val obsoleteTables = listOf(
+            "ledger_transactions",
+            "family_vaults",
+            "family_vault_members",
+            "family_members",
+            "families"
+        )
+        for (table in obsoleteTables) {
+            try {
+                db.execSQL("DROP TABLE IF EXISTS `$table`")
+            } catch (_: Exception) {
+            }
+        }
+        try {
+            db.execSQL(
+                "DELETE FROM `categories` WHERE `id` NOT IN (SELECT MIN(`id`) FROM `categories` GROUP BY LOWER(TRIM(`name`)))"
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_categories_name` ON `categories` (`name`)"
+            )
+        } catch (_: Exception) {
+        }
+    }
+}
+
 val MIGRATION_14_15 = object : Migration(14, 15) {
     override fun migrate(db: SupportSQLiteDatabase) {
         try {
@@ -250,13 +277,11 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         SavingsGoalEntity::class,
         AutoPayReminderEntity::class,
         ScannedItemEntity::class,
-        FamilyEntity::class,
-        FamilyMemberEntity::class,
         UserProfileEntity::class,
         ReceiptEntity::class,
         ReceiptItemEntity::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = false
 )
 abstract class CashFlowDatabase : RoomDatabase() {
@@ -266,8 +291,6 @@ abstract class CashFlowDatabase : RoomDatabase() {
     abstract fun savingsGoalDao(): SavingsGoalDao
     abstract fun autoPayReminderDao(): AutoPayReminderDao
     abstract fun scannedItemDao(): ScannedItemDao
-    abstract fun familyDao(): FamilyDao
-    abstract fun familyMemberDao(): FamilyMemberDao
     abstract fun userProfileDao(): UserProfileDao
     abstract fun receiptDao(): ReceiptDao
 
@@ -282,7 +305,7 @@ abstract class CashFlowDatabase : RoomDatabase() {
                     CashFlowDatabase::class.java,
                     "cashflow_database"
                 )
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
                     .fallbackToDestructiveMigration(true)
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .addCallback(DatabaseCallback(context.applicationContext))

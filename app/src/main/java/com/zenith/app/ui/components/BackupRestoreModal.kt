@@ -4,10 +4,8 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,7 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,15 +29,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.zenith.app.data.export.ExportImportService
 import com.zenith.app.data.models.*
-import com.zenith.app.ui.theme.*
+import com.zenith.app.ui.theme.ZenithTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.text.SimpleDateFormat
-import java.util.*
 
 @Composable
 fun BackupRestoreModal(
@@ -57,11 +53,10 @@ fun BackupRestoreModal(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var selectedTab by remember { mutableStateOf(0) } // 0: Backup, 1: Restore
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Backup, 1: Restore
     var isBackingUp by remember { mutableStateOf(false) }
     var backupResult by remember { mutableStateOf<com.zenith.app.data.export.ExportResult?>(null) }
 
-    // Restore preview state
     var restorePreview by remember { mutableStateOf<RestorePreviewData?>(null) }
     var isReadingRestoreFile by remember { mutableStateOf(false) }
 
@@ -76,7 +71,7 @@ fun BackupRestoreModal(
                         context.contentResolver.openInputStream(uri)?.use { stream ->
                             BufferedReader(InputStreamReader(stream)).readText()
                         } ?: ""
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         ""
                     }
                 }
@@ -102,7 +97,7 @@ fun BackupRestoreModal(
                                         paymentMethod = obj.optString("paymentMethod", "UPI"),
                                         note = obj.optString("note", ""),
                                         dateMillis = obj.optLong("dateMillis", System.currentTimeMillis()),
-                                        financeScope = if (obj.optString("financeScope") == "FAMILY") FinanceScope.FAMILY else FinanceScope.PERSONAL,
+                                        financeScope = FinanceScope.PERSONAL,
                                         syncStatus = "PENDING_CREATE"
                                     )
                                 )
@@ -120,7 +115,7 @@ fun BackupRestoreModal(
                                         monthYear = obj.optString("monthYear", "2026-08"),
                                         periodType = obj.optString("periodType", "MONTHLY"),
                                         customPeriodName = obj.optString("customPeriodName", ""),
-                                        financeScope = if (obj.optString("financeScope") == "FAMILY") FinanceScope.FAMILY else FinanceScope.PERSONAL
+                                        financeScope = FinanceScope.PERSONAL
                                     )
                                 )
                             }
@@ -135,7 +130,7 @@ fun BackupRestoreModal(
                                         title = obj.optString("title", "Goal"),
                                         targetAmount = obj.optDouble("targetAmount", 0.0),
                                         currentAmount = obj.optDouble("currentAmount", 0.0),
-                                        financeScope = if (obj.optString("financeScope") == "FAMILY") FinanceScope.FAMILY else FinanceScope.PERSONAL
+                                        financeScope = FinanceScope.PERSONAL
                                     )
                                 )
                             }
@@ -147,7 +142,7 @@ fun BackupRestoreModal(
                             budgets = parsedBudgets,
                             goals = parsedGoals
                         )
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         Toast.makeText(context, "Invalid Zenith backup file", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -159,8 +154,8 @@ fun BackupRestoreModal(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SlateDarkSurface,
-            border = BorderStroke(1.dp, GlassBorderColor),
+            color = ZenithTheme.cardSurface,
+            border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 2.dp)
@@ -171,7 +166,6 @@ fun BackupRestoreModal(
                     .padding(22.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -182,27 +176,31 @@ fun BackupRestoreModal(
                             text = "Backup & Restore",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextPrimary
+                            color = ZenithTheme.textPrimary
                         )
                         Text(
                             text = "Preserve and recover your entire financial history.",
                             fontSize = 12.sp,
-                            color = SlateDarkTextSecondary
+                            color = ZenithTheme.textSecondary
                         )
                     }
 
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp).testTag("close_backup_modal")) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SlateDarkTextSecondary)
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("close_backup_modal")
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = ZenithTheme.textSecondary)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Tab Switcher (Backup vs Restore)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(SlateDarkSurfaceVariant, RoundedCornerShape(12.dp))
+                        .background(ZenithTheme.cardVariantSurface, RoundedCornerShape(12.dp))
                         .padding(4.dp)
                 ) {
                     val isBackup = selectedTab == 0
@@ -210,11 +208,12 @@ fun BackupRestoreModal(
                         modifier = Modifier
                             .weight(1f)
                             .height(38.dp)
-                            .background(if (isBackup) EmeraldDarkPrimary else Color.Transparent, RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isBackup) ZenithTheme.solidGreen else Color.Transparent)
                             .clickable { selectedTab = 0 },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("Create Backup", fontWeight = FontWeight.Bold, color = if (isBackup) Color.White else SlateDarkTextSecondary, fontSize = 13.sp)
+                        Text("Create Backup", fontWeight = FontWeight.Bold, color = if (isBackup) Color.White else ZenithTheme.textSecondary, fontSize = 13.sp)
                     }
 
                     val isRestore = selectedTab == 1
@@ -222,23 +221,23 @@ fun BackupRestoreModal(
                         modifier = Modifier
                             .weight(1f)
                             .height(38.dp)
-                            .background(if (isRestore) GoldAccent else Color.Transparent, RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isRestore) ZenithTheme.solidAmber else Color.Transparent)
                             .clickable { selectedTab = 1 },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("Restore Backup", fontWeight = FontWeight.Bold, color = if (isRestore) Color.Black else SlateDarkTextSecondary, fontSize = 13.sp)
+                        Text("Restore Backup", fontWeight = FontWeight.Bold, color = if (isRestore) Color.White else ZenithTheme.textSecondary, fontSize = 13.sp)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (selectedTab == 0) {
-                    // --- CREATE BACKUP TAB ---
                     Text(
                         text = "BACKUP SUMMARY",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SlateDarkTextSecondary,
+                        color = ZenithTheme.textSecondary,
                         letterSpacing = 1.sp
                     )
 
@@ -246,8 +245,8 @@ fun BackupRestoreModal(
 
                     Surface(
                         shape = RoundedCornerShape(14.dp),
-                        color = SlateDarkSurfaceVariant,
-                        border = BorderStroke(1.dp, GlassBorderColor),
+                        color = ZenithTheme.cardVariantSurface,
+                        border = BorderStroke(1.dp, ZenithTheme.borderColor),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
@@ -262,13 +261,13 @@ fun BackupRestoreModal(
 
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = Color.White.copy(alpha = 0.05f),
+                        color = ZenithTheme.accentGreen.copy(alpha = 0.08f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Shield, contentDescription = null, tint = EmeraldDarkPrimary, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Shield, contentDescription = null, tint = ZenithTheme.accentGreen, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Full snapshots are securely stored on your device and exclude any account passwords.", fontSize = 11.sp, color = SlateDarkTextSecondary)
+                            Text("Full snapshots are securely stored on your device and exclude any account passwords.", fontSize = 11.sp, color = ZenithTheme.textSecondary)
                         }
                     }
 
@@ -284,41 +283,48 @@ fun BackupRestoreModal(
                                     isBackingUp = false
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("btn_create_full_backup"),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("btn_create_full_backup"),
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                            colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                         ) {
                             if (isBackingUp) {
                                 CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Creating Snapshot...", fontWeight = FontWeight.Bold)
+                                Text("Creating Snapshot...", fontWeight = FontWeight.Bold, color = Color.White)
                             } else {
-                                Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.White)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Generate Full Backup (.json)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("Generate Full Backup (.json)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
                             }
                         }
                     } else {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = IncomeGreen, modifier = Modifier.size(44.dp))
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = ZenithTheme.accentGreen, modifier = Modifier.size(44.dp))
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text("Backup Created Successfully!", fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary, fontSize = 15.sp)
-                            Text(backupResult?.fileName ?: "", fontSize = 12.sp, color = SlateDarkTextSecondary)
+                            Text("Backup Created Successfully!", fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary, fontSize = 15.sp)
+                            Text(backupResult?.fileName ?: "", fontSize = 12.sp, color = ZenithTheme.textSecondary)
                             Spacer(modifier = Modifier.height(14.dp))
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
                                     onClick = { backupResult?.let { ExportImportService.shareFile(context, it) } },
-                                    modifier = Modifier.weight(1f).height(44.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(44.dp),
                                     shape = RoundedCornerShape(12.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDarkPrimary)
+                                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                                 ) {
-                                    Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Share", fontWeight = FontWeight.Bold)
+                                    Text("Share", fontWeight = FontWeight.Bold, color = Color.White)
                                 }
                                 OutlinedButton(
                                     onClick = { backupResult = null },
-                                    modifier = Modifier.weight(1f).height(44.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(44.dp),
                                     shape = RoundedCornerShape(12.dp)
                                 ) {
                                     Text("Done")
@@ -327,18 +333,15 @@ fun BackupRestoreModal(
                         }
                     }
                 } else {
-                    // --- RESTORE BACKUP TAB ---
                     val currentPreview = restorePreview
                     if (currentPreview == null) {
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = GlassCardBg,
-                            border = BorderStroke(1.5.dp, GlassBorderColor),
+                            color = ZenithTheme.glassCardBg,
+                            border = BorderStroke(1.5.dp, ZenithTheme.borderColor),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    filePickerLauncher.launch("application/json")
-                                }
+                                .clickable { filePickerLauncher.launch("application/json") }
                                 .testTag("btn_select_restore_file")
                         ) {
                             Column(
@@ -349,13 +352,13 @@ fun BackupRestoreModal(
                                     modifier = Modifier
                                         .size(48.dp)
                                         .clip(CircleShape)
-                                        .background(GoldAccent.copy(alpha = 0.15f)),
+                                        .background(ZenithTheme.accentAmber.copy(alpha = 0.15f)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Restore,
                                         contentDescription = null,
-                                        tint = GoldAccent,
+                                        tint = ZenithTheme.accentAmber,
                                         modifier = Modifier.size(26.dp)
                                     )
                                 }
@@ -366,13 +369,13 @@ fun BackupRestoreModal(
                                     text = if (isReadingRestoreFile) "Reading Backup..." else "Select Zenith JSON Backup",
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = SlateDarkTextPrimary
+                                    color = ZenithTheme.textPrimary
                                 )
 
                                 Text(
                                     text = "Choose a zenith_backup_*.json file",
                                     fontSize = 12.sp,
-                                    color = SlateDarkTextSecondary,
+                                    color = ZenithTheme.textSecondary,
                                     modifier = Modifier.padding(top = 4.dp)
                                 )
                             }
@@ -383,7 +386,7 @@ fun BackupRestoreModal(
                             text = "BACKUP DETAILS",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = SlateDarkTextSecondary,
+                            color = ZenithTheme.textSecondary,
                             letterSpacing = 1.sp
                         )
 
@@ -391,8 +394,8 @@ fun BackupRestoreModal(
 
                         Surface(
                             shape = RoundedCornerShape(14.dp),
-                            color = SlateDarkSurfaceVariant,
-                            border = BorderStroke(1.dp, GlassBorderColor),
+                            color = ZenithTheme.cardVariantSurface,
+                            border = BorderStroke(1.dp, ZenithTheme.borderColor),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
@@ -407,14 +410,14 @@ fun BackupRestoreModal(
 
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = GoalAmber.copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, GoalAmber.copy(alpha = 0.3f)),
+                            color = ZenithTheme.accentAmber.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, ZenithTheme.accentAmber.copy(alpha = 0.3f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.WarningAmber, contentDescription = null, tint = GoalAmber, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.WarningAmber, contentDescription = null, tint = ZenithTheme.accentAmber, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Restoring will merge these records into your current ledger without overwriting unrelated data.", fontSize = 11.sp, color = GoalAmber)
+                                Text("Restoring will merge these records into your current ledger without overwriting unrelated data.", fontSize = 11.sp, color = ZenithTheme.accentAmber)
                             }
                         }
 
@@ -423,7 +426,9 @@ fun BackupRestoreModal(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
                                 onClick = { restorePreview = null },
-                                modifier = Modifier.weight(1f).height(46.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Text("Cancel")
@@ -435,9 +440,12 @@ fun BackupRestoreModal(
                                     Toast.makeText(context, "Restored ${prev.transactions.size} transactions and ${prev.budgets.size} budgets!", Toast.LENGTH_SHORT).show()
                                     onDismiss()
                                 },
-                                modifier = Modifier.weight(1.3f).height(46.dp).testTag("btn_confirm_restore"),
+                                modifier = Modifier
+                                    .weight(1.3f)
+                                    .height(46.dp)
+                                    .testTag("btn_confirm_restore"),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = GoldAccent, contentColor = Color.Black)
+                                colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.accentAmber, contentColor = Color.Black)
                             ) {
                                 Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -461,10 +469,12 @@ private data class RestorePreviewData(
 @Composable
 private fun BackupItemRow(label: String, value: String) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(label, fontSize = 12.sp, color = SlateDarkTextSecondary)
-        Text(value, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = SlateDarkTextPrimary)
+        Text(label, fontSize = 12.sp, color = ZenithTheme.textSecondary)
+        Text(value, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
     }
 }

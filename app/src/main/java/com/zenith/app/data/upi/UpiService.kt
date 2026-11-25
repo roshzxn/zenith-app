@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.net.URLDecoder
@@ -38,8 +40,48 @@ data class UpiPaymentInfo(
      * Returns false for Static QRs where the amount must be entered by the user.
      */
     val isDynamic: Boolean
-        get() = amount.isNotBlank() && (amount.toDoubleOrNull() ?: 0.0) > 0.0
+        get() = amount.isNotBlank() && (amount.replace(",", "").toDoubleOrNull() ?: 0.0) > 0.0
+
+    /**
+     * True when merchant metadata (MCC and/or signed payload) accompanies this payment.
+     */
+    val isVerifiedMerchantFormat: Boolean
+        get() = merchantCode.trim().let { it.length == 4 && it.all(Char::isDigit) && it != "0000" } ||
+            (rawUri?.contains("sign=", ignoreCase = true) == true)
 }
+
+/**
+ * Distinguishes personal P2P / QR intents from server-backed merchant gateway orders.
+ */
+enum class PaymentFlowType {
+    P2P_INTENT,
+    MERCHANT_QR_INTENT,
+    GATEWAY_ORDER
+}
+
+/**
+ * Verification state returned by an authenticated server/webhook check for gateway transactions.
+ */
+enum class GatewayVerificationStatus {
+    NOT_APPLICABLE,
+    PENDING_SERVER_VERIFICATION,
+    VERIFIED,
+    REJECTED
+}
+
+/**
+ * Contract for server-side verification of payment gateway transactions.
+ * Client-side Intent status must never be trusted alone for gateway orders.
+ */
+fun interface UpiGatewayVerifier {
+    fun verifyOrderStatus(expectedTxnRef: String, clientStatus: UpiPaymentStatus): GatewayVerificationStatus
+}
+
+data class UpiValidationResult(
+    val isValid: Boolean,
+    val errorMessage: String? = null,
+    val isP2pUnverifiedWarning: Boolean = false
+)
 
 /**
  * Possible states of a UPI payment.
@@ -60,29 +102,84 @@ data class UpiIntentResult(
     val cancelled: Boolean,
     val returnedTxnRef: String?,
     val status: UpiPaymentStatus = UpiPaymentStatus.INITIATED,
-    val message: String = ""
+    val message: String = "",
+    val responseCode: String? = null,
+    val approvalRefNo: String? = null,
+    val txnId: String? = null,
+    val isSecurityDecline: Boolean = false,
+    val requiresServerVerification: Boolean = false
 ) {
     val needsConfirmation: Boolean
-        get() = launched && !cancelled
+        get() = launched && !cancelled && status == UpiPaymentStatus.INITIATED
 }
 
 /**
  * UPI payment service.
  *
  * This class:
- * - Parses UPI QR data
- * - Creates standard upi://pay URLs
- * - Opens installed UPI apps
- * - Supports Google Pay
- * - Supports PhonePe, Paytm and BHIM detection
- * - Handles the response from UPI applications
- *
- * It NEVER handles the user's UPI PIN, OTP or bank credentials.
+ * - Validates VPAs, amounts, and NPCI URI parameters
+ * - Parses UPI QR data (Standard upi://pay, BharatQR EMVCo, Web-wrapped) while preserving signatures
+ * - Creates compliant upi://pay URLs and resolves installed UPI apps cleanly
+ * - Validates and maps UPI Intent responses (SUCCESS, PENDING, FAILED, CANCELLED)
+ * - Logs redacted diagnostics without exposing full VPAs, UTRs, PINs, or credentials
  */
 object UpiService {
 
+    private const val TAG = "ZenithUpiService"
     private const val UPI_SCHEME = "upi"
     private const val UPI_AUTHORITY = "pay"
+    private val MAX_SINGLE_TXN_LIMIT = BigDecimal("100000.00")
+    private val MAX_VERIFIED_MERCHANT_LIMIT = BigDecimal("500000.00")
+
+    private val SECURITY_DECLINE_CODES = setOf("U16", "RM", "SEC", "RISK", "ZM", "XK")
+    private val SUCCESS_RESPONSE_CODES = setOf("00", "0", "SUCCESS")
+    private val INVALID_REF_LITERALS = setOf("", "null", "na", "n/a", "none", "undefined", "-")
+
+    private fun logDebug(msg: String) {
+        try {
+            Log.d(TAG, msg)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun logWarn(msg: String) {
+        try {
+            Log.w(TAG, msg)
+        } catch (_: Throwable) {
+        }
+    }
+
+    /**
+     * Masks a VPA for safe debug logging (e.g. "9876543210@ybl" -> "98***10@ybl").
+     */
+    fun maskVpa(vpa: String?): String {
+        val clean = vpa?.trim().orEmpty()
+        val atIdx = clean.indexOf('@')
+        if (atIdx <= 0) return "***"
+        val user = clean.substring(0, atIdx)
+        val handle = clean.substring(atIdx)
+        val maskedUser = when {
+            user.length <= 2 -> "${user.first()}*"
+            user.length <= 4 -> "${user.first()}**${user.last()}"
+            else -> "${user.take(2)}***${user.takeLast(2)}"
+        }
+        return "$maskedUser$handle"
+    }
+
+    /**
+     * Produces a redacted representation of a UPI payment URI safe for diagnostics.
+     */
+    fun sanitizeUriForLog(uri: Uri): String {
+        val pa = uri.getQueryParameter("pa")
+        val am = uri.getQueryParameter("am") ?: "-"
+        val cu = uri.getQueryParameter("cu") ?: "-"
+        val hasPn = !uri.getQueryParameter("pn").isNullOrBlank()
+        val hasTn = !uri.getQueryParameter("tn").isNullOrBlank()
+        val hasTr = !uri.getQueryParameter("tr").isNullOrBlank()
+        val hasMc = !uri.getQueryParameter("mc").isNullOrBlank()
+        val hasSign = !uri.getQueryParameter("sign").isNullOrBlank()
+        return "${uri.scheme}://${uri.authority}?pa=${maskVpa(pa)}&am=$am&cu=$cu&pn=$hasPn&tn=$hasTn&tr=$hasTr&mc=$hasMc&sign=$hasSign"
+    }
 
     /**
      * VPA validation.
@@ -97,15 +194,59 @@ object UpiService {
     )
 
     // ------------------------------------------------------------
-    // VPA VALIDATION
+    // VPA & REQUEST VALIDATION
     // ------------------------------------------------------------
 
     fun isValidVpa(vpa: String): Boolean {
-        return VPA_REGEX.matches(vpa.trim())
+        val trimmed = vpa.trim()
+        if (!VPA_REGEX.matches(trimmed)) return false
+        val local = trimmed.substringBefore("@")
+        val handle = trimmed.substringAfter("@")
+        if (local.endsWith(".") || local.endsWith("-")) return false
+        if (handle.startsWith(".") || handle.endsWith(".") || handle.startsWith("-") || handle.endsWith("-")) return false
+        return !trimmed.contains("..")
+    }
+
+    fun isStandardUpiAmountWithinLimit(amount: String): Boolean {
+        val norm = normalizeAmount(amount) ?: return false
+        return BigDecimal(norm) <= MAX_SINGLE_TXN_LIMIT
+    }
+
+    fun validatePaymentInfo(info: UpiPaymentInfo): UpiValidationResult {
+        val cleanPa = info.payeeAddress.trim()
+        if (!isValidVpa(cleanPa)) {
+            return UpiValidationResult(
+                isValid = false,
+                errorMessage = "Enter a valid UPI ID (e.g. name@bank)."
+            )
+        }
+        if (info.amount.isNotBlank()) {
+            val normalized = normalizeAmount(info.amount)
+                ?: return UpiValidationResult(
+                    isValid = false,
+                    errorMessage = "Enter a valid positive amount up to ₹5,00,000."
+                )
+            val decimal = BigDecimal(normalized)
+            val maxAllowed = if (info.isVerifiedMerchantFormat) MAX_VERIFIED_MERCHANT_LIMIT else MAX_SINGLE_TXN_LIMIT
+            if (decimal > maxAllowed) {
+                return UpiValidationResult(
+                    isValid = false,
+                    errorMessage = if (info.isVerifiedMerchantFormat) {
+                        "Amount exceeds the ₹5,00,000 UPI merchant transaction limit."
+                    } else {
+                        "Amount exceeds the standard ₹1,00,000 peer-to-peer UPI limit."
+                    }
+                )
+            }
+        }
+        return UpiValidationResult(
+            isValid = true,
+            isP2pUnverifiedWarning = !info.isVerifiedMerchantFormat
+        )
     }
 
     // ------------------------------------------------------------
-    // AMOUNT NORMALIZATION
+    // AMOUNT & TEXT NORMALIZATION
     // ------------------------------------------------------------
 
     /**
@@ -115,34 +256,67 @@ object UpiService {
      *
      * "2"       -> "2.00"
      * "2.5"     -> "2.50"
-     * "10"      -> "10.00"
+     * "1,250"   -> "1250.00"
      * "100.75"  -> "100.75"
      */
     private fun normalizeAmount(amount: String): String? {
-
-        val cleaned = amount.trim()
+        val cleaned = amount
+            .replace("₹", "")
+            .replace("Rs.", "", ignoreCase = true)
+            .replace("INR", "", ignoreCase = true)
+            .replace(",", "")
+            .trim()
 
         if (cleaned.isBlank()) {
             return null
         }
 
         return try {
-
             val value = BigDecimal(cleaned)
-
-            // Amount must be greater than zero
-            if (value <= BigDecimal.ZERO) {
+            if (value <= BigDecimal.ZERO || value > MAX_VERIFIED_MERCHANT_LIMIT) {
                 null
             } else {
-
                 value
                     .setScale(2, RoundingMode.HALF_UP)
                     .toPlainString()
             }
-
-        } catch (e: NumberFormatException) {
+        } catch (_: NumberFormatException) {
             null
         }
+    }
+
+    private fun sanitizeTextParam(raw: String, maxLength: Int): String {
+        return raw.trim()
+            .filter { it.isLetterOrDigit() || it.isWhitespace() || it == '-' || it == '.' }
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '.', '-')
+            .take(maxLength)
+            .trim()
+    }
+
+    private fun fallbackPayeeNameFromVpa(vpa: String): String {
+        val prefix = vpa.trim().substringBefore("@")
+            .replace('.', ' ')
+            .replace('_', ' ')
+            .replace('-', ' ')
+        val cleaned = sanitizeTextParam(prefix, 50)
+        return cleaned.ifBlank { "UPI Payee" }
+    }
+
+    private fun normalizeValidMcc(mc: String): String? {
+        val cleaned = mc.trim()
+        return if (cleaned.length == 4 && cleaned.all(Char::isDigit) && cleaned != "0000") {
+            cleaned
+        } else {
+            null
+        }
+    }
+
+    private fun sanitizeTxnRef(tr: String): String? {
+        val cleaned = tr.trim()
+            .filter { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }
+            .take(35)
+        return cleaned.ifBlank { null }
     }
 
     // ------------------------------------------------------------
@@ -150,120 +324,141 @@ object UpiService {
     // ------------------------------------------------------------
 
     /**
-     * Builds:
+     * Builds a compliant UPI URI:
      *
-     * upi://pay?pa=...&pn=...&am=2.00&cu=INR
+     * upi://pay?pa=...&pn=...&am=2.00&cu=INR&tn=...
+     *
+     * Note:
+     * - Never injects synthetic `tr` on unverified P2P transfers.
+     * - Always includes a sanitized mandatory `pn`.
      */
     fun buildPaymentUri(info: UpiPaymentInfo): Uri {
+        val cleanPa = info.payeeAddress.trim()
+        require(isValidVpa(cleanPa)) { "Invalid Payee UPI ID (VPA)" }
 
         val builder = Uri.Builder()
             .scheme(UPI_SCHEME)
             .authority(UPI_AUTHORITY)
-            .appendQueryParameter(
-                "pa",
-                info.payeeAddress.trim()
-            )
+            .appendQueryParameter("pa", cleanPa)
 
-        // Payee name (sanitized for NPCI compliance: max 50 chars, no illegal punctuation)
-        if (info.payeeName.isNotBlank()) {
-            val cleanPn = info.payeeName.trim()
-                .filter { it.isLetterOrDigit() || it.isWhitespace() || it == '-' || it == '.' }
-                .take(50)
-            if (cleanPn.isNotBlank()) {
-                builder.appendQueryParameter(
-                    "pn",
-                    cleanPn
-                )
-            }
-        }
+        // Mandatory Payee Name (NPCI spec: max 50 chars, clean alphanumeric + spaces/hyphens/dots)
+        val cleanPn = sanitizeTextParam(info.payeeName, 50)
+            .ifBlank { fallbackPayeeNameFromVpa(cleanPa) }
+        builder.appendQueryParameter("pn", cleanPn)
 
-        // Amount
+        // Amount (positive decimal with 2 fraction digits)
         if (info.amount.isNotBlank()) {
-
             val normalizedAmount = normalizeAmount(info.amount)
-
             if (normalizedAmount != null) {
-
-                builder.appendQueryParameter(
-                    "am",
-                    normalizedAmount
-                )
+                builder.appendQueryParameter("am", normalizedAmount)
             }
         }
 
-        // Currency
-        builder.appendQueryParameter(
-            "cu",
-            if (info.currency.isBlank()) {
-                "INR"
-            } else {
-                info.currency.trim()
-            }
-        )
+        // Currency (NPCI standard uppercase ISO code)
+        val normalizedCurrency = info.currency.trim()
+            .uppercase(Locale.ROOT)
+            .takeIf { it.length == 3 && it.all(Char::isLetter) }
+            ?: "INR"
+        builder.appendQueryParameter("cu", normalizedCurrency)
 
-        // Transaction note (sanitized for NPCI compliance: max 80 chars)
+        // Transaction note (sanitized max 80 chars; preserves intent without special characters that trigger PSP blocks)
         if (info.note.isNotBlank()) {
-            val cleanNote = info.note.trim()
-                .filter { it.isLetterOrDigit() || it.isWhitespace() || it == '-' || it == '.' }
-                .take(80)
-            if (cleanNote.isNotBlank()) {
-                builder.appendQueryParameter(
-                    "tn",
-                    cleanNote
-                )
-            }
+            val cleanNote = sanitizeTextParam(info.note, 80).ifBlank { "Payment" }
+            builder.appendQueryParameter("tn", cleanNote)
         }
 
-        // Transaction reference: ONLY include if it came from the merchant QR or verified merchant!
-        // DO NOT generate random synthetic tr for P2P transactions as NPCI will reject them!
-        if (info.txnRef.isNotBlank()) {
-
-            builder.appendQueryParameter(
-                "tr",
-                info.txnRef.trim()
-            )
+        // Transaction reference: ONLY include if explicitly supplied by merchant QR/order.
+        // Never fabricate synthetic tr for P2P transfers.
+        sanitizeTxnRef(info.txnRef)?.let { validTr ->
+            builder.appendQueryParameter("tr", validTr)
         }
 
-        // Merchant code
-        if (info.merchantCode.isNotBlank()) {
-
-            builder.appendQueryParameter(
-                "mc",
-                info.merchantCode.trim()
-            )
+        // Merchant category code (4-digit non-0000 MCC)
+        normalizeValidMcc(info.merchantCode)?.let { validMc ->
+            builder.appendQueryParameter("mc", validMc)
         }
 
-        return builder.build()
+        val uri = builder.build()
+        logDebug("Built UPI URI: ${sanitizeUriForLog(uri)}")
+        return uri
     }
 
     /**
-     * Builds a payment URI for a scanned QR code, preserving all original
-     * cryptographic signatures (sign=...), orgid, mode, and merchant parameters.
+     * Normalizes only scheme/host ("upi://pay") and stops at line breaks without breaking
+     * on literal spaces inside payee names or notes.
+     */
+    private fun extractNormalizedRawUpiUri(raw: String): String {
+        val trimmed = raw.trim()
+        val upiIndex = trimmed.indexOf("upi://pay", ignoreCase = true)
+        if (upiIndex < 0) return trimmed
+        val afterIndex = trimmed.substring(upiIndex)
+        val endIdx = afterIndex.indexOfFirst { it == '\n' || it == '\r' }
+        val cleanSegment = (if (endIdx > 0) afterIndex.substring(0, endIdx) else afterIndex).trim()
+        return "upi://pay" + cleanSegment.substring("upi://pay".length)
+    }
+
+    /**
+     * Builds a payment URI for a scanned QR code while preserving original encoded
+     * cryptographic signatures (sign=...), orgid, mode, and merchant parameters byte-for-byte.
      */
     fun buildQrPaymentUri(rawUri: String, amount: Double?): Uri {
-        val parsedUri = Uri.parse(rawUri)
-        if (amount == null || amount <= 0.0) {
+        val normalizedRaw = extractNormalizedRawUpiUri(rawUri)
+        val parsedUri = Uri.parse(normalizedRaw)
+        if (amount == null || amount <= 0.0 || amount.isNaN() || amount.isInfinite()) {
+            logDebug("Built QR URI (as-is): ${sanitizeUriForLog(parsedUri)}")
             return parsedUri
         }
 
-        val normalizedAmount = normalizeAmount(amount.toString()) ?: String.format(Locale.US, "%.2f", amount)
-        val builder = parsedUri.buildUpon()
-        builder.clearQuery()
-        var amFound = false
-        for (param in parsedUri.queryParameterNames) {
-            if (param.equals("am", ignoreCase = true)) {
-                builder.appendQueryParameter(param, normalizedAmount)
-                amFound = true
+        val normalizedAmount = normalizeAmount(String.format(Locale.US, "%.2f", amount))
+            ?: return parsedUri
+
+        val qIndex = normalizedRaw.indexOf('?')
+        if (qIndex < 0) {
+            return parsedUri
+        }
+
+        val base = normalizedRaw.substring(0, qIndex)
+        val rawQuery = normalizedRaw.substring(qIndex + 1)
+        val rawPairs = rawQuery.split("&").filter { it.isNotBlank() }
+
+        val existingAmRaw = rawPairs.firstOrNull { pair ->
+            pair.substringBefore("=").equals("am", ignoreCase = true)
+        }?.substringAfter("=", "")
+
+        // If Dynamic QR already has the exact matching amount, return untouched to preserve sign= byte-for-byte
+        if (existingAmRaw != null && normalizeAmount(existingAmRaw) == normalizedAmount) {
+            logDebug("Preserving exact signed/dynamic QR URI: ${sanitizeUriForLog(parsedUri)}")
+            return parsedUri
+        }
+
+        val hasSign = rawPairs.any { it.substringBefore("=").equals("sign", ignoreCase = true) }
+        val updatedPairs = mutableListOf<String>()
+        var amUpdated = false
+        var hasCurrency = false
+
+        for (pair in rawPairs) {
+            val key = pair.substringBefore("=")
+            if (key.equals("cu", ignoreCase = true)) {
+                hasCurrency = true
+            }
+            if (key.equals("am", ignoreCase = true)) {
+                updatedPairs.add("$key=$normalizedAmount")
+                amUpdated = true
             } else {
-                parsedUri.getQueryParameter(param)?.let {
-                    builder.appendQueryParameter(param, it)
-                }
+                // Keep all other raw encoded params (sign, orgid, mode, pn, etc.) byte-identical
+                updatedPairs.add(pair)
             }
         }
-        if (!amFound) {
-            builder.appendQueryParameter("am", normalizedAmount)
+        if (!amUpdated) {
+            updatedPairs.add("am=$normalizedAmount")
         }
-        return builder.build()
+        if (!hasCurrency && !hasSign) {
+            updatedPairs.add("cu=INR")
+        }
+
+        val rebuiltUri = Uri.parse("$base?${updatedPairs.joinToString("&")}")
+        logDebug("Built QR URI (updated amount, hasSign=$hasSign): ${sanitizeUriForLog(rebuiltUri)}")
+        return rebuiltUri
     }
 
     // ------------------------------------------------------------
@@ -271,31 +466,55 @@ object UpiService {
     // ------------------------------------------------------------
 
     /**
+     * Checks whether a given app package can resolve the exact payment Intent.
+     */
+    fun isPackageCapableOfIntent(
+        context: Context,
+        packageName: String,
+        intent: Intent
+    ): Boolean {
+        return try {
+            val targeted = Intent(intent).setPackage(packageName)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.queryIntentActivities(
+                    targeted,
+                    PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong())
+                ).isNotEmpty()
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.queryIntentActivities(targeted, PackageManager.MATCH_DEFAULT_ONLY).isNotEmpty()
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
      * Creates a UPI payment Intent using an already built or preserved URI.
+     * IMPORTANT: Never adds FLAG_ACTIVITY_NEW_TASK so StartActivityForResult receives the callback.
      */
     fun buildPayIntentWithUri(
         uri: Uri,
         targetPackage: String? = null,
-        useChooser: Boolean = true
+        useChooser: Boolean = true,
+        context: Context? = null
     ): Intent {
-        return if (targetPackage.isNullOrBlank()) {
-            val baseIntent = Intent(
-                Intent.ACTION_VIEW,
-                uri
-            )
-            if (useChooser) {
-                Intent.createChooser(
-                    baseIntent,
-                    "Pay with any UPI App"
-                )
+        if (targetPackage.isNullOrBlank()) {
+            val baseIntent = Intent(Intent.ACTION_VIEW, uri)
+            return if (useChooser) {
+                Intent.createChooser(baseIntent, "Pay with any UPI App")
             } else {
                 baseIntent
             }
+        }
+
+        val baseIntent = Intent(Intent.ACTION_VIEW, uri)
+        val canHandlePackage = context?.let { isPackageCapableOfIntent(it, targetPackage, baseIntent) } ?: true
+        return if (canHandlePackage) {
+            Intent(Intent.ACTION_VIEW, uri).setPackage(targetPackage)
         } else {
-            Intent(
-                Intent.ACTION_VIEW,
-                uri
-            ).setPackage(targetPackage)
+            logWarn("Target UPI package $targetPackage cannot handle payment URI; falling back to chooser.")
+            Intent.createChooser(baseIntent, "Pay with any UPI App")
         }
     }
 
@@ -311,10 +530,11 @@ object UpiService {
     fun buildPayIntent(
         info: UpiPaymentInfo,
         targetPackage: String? = null,
-        useChooser: Boolean = true
+        useChooser: Boolean = true,
+        context: Context? = null
     ): Intent {
         val uri = buildPaymentUri(info)
-        return buildPayIntentWithUri(uri, targetPackage, useChooser)
+        return buildPayIntentWithUri(uri, targetPackage, useChooser, context)
     }
 
     // ------------------------------------------------------------
@@ -328,18 +548,9 @@ object UpiService {
         info: UpiPaymentInfo,
         title: String = "Pay with any UPI App"
     ): Intent {
-
         val uri = buildPaymentUri(info)
-
-        val intent = Intent(
-            Intent.ACTION_VIEW,
-            uri
-        )
-
-        return Intent.createChooser(
-            intent,
-            title
-        )
+        val intent = Intent(Intent.ACTION_VIEW, uri)
+        return Intent.createChooser(intent, title)
     }
 
     // ------------------------------------------------------------
@@ -354,42 +565,37 @@ object UpiService {
     fun installedUpiApps(
         context: Context
     ): List<UpiApp> {
-
-        val probe = Intent(
-            Intent.ACTION_VIEW
-        ).setData(
-            Uri.parse("upi://pay")
-        )
+        val probe = Intent(Intent.ACTION_VIEW).setData(Uri.parse("upi://pay"))
+        val pm = context.packageManager
 
         return try {
-
-            context.packageManager
-                .queryIntentActivities(
+            val resolveInfos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentActivities(
                     probe,
-                    PackageManager.MATCH_DEFAULT_ONLY
+                    PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong())
                 )
-                .sortedBy {
-                    it.activityInfo.packageName
-                }
-                .map { resolveInfo ->
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY)
+            }
 
-                    val packageName =
-                        resolveInfo.activityInfo.packageName
+            resolveInfos
+                .mapNotNull { resolveInfo ->
+                    val packageName = resolveInfo.activityInfo?.packageName ?: return@mapNotNull null
+                    if (packageName == context.packageName) return@mapNotNull null
 
                     val label = try {
-
-                        context.packageManager
-                            .getApplicationLabel(
-                                context.packageManager
-                                    .getApplicationInfo(
-                                        packageName,
-                                        0
-                                    )
-                            )
-                            .toString()
-
-                    } catch (e: Exception) {
-
+                        resolveInfo.loadLabel(pm).toString().ifBlank {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                pm.getApplicationLabel(
+                                    pm.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
+                                ).toString()
+                            } else {
+                                @Suppress("DEPRECATION")
+                                pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
+                            }
+                        }
+                    } catch (_: Exception) {
                         packageName
                     }
 
@@ -398,9 +604,10 @@ object UpiService {
                         label = label
                     )
                 }
-
+                .distinctBy { it.packageName }
+                .sortedBy { it.label.lowercase(Locale.ROOT) }
         } catch (e: Exception) {
-
+            logWarn("Error querying installed UPI apps: ${e.message}")
             emptyList()
         }
     }
@@ -411,7 +618,6 @@ object UpiService {
     fun isAnyUpiAppInstalled(
         context: Context
     ): Boolean {
-
         return installedUpiApps(context).isNotEmpty()
     }
 
@@ -457,7 +663,7 @@ object UpiService {
             val subTags = parseEmvCoTlv(merchantData)
             val candidateVpa = subTags["01"]
             if (!candidateVpa.isNullOrBlank() && isValidVpa(candidateVpa)) {
-                vpa = candidateVpa
+                vpa = candidateVpa.trim()
                 if (merchantCode.isBlank()) {
                     merchantCode = subTags["02"]?.trim().orEmpty()
                 }
@@ -465,7 +671,7 @@ object UpiService {
             }
             for (subVal in subTags.values) {
                 if (isValidVpa(subVal)) {
-                    vpa = subVal
+                    vpa = subVal.trim()
                     break
                 }
             }
@@ -485,8 +691,12 @@ object UpiService {
         if (vpa.isNullOrBlank() || !isValidVpa(vpa)) return null
 
         val merchantName = tags["59"]?.trim().orEmpty()
-        val amount = tags["54"]?.trim().orEmpty()
-        val currency = if (tags["53"] == "356") "INR" else "INR"
+        val rawAmount = tags["54"]?.trim().orEmpty()
+        val amount = normalizeAmount(rawAmount) ?: ""
+        val currency = when (tags["53"]?.trim()) {
+            "356", null, "" -> "INR"
+            else -> "INR"
+        }
 
         var note = ""
         var ref = ""
@@ -497,28 +707,27 @@ object UpiService {
         }
 
         val cleanName = merchantName.ifBlank { "UPI Merchant" }
-        val rawUri = "upi://pay?pa=$vpa&pn=${Uri.encode(cleanName)}${if (amount.isNotBlank()) "&am=$amount" else ""}&cu=$currency"
-
-        return UpiPaymentInfo(
+        val info = UpiPaymentInfo(
             payeeAddress = vpa,
             payeeName = cleanName,
             amount = amount,
             currency = currency,
             note = note,
             txnRef = ref,
-            merchantCode = merchantCode,
-            rawUri = rawUri
+            merchantCode = merchantCode
         )
+        // Preserve full merchant metadata (mc, tr, tn) in rawUri
+        val rawUri = buildPaymentUri(info).toString()
+        return info.copy(rawUri = rawUri)
     }
 
     /**
      * Parses standard upi://pay URLs with query parameters.
      */
     fun parseUpiUrl(upiUrlString: String): UpiPaymentInfo? {
-        val upiIndex = upiUrlString.indexOf("upi://pay", ignoreCase = true)
-        if (upiIndex < 0) return null
+        if (!upiUrlString.contains("upi://pay", ignoreCase = true)) return null
         return try {
-            val uriString = upiUrlString.substring(upiIndex)
+            val uriString = extractNormalizedRawUpiUri(upiUrlString)
             val uri = Uri.parse(uriString)
             val queryParamMap = mutableMapOf<String, String>()
             uri.queryParameterNames.forEach { name ->
@@ -527,16 +736,17 @@ object UpiService {
                 }
             }
 
-            val pa = queryParamMap["pa"]
-            if (!pa.isNullOrBlank() && isValidVpa(pa.trim())) {
+            val pa = queryParamMap["pa"]?.trim()
+            if (!pa.isNullOrBlank() && isValidVpa(pa)) {
                 val pn = (queryParamMap["pn"] ?: "").replace("+", " ").trim()
-                val am = (queryParamMap["am"] ?: "").replace(",", "").replace("₹", "").replace("Rs.", "").trim()
-                val cu = queryParamMap["cu"] ?: "INR"
+                val rawAm = (queryParamMap["am"] ?: "").replace(",", "").replace("₹", "").replace("Rs.", "").trim()
+                val am = if (rawAm.isBlank()) "" else (normalizeAmount(rawAm) ?: rawAm)
+                val cu = (queryParamMap["cu"] ?: "INR").uppercase(Locale.ROOT)
                 val tn = (queryParamMap["tn"] ?: "").replace("+", " ").trim()
-                val tr = queryParamMap["tr"] ?: ""
-                val mc = queryParamMap["mc"] ?: ""
+                val tr = queryParamMap["tr"]?.trim() ?: ""
+                val mc = queryParamMap["mc"]?.trim() ?: ""
                 UpiPaymentInfo(
-                    payeeAddress = pa.trim(),
+                    payeeAddress = pa,
                     payeeName = pn,
                     amount = am,
                     currency = cu,
@@ -546,7 +756,7 @@ object UpiService {
                     rawUri = uriString
                 )
             } else null
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -564,33 +774,41 @@ object UpiService {
             val uri = Uri.parse(trimmed)
             for (paramName in uri.queryParameterNames) {
                 val paramVal = uri.getQueryParameter(paramName) ?: continue
-                val decoded = try { URLDecoder.decode(paramVal, "UTF-8") } catch (e: Exception) { paramVal }
+                val decoded = try { URLDecoder.decode(paramVal, "UTF-8") } catch (_: Exception) { paramVal }
                 if (decoded.contains("upi://pay", ignoreCase = true)) {
                     val embedded = parseUpiUrl(decoded)
                     if (embedded != null) return embedded
                 }
             }
 
-            val pa = uri.getQueryParameter("pa")
-            if (!pa.isNullOrBlank() && isValidVpa(pa.trim())) {
-                val pn = (uri.getQueryParameter("pn") ?: "").replace("+", " ").trim()
-                val am = uri.getQueryParameter("am")?.replace(",", "")?.replace("₹", "")?.replace("Rs.", "")?.trim() ?: ""
-                val cu = uri.getQueryParameter("cu") ?: "INR"
-                val tn = (uri.getQueryParameter("tn") ?: "").replace("+", " ").trim()
-                val tr = uri.getQueryParameter("tr") ?: ""
-                val mc = uri.getQueryParameter("mc") ?: ""
-                UpiPaymentInfo(
-                    payeeAddress = pa.trim(),
+            val paramMap = mutableMapOf<String, String>()
+            uri.queryParameterNames.forEach { key ->
+                uri.getQueryParameter(key)?.let { value ->
+                    paramMap[key.lowercase(Locale.ROOT)] = value
+                }
+            }
+            val pa = paramMap["pa"]?.trim()
+            if (!pa.isNullOrBlank() && isValidVpa(pa)) {
+                val pn = (paramMap["pn"] ?: "").replace("+", " ").trim()
+                val rawAm = paramMap["am"]?.replace(",", "")?.replace("₹", "")?.replace("Rs.", "")?.trim() ?: ""
+                val am = if (rawAm.isBlank()) "" else (normalizeAmount(rawAm) ?: rawAm)
+                val cu = (paramMap["cu"] ?: "INR").uppercase(Locale.ROOT)
+                val tn = (paramMap["tn"] ?: "").replace("+", " ").trim()
+                val tr = paramMap["tr"]?.trim() ?: ""
+                val mc = paramMap["mc"]?.trim() ?: ""
+                val info = UpiPaymentInfo(
+                    payeeAddress = pa,
                     payeeName = pn,
                     amount = am,
                     currency = cu,
                     note = tn,
                     txnRef = tr,
-                    merchantCode = mc,
-                    rawUri = "upi://pay?pa=${pa.trim()}&pn=${Uri.encode(pn)}${if (am.isNotBlank()) "&am=$am" else ""}&cu=$cu"
+                    merchantCode = mc
                 )
+                val rawUri = buildPaymentUri(info).toString()
+                info.copy(rawUri = rawUri)
             } else null
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -642,164 +860,207 @@ object UpiService {
     }
 
     // ------------------------------------------------------------
-    // HANDLE UPI RESULT
+    // HANDLE UPI RESULT & GATEWAY VERIFICATION
     // ------------------------------------------------------------
+
+    private fun cleanRefValue(value: String?): String? {
+        val clean = value?.trim().orEmpty()
+        return if (clean.lowercase(Locale.ROOT) in INVALID_REF_LITERALS) null else clean
+    }
 
     /**
      * Handles the result returned from a UPI application.
      *
      * IMPORTANT:
-     *
-     * UPI applications do not always return a reliable result.
-     * Therefore the app should not assume SUCCESS just because
-     * the UPI application was opened.
+     * - Never assumes SUCCESS solely from launching a UPI app or empty data.
+     * - Validates Status alongside responseCode across both `response` string and Intent extras.
+     * - Separates SUCCESSFUL, PENDING, FAILED (including bank/app security declines), CANCELLED, and INITIATED.
      */
     fun mapResult(
         resultCode: Int,
         data: Intent?
     ): UpiIntentResult {
-
-        // User returned without response data
         if (data == null) {
-
+            logDebug("UPI return with resultCode=$resultCode and null Intent data")
             return UpiIntentResult(
-
                 launched = true,
-
                 cancelled = false,
-
                 returnedTxnRef = null,
-
-                status =
-                    UpiPaymentStatus.INITIATED,
-
-                message =
-                    "Returned from UPI app. " +
-                    "Please confirm whether the payment was completed."
+                status = UpiPaymentStatus.INITIATED,
+                message = "Returned from UPI app. Please confirm whether the payment was completed."
             )
         }
 
-        // --------------------------------------------------------
-        // UPI RESPONSE STRING
-        // --------------------------------------------------------
+        val rawResponseStr = data.getStringExtra("response")?.trim().orEmpty()
+        val decodedResponseStr = if (rawResponseStr.contains("%3D", ignoreCase = true) || rawResponseStr.contains("%26", ignoreCase = true)) {
+            try { URLDecoder.decode(rawResponseStr, "UTF-8") } catch (_: Exception) { rawResponseStr }
+        } else {
+            rawResponseStr
+        }
 
-        val responseStr =
-            data.getStringExtra("response")
-                ?: ""
-
-        val params =
-            responseStr
-                .split("&")
-                .mapNotNull {
-
-                    val parts =
-                        it.split(
-                            "=",
-                            limit = 2
-                        )
-
-                    if (
-                        parts.size == 2
-                    ) {
-
-                        parts[0]
-                            .lowercase(Locale.ROOT) to
-                                parts[1]
-
-                    } else {
-
-                        null
-                    }
+        val params = decodedResponseStr
+            .split("&")
+            .mapNotNull { entry ->
+                val parts = entry.split("=", limit = 2)
+                if (parts.size == 2) {
+                    parts[0].trim().lowercase(Locale.ROOT) to parts[1].trim()
+                } else {
+                    null
                 }
-                .toMap()
+            }
+            .toMap()
 
-        val statusStr =
+        val statusStr = (
             params["status"]
-                ?.lowercase(Locale.ROOT)
+                ?: data.getStringExtra("Status")
+                ?: data.getStringExtra("status")
                 ?: ""
+            ).trim().lowercase(Locale.ROOT)
 
-        // --------------------------------------------------------
-        // STATUS
-        // --------------------------------------------------------
+        val responseCode = (
+            params["responsecode"]
+                ?: data.getStringExtra("responseCode")
+                ?: ""
+            ).trim().uppercase(Locale.ROOT).ifBlank { null }
 
-        val status =
-            when {
+        val appMessage = (
+            params["message"]
+                ?: params["errormessage"]
+                ?: data.getStringExtra("message")
+                ?: data.getStringExtra("error")
+                ?: ""
+            ).trim()
 
-                statusStr == "success" ->
-                    UpiPaymentStatus.SUCCESSFUL
+        val securitySignalText = "$appMessage ${responseCode.orEmpty()} $decodedResponseStr".lowercase(Locale.ROOT)
+        val isSecurityDecline = (responseCode != null && responseCode in SECURITY_DECLINE_CODES) ||
+            securitySignalText.contains("security") ||
+            securitySignalText.contains("risk") ||
+            securitySignalText.contains("declined for security") ||
+            securitySignalText.contains("policy")
 
-                statusStr == "submitted" ->
-                    UpiPaymentStatus.PENDING
+        // Enforce responseCode consistency: never treat Status=SUCCESS with an error responseCode as SUCCESSFUL
+        val hasValidSuccessCode = responseCode == null || responseCode in SUCCESS_RESPONSE_CODES
 
-                statusStr == "failed" ||
-                        statusStr == "failure" ->
-                    UpiPaymentStatus.FAILED
+        val status = when {
+            statusStr == "success" && hasValidSuccessCode ->
+                UpiPaymentStatus.SUCCESSFUL
 
-                resultCode == Activity.RESULT_CANCELED ->
-                    UpiPaymentStatus.CANCELLED
+            statusStr == "submitted" || statusStr == "pending" || statusStr == "in_progress" ->
+                UpiPaymentStatus.PENDING
 
-                else ->
-                    UpiPaymentStatus.INITIATED
-            }
+            statusStr == "failed" || statusStr == "failure" || statusStr == "declined" || statusStr == "rejected" || statusStr == "error" ||
+                (statusStr == "success" && !hasValidSuccessCode) ->
+                UpiPaymentStatus.FAILED
 
-        // --------------------------------------------------------
-        // MESSAGE
-        // --------------------------------------------------------
+            statusStr == "cancelled" || statusStr == "canceled" || statusStr == "aborted" ->
+                UpiPaymentStatus.CANCELLED
 
-        val message =
-            when (status) {
+            resultCode == Activity.RESULT_CANCELED ->
+                UpiPaymentStatus.CANCELLED
 
-                UpiPaymentStatus.SUCCESSFUL ->
-                    "Payment verified successfully!"
+            else ->
+                UpiPaymentStatus.INITIATED
+        }
 
-                UpiPaymentStatus.PENDING ->
-                    "Payment submitted and pending bank confirmation."
+        val approvalRefNo = cleanRefValue(params["approvalrefno"])
+            ?: cleanRefValue(data.getStringExtra("ApprovalRefNo"))
+            ?: cleanRefValue(data.extras?.getString("ApprovalRefNo"))
 
-                UpiPaymentStatus.FAILED ->
-                    "Payment was reported as failed by the UPI app."
+        val txnId = cleanRefValue(params["txnid"])
+            ?: cleanRefValue(data.getStringExtra("txnId"))
+            ?: cleanRefValue(data.extras?.getString("txnId"))
 
-                UpiPaymentStatus.CANCELLED ->
-                    "Payment was cancelled."
+        val txnRef = cleanRefValue(params["txnref"])
+            ?: cleanRefValue(data.extras?.getString("upitxnid"))
+            ?: cleanRefValue(data.extras?.getString("txnRef"))
+            ?: cleanRefValue(data.getStringExtra("upitxnid"))
+            ?: cleanRefValue(data.getStringExtra("txnRef"))
+            ?: approvalRefNo
+            ?: txnId
 
-                else ->
-                    "Returned from UPI app. " +
-                    "Please confirm whether the payment was completed."
-            }
+        val message = when (status) {
+            UpiPaymentStatus.SUCCESSFUL ->
+                "Payment verified successfully!"
 
-        // --------------------------------------------------------
-        // TRANSACTION REFERENCE
-        // --------------------------------------------------------
+            UpiPaymentStatus.PENDING ->
+                "Payment submitted and pending bank confirmation. Wait for bank confirmation before recording."
 
-        val txnRef =
-            params["txnref"]
-                ?: data.extras
-                    ?.getString("upitxnid")
-                ?: data.extras
-                    ?.getString("txnRef")
-                ?: data.getStringExtra(
-                    "upitxnid"
-                )
-                ?: data.getStringExtra(
-                    "txnRef"
-                )
+            UpiPaymentStatus.FAILED ->
+                if (isSecurityDecline) {
+                    "Declined by your UPI app or bank for security reasons (unsigned third-party P2P intent blocked). Open Google Pay / PhonePe directly and pay via mobile number, UPI ID, or QR scan."
+                } else {
+                    "Payment failed${if (appMessage.isNotBlank()) ": $appMessage" else " as reported by the UPI app."}"
+                }
+
+            UpiPaymentStatus.CANCELLED ->
+                "Payment was cancelled."
+
+            else ->
+                "Returned from UPI app. Please confirm whether the payment was completed."
+        }
+
+        logDebug(
+            "UPI result mapped: resultCode=$resultCode, status=$status, responseCode=${responseCode ?: "-"}, " +
+                "securityDecline=$isSecurityDecline, hasRef=${txnRef != null}"
+        )
 
         return UpiIntentResult(
-
             launched = true,
-
-            cancelled =
-                status ==
-                        UpiPaymentStatus.CANCELLED,
-
-            returnedTxnRef =
-                txnRef?.takeIf {
-                    it.isNotBlank()
-                },
-
+            cancelled = status == UpiPaymentStatus.CANCELLED,
+            returnedTxnRef = txnRef,
             status = status,
-
-            message = message
+            message = message,
+            responseCode = responseCode,
+            approvalRefNo = approvalRefNo,
+            txnId = txnId,
+            isSecurityDecline = isSecurityDecline
         )
+    }
+
+    /**
+     * Enforces authenticated server-side / webhook verification for payment-gateway orders.
+     * Never trusts client-side Intent extras alone when [flowType] == [PaymentFlowType.GATEWAY_ORDER].
+     */
+    fun enforceGatewayVerification(
+        result: UpiIntentResult,
+        flowType: PaymentFlowType,
+        expectedOrderTxnRef: String?,
+        verifier: UpiGatewayVerifier? = null
+    ): UpiIntentResult {
+        if (flowType != PaymentFlowType.GATEWAY_ORDER) {
+            return result
+        }
+        val orderRef = expectedOrderTxnRef?.trim().orEmpty()
+        if (orderRef.isBlank() || verifier == null) {
+            return if (result.status == UpiPaymentStatus.SUCCESSFUL || result.status == UpiPaymentStatus.PENDING) {
+                result.copy(
+                    status = UpiPaymentStatus.PENDING,
+                    requiresServerVerification = true,
+                    message = "Gateway payment requires authenticated server-side / webhook verification before settlement."
+                )
+            } else {
+                result.copy(requiresServerVerification = true)
+            }
+        }
+
+        return when (verifier.verifyOrderStatus(orderRef, result.status)) {
+            GatewayVerificationStatus.VERIFIED -> result.copy(
+                status = UpiPaymentStatus.SUCCESSFUL,
+                returnedTxnRef = result.returnedTxnRef ?: orderRef,
+                requiresServerVerification = false,
+                message = "Payment verified via authenticated server check."
+            )
+            GatewayVerificationStatus.PENDING_SERVER_VERIFICATION, GatewayVerificationStatus.NOT_APPLICABLE -> result.copy(
+                status = UpiPaymentStatus.PENDING,
+                requiresServerVerification = true,
+                message = "Awaiting gateway webhook confirmation from server."
+            )
+            GatewayVerificationStatus.REJECTED -> result.copy(
+                status = UpiPaymentStatus.FAILED,
+                requiresServerVerification = false,
+                message = "Gateway server verification rejected or did not confirm this transaction."
+            )
+        }
     }
 
     // ------------------------------------------------------------
@@ -822,66 +1083,53 @@ object UpiService {
     // GOOGLE PAY
     // ------------------------------------------------------------
 
-    /**
-     * Checks whether Google Pay is installed.
-     */
-    fun isGooglePayInstalled(
-        context: Context
-    ): Boolean {
-
+    private fun isPackageInstalled(context: Context, packageName: String): Boolean {
         return try {
-
-            context.packageManager
-                .getPackageInfo(
-                    GOOGLE_PAY_PACKAGE,
-                    0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(
+                    packageName,
+                    PackageManager.PackageInfoFlags.of(0)
                 )
-
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(packageName, 0)
+            }
             true
-
-        } catch (e: Exception) {
-
+        } catch (_: Exception) {
             false
         }
     }
 
     /**
+     * Checks whether Google Pay is installed.
+     */
+    fun isGooglePayInstalled(
+        context: Context
+    ): Boolean = isPackageInstalled(context, GOOGLE_PAY_PACKAGE)
+
+    /**
      * Builds a Google Pay Intent.
      *
-     * If Google Pay is installed:
+     * If Google Pay is installed and supports upi://pay:
      *     Opens Google Pay directly.
      *
      * Otherwise:
-     *     Opens the normal UPI chooser.
+     *     Opens the normal UPI chooser / fallback intent.
      */
     fun buildGooglePayIntent(
         info: UpiPaymentInfo,
         context: Context? = null
     ): Intent {
-
-        val uri =
-            buildPaymentUri(info)
-
-        val isGPayAvailable =
-            context?.let {
-                isGooglePayInstalled(it)
-            } ?: true
+        val uri = buildPaymentUri(info)
+        val isGPayAvailable = context?.let {
+            isPackageInstalled(it, GOOGLE_PAY_PACKAGE) &&
+                isPackageCapableOfIntent(it, GOOGLE_PAY_PACKAGE, Intent(Intent.ACTION_VIEW, uri))
+        } ?: true
 
         return if (isGPayAvailable) {
-
-            Intent(
-                Intent.ACTION_VIEW,
-                uri
-            ).setPackage(
-                GOOGLE_PAY_PACKAGE
-            )
-
+            Intent(Intent.ACTION_VIEW, uri).setPackage(GOOGLE_PAY_PACKAGE)
         } else {
-
-            Intent(
-                Intent.ACTION_VIEW,
-                uri
-            )
+            Intent(Intent.ACTION_VIEW, uri)
         }
     }
 
@@ -893,45 +1141,16 @@ object UpiService {
         info: UpiPaymentInfo,
         context: Context? = null
     ): Intent {
-
-        val uri =
-            buildPaymentUri(info)
-
-        val isInstalled =
-            context?.let {
-
-                try {
-
-                    it.packageManager
-                        .getPackageInfo(
-                            PHONEPE_PACKAGE,
-                            0
-                        )
-
-                    true
-
-                } catch (e: Exception) {
-
-                    false
-                }
-
-            } ?: true
+        val uri = buildPaymentUri(info)
+        val isInstalled = context?.let {
+            isPackageInstalled(it, PHONEPE_PACKAGE) &&
+                isPackageCapableOfIntent(it, PHONEPE_PACKAGE, Intent(Intent.ACTION_VIEW, uri))
+        } ?: true
 
         return if (isInstalled) {
-
-            Intent(
-                Intent.ACTION_VIEW,
-                uri
-            ).setPackage(
-                PHONEPE_PACKAGE
-            )
-
+            Intent(Intent.ACTION_VIEW, uri).setPackage(PHONEPE_PACKAGE)
         } else {
-
-            Intent(
-                Intent.ACTION_VIEW,
-                uri
-            )
+            Intent(Intent.ACTION_VIEW, uri)
         }
     }
 
@@ -943,45 +1162,16 @@ object UpiService {
         info: UpiPaymentInfo,
         context: Context? = null
     ): Intent {
-
-        val uri =
-            buildPaymentUri(info)
-
-        val isInstalled =
-            context?.let {
-
-                try {
-
-                    it.packageManager
-                        .getPackageInfo(
-                            PAYTM_PACKAGE,
-                            0
-                        )
-
-                    true
-
-                } catch (e: Exception) {
-
-                    false
-                }
-
-            } ?: true
+        val uri = buildPaymentUri(info)
+        val isInstalled = context?.let {
+            isPackageInstalled(it, PAYTM_PACKAGE) &&
+                isPackageCapableOfIntent(it, PAYTM_PACKAGE, Intent(Intent.ACTION_VIEW, uri))
+        } ?: true
 
         return if (isInstalled) {
-
-            Intent(
-                Intent.ACTION_VIEW,
-                uri
-            ).setPackage(
-                PAYTM_PACKAGE
-            )
-
+            Intent(Intent.ACTION_VIEW, uri).setPackage(PAYTM_PACKAGE)
         } else {
-
-            Intent(
-                Intent.ACTION_VIEW,
-                uri
-            )
+            Intent(Intent.ACTION_VIEW, uri)
         }
     }
 
@@ -989,32 +1179,11 @@ object UpiService {
     // INSTALLED STATUS HELPERS
     // ------------------------------------------------------------
 
-    fun isPhonePeInstalled(context: Context): Boolean {
-        return try {
-            context.packageManager.getPackageInfo(PHONEPE_PACKAGE, 0)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    fun isPhonePeInstalled(context: Context): Boolean = isPackageInstalled(context, PHONEPE_PACKAGE)
 
-    fun isPaytmInstalled(context: Context): Boolean {
-        return try {
-            context.packageManager.getPackageInfo(PAYTM_PACKAGE, 0)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    fun isPaytmInstalled(context: Context): Boolean = isPackageInstalled(context, PAYTM_PACKAGE)
 
-    fun isBhimInstalled(context: Context): Boolean {
-        return try {
-            context.packageManager.getPackageInfo(BHIM_PACKAGE, 0)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    fun isBhimInstalled(context: Context): Boolean = isPackageInstalled(context, BHIM_PACKAGE)
 
     // ------------------------------------------------------------
     // UPI SCANNER INTENT LAUNCHER

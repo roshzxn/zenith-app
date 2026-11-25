@@ -14,34 +14,12 @@ data class ProfileDto(
 )
 
 @Serializable
-data class FamilyDto(
-    val id: String,
-    val name: String = "Family Vault",
-    @SerialName("created_by") val createdBy: String? = null,
-    @SerialName("invite_code") val inviteCode: String? = null,
-    @SerialName("created_at") val createdAt: String? = null,
-    @SerialName("updated_at") val updatedAt: String? = null
-)
-
-@Serializable
-data class FamilyMemberDto(
-    val id: String,
-    @SerialName("family_id") val familyId: String,
-    @SerialName("user_id") val userId: String? = null,
-    val name: String? = null,
-    val role: String = "MEMBER",
-    @SerialName("joined_at") val joinedAt: String? = null,
-    @SerialName("updated_at") val updatedAt: String? = null
-)
-
-@Serializable
 data class CategoryDto(
     val id: String,
     val name: String = "Other",
     val icon: String? = "Category",
     val color: String? = "#10B981",
     @SerialName("user_id") val userId: String? = null,
-    @SerialName("family_id") val familyId: String? = null,
     @SerialName("is_default") val isDefault: Boolean = false,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null
@@ -107,4 +85,26 @@ data class SavingsGoalDto(
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("is_deleted") val isDeleted: Boolean = false
+)
+
+@Serializable
+data class AutoPayReminderDto(
+    val id: String,
+    @SerialName("user_id") val userId: String? = null,
+    @SerialName("finance_scope") val financeScope: String? = "PERSONAL",
+    val title: String = "",
+    val amount: Double = 0.0,
+    val category: String? = "Bills & Utilities",
+    @SerialName("payment_method") val paymentMethod: String? = "UPI",
+    val frequency: String? = "MONTHLY",
+    @SerialName("due_day_of_month") val dueDayOfMonth: Int = 1,
+    @SerialName("next_due_date") val nextDueDate: String? = null,
+    @SerialName("is_auto_debit") val isAutoDebit: Boolean = true,
+    @SerialName("reminder_days_before") val reminderDaysBefore: Int = 2,
+    @SerialName("is_paused") val isPaused: Boolean = false,
+    @SerialName("last_paid_date") val lastPaidDate: String? = null,
+    val notes: String? = "",
+    @SerialName("is_deleted") val isDeleted: Boolean = false,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("updated_at") val updatedAt: String? = null
 )
