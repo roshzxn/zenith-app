@@ -16,5 +16,6 @@ app/release/
 debug.keystore
 *.apk
 *.aab
+server_dist/
 __pycache__/
 *.pyc
