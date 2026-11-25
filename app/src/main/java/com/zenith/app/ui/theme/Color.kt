@@ -105,3 +105,34 @@ val GlassBorderBrush = Brush.linearGradient(
         Color.White.copy(alpha = 0.08f)
     )
 )
+
+// --- OLED Pure Black (#000000) Tokens ---
+val OledPureBlackBackground = Color(0xFF000000)      // True #000000 pure black
+val OledPureBlackSurface = Color(0xFF080808)         // Pitch card surface
+val OledPureBlackSurfaceVariant = Color(0xFF121212)  // Elevated container
+val OledPureBlackBorder = Color(0xFF222222)          // Crisp contrast outline
+val OledPureBlackBorderSubtle = Color(0x33444444)
+
+val OledBackgroundBrush = Brush.verticalGradient(
+    colors = listOf(
+        Color(0xFF000000),
+        Color(0xFF000000),
+        Color(0xFF000000)
+    )
+)
+
+val OledHeroCardGradient = Brush.linearGradient(
+    colors = listOf(
+        Color(0xFF111119),
+        Color(0xFF08080E),
+        Color(0xFF000000)
+    )
+)
+
+val OledFamilyHeroCardGradient = Brush.linearGradient(
+    colors = listOf(
+        Color(0xFF081820),
+        Color(0xFF050E14),
+        Color(0xFF000000)
+    )
+)

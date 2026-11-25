@@ -38,6 +38,7 @@ import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.GlassCard
+import com.zenith.app.ui.components.RollingCounterText
 import com.zenith.app.ui.components.TransactionDetailModal
 import com.zenith.app.ui.components.TransactionItemCard
 import com.zenith.app.ui.theme.*
@@ -646,13 +647,7 @@ fun HomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(
-                                brush = Brush.linearGradient(
-                                    listOf(
-                                        Color(0xFF1E1B4B),
-                                        Color(0xFF0F172A),
-                                        Color(0xFF134E4A)
-                                    )
-                                ),
+                                brush = ZenithTheme.familyHeroGradient,
                                 shape = RoundedCornerShape(26.dp)
                             )
                             .border(
@@ -707,9 +702,12 @@ fun HomeScreen(
                             Spacer(modifier = Modifier.height(6.dp))
 
                             val famNet = familySettlementSummary.familyNetBalance
-                            val netPrefix = if (famNet < 0) "-${state.currencySymbol}" else if (famNet > 0) "+${state.currencySymbol}" else state.currencySymbol
-                            Text(
-                                text = if (state.isBalanceHidden) "••••••" else "$netPrefix${String.format(Locale.US, "%,.2f", Math.abs(famNet))}",
+                            RollingCounterText(
+                                amount = famNet,
+                                currencySymbol = state.currencySymbol,
+                                prefix = if (famNet > 0) "+" else "",
+                                isMasked = state.isBalanceHidden,
+                                decimalPlaces = 2,
                                 fontSize = 34.sp,
                                 fontWeight = FontWeight.Black,
                                 color = if (famNet >= 0) Color.White else PastelRose,
@@ -750,12 +748,15 @@ fun HomeScreen(
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column {
                                             Text("Group Income", fontSize = 10.sp, color = SlateDarkTextSecondary, maxLines = 1)
-                                            Text(
-                                                if (state.isBalanceHidden) "+••••" else "+${state.currencySymbol}${String.format(Locale.US, "%,.0f", familySettlementSummary.familyTotalIncome)}",
+                                            RollingCounterText(
+                                                amount = familySettlementSummary.familyTotalIncome,
+                                                currencySymbol = state.currencySymbol,
+                                                prefix = "+",
+                                                isMasked = state.isBalanceHidden,
+                                                decimalPlaces = 0,
                                                 fontSize = 13.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = PastelGreen,
-                                                maxLines = 1
+                                                color = PastelGreen
                                             )
                                         }
                                     }
@@ -788,12 +789,15 @@ fun HomeScreen(
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column {
                                             Text("Group Spends", fontSize = 10.sp, color = SlateDarkTextSecondary, maxLines = 1)
-                                            Text(
-                                                if (state.isBalanceHidden) "-••••" else "-${state.currencySymbol}${String.format(Locale.US, "%,.0f", familySettlementSummary.familyTotalExpense)}",
+                                            RollingCounterText(
+                                                amount = familySettlementSummary.familyTotalExpense,
+                                                currencySymbol = state.currencySymbol,
+                                                prefix = "-",
+                                                isMasked = state.isBalanceHidden,
+                                                decimalPlaces = 0,
                                                 fontSize = 13.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = PastelRose,
-                                                maxLines = 1
+                                                color = PastelRose
                                             )
                                         }
                                     }
@@ -1463,7 +1467,7 @@ fun HomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(
-                                brush = HeroCardGradient,
+                                brush = ZenithTheme.heroGradient,
                                 shape = RoundedCornerShape(26.dp)
                             )
                             .border(1.dp, GlassBorderColor, RoundedCornerShape(26.dp))
@@ -1527,14 +1531,15 @@ fun HomeScreen(
 
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            Text(
-                                text = if (state.isBalanceHidden) "••••••" else "${if (netBalance >= 0) "" else "-"}${state.currencySymbol}${String.format(Locale.US, "%,.2f", Math.abs(netBalance))}",
+                            RollingCounterText(
+                                amount = netBalance,
+                                currencySymbol = state.currencySymbol,
+                                isMasked = state.isBalanceHidden,
+                                decimalPlaces = 2,
                                 fontSize = 34.sp,
                                 fontWeight = FontWeight.Black,
                                 color = SlateDarkTextPrimary,
-                                letterSpacing = (-0.5).sp,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                letterSpacing = (-0.5).sp
                             )
 
                             Spacer(modifier = Modifier.height(18.dp))
@@ -1576,13 +1581,15 @@ fun HomeScreen(
                                                 maxLines = 1,
                                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                             )
-                                            Text(
-                                                if (state.isBalanceHidden) "+••••" else "+${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalIncome)}",
+                                            RollingCounterText(
+                                                amount = totalIncome,
+                                                currencySymbol = state.currencySymbol,
+                                                prefix = "+",
+                                                isMasked = state.isBalanceHidden,
+                                                decimalPlaces = 0,
                                                 fontSize = 14.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = PastelGreen,
-                                                maxLines = 1,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                color = PastelGreen
                                             )
                                         }
                                     }
@@ -1621,13 +1628,15 @@ fun HomeScreen(
                                                 maxLines = 1,
                                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                             )
-                                            Text(
-                                                if (state.isBalanceHidden) "-••••" else "-${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalExpense)}",
+                                            RollingCounterText(
+                                                amount = totalExpense,
+                                                currencySymbol = state.currencySymbol,
+                                                prefix = "-",
+                                                isMasked = state.isBalanceHidden,
+                                                decimalPlaces = 0,
                                                 fontSize = 14.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = PastelRose,
-                                                maxLines = 1,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                color = PastelRose
                                             )
                                         }
                                     }

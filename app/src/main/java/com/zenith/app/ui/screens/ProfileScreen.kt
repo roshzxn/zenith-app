@@ -69,6 +69,7 @@ fun ProfileScreen(
     val familyMembers by viewModel.familyMembers.collectAsStateWithLifecycle(initialValue = emptyList())
     val defaultPaymentMethod by viewModel.defaultPaymentMethod.collectAsStateWithLifecycle()
     val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+    val isOledBlack by viewModel.isOledBlack.collectAsStateWithLifecycle()
     val isHapticsOn by viewModel.isHapticsEnabled.collectAsStateWithLifecycle()
     val isNotificationsOn by viewModel.isNotificationsEnabled.collectAsStateWithLifecycle()
     val isUpiAutoDetectionEnabled by viewModel.isUpiAutoDetectionEnabled.collectAsStateWithLifecycle()
@@ -320,10 +321,23 @@ fun ProfileScreen(
                 // Dark Mode Switch
                 PreferenceSwitchRow(
                     icon = Icons.Default.DarkMode,
-                    title = "Dark OLED Theme",
-                    subtitle = "High contrast glassmorphic dark interface",
+                    title = "Obsidian Dark Mode",
+                    subtitle = "Sleek obsidian navy interface with subtle specular glass",
                     checked = isDarkMode,
                     onCheckedChange = { viewModel.setDarkMode(it) }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(color = GlassBorderColor)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // OLED Pure Black Switch
+                PreferenceSwitchRow(
+                    icon = Icons.Default.Brightness2,
+                    title = "OLED Pure Black (#000000)",
+                    subtitle = "True pitch black for maximum AMOLED battery savings",
+                    checked = isOledBlack,
+                    onCheckedChange = { viewModel.setOledBlack(it) }
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))

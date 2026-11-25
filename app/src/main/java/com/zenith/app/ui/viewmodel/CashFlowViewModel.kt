@@ -178,6 +178,9 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     private val _isDarkMode = MutableStateFlow(prefs.getBoolean("is_dark_mode", true))
     val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
 
+    private val _isOledBlack = MutableStateFlow(prefs.getBoolean("is_oled_black", false))
+    val isOledBlack: StateFlow<Boolean> = _isOledBlack.asStateFlow()
+
     private val _isHapticsEnabled = MutableStateFlow(prefs.getBoolean("is_haptics_enabled", true))
     val isHapticsEnabled: StateFlow<Boolean> = _isHapticsEnabled.asStateFlow()
 
@@ -288,6 +291,11 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     fun setDarkMode(enabled: Boolean) {
         _isDarkMode.value = enabled
         prefs.edit().putBoolean("is_dark_mode", enabled).apply()
+    }
+
+    fun setOledBlack(enabled: Boolean) {
+        _isOledBlack.value = enabled
+        prefs.edit().putBoolean("is_oled_black", enabled).apply()
     }
 
     fun setHapticsEnabled(enabled: Boolean) {

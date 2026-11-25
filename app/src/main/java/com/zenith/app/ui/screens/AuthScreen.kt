@@ -148,7 +148,7 @@ fun AuthScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(brush = AmbientBackgroundBrush)
+            .background(brush = ZenithTheme.backgroundBrush)
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(horizontal = 20.dp)

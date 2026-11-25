@@ -57,7 +57,8 @@ class MainActivity : ComponentActivity() {
         checkNotificationLaunch(intent)
 
         setContent {
-            CashFlowTheme {
+            val isOledBlack by viewModel.isOledBlack.collectAsStateWithLifecycle()
+            CashFlowTheme(isOledBlack = isOledBlack) {
                 val isAuthenticated by viewModel.isAuthenticated.collectAsStateWithLifecycle()
                 val uiState by viewModel.uiState.collectAsStateWithLifecycle()
                 var currentScreen by remember(isAuthenticated) {
@@ -185,7 +186,7 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .background(brush = AmbientBackgroundBrush),
+            .background(brush = ZenithTheme.backgroundBrush),
             containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             floatingActionButtonPosition = FabPosition.End,
@@ -236,7 +237,7 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(brush = AmbientBackgroundBrush)
+                    .background(brush = ZenithTheme.backgroundBrush)
                     .statusBarsPadding()
             ) {
                 AnimatedContent(

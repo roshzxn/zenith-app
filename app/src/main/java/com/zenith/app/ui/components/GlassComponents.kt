@@ -50,7 +50,7 @@ fun GlassCard(
 fun CleanCard(
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(24.dp),
-    backgroundColor: Color = SlateDarkSurface,
+    backgroundColor: Color = ZenithTheme.cardSurface,
     borderColor: Color = GlassBorderColor,
     borderWidth: Dp = 1.dp,
     elevation: Dp = 4.dp,

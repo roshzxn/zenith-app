@@ -82,12 +82,21 @@ fun ZenithFloatingNavigationBar(
                 )
                 .clip(RoundedCornerShape(32.dp))
                 .background(
-                    brush = Brush.verticalGradient(
-                        listOf(
-                            Color(0xEE101726), // Ultra-dense luxury obsidian navy
-                            Color(0xF6090D16)  // Midnight carbon floor
+                    brush = if (ZenithTheme.isOled) {
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0xFB0A0A0A),
+                                Color(0xFF000000)
+                            )
                         )
-                    )
+                    } else {
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0xEE101726), // Ultra-dense luxury obsidian navy
+                                Color(0xF6090D16)  // Midnight carbon floor
+                            )
+                        )
+                    }
                 )
                 .border(
                     BorderStroke(
