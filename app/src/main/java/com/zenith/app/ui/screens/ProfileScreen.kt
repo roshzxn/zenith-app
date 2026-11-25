@@ -71,6 +71,7 @@ fun ProfileScreen(
     val isNotificationsOn by viewModel.isNotificationsEnabled.collectAsStateWithLifecycle()
     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
     val isUpiAutoDetectionEnabled by viewModel.isUpiAutoDetectionEnabled.collectAsStateWithLifecycle()
+    val isUpiInstantAutoSaveEnabled by viewModel.isUpiInstantAutoSaveEnabled.collectAsStateWithLifecycle()
 
     val syncState by viewModel.syncUiState.collectAsStateWithLifecycle()
 
@@ -87,11 +88,13 @@ fun ProfileScreen(
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var isUpiNotifGranted by remember { mutableStateOf(UpiNotificationListenerService.isPermissionGranted(context)) }
-    var isPostNotificationsGranted by remember {
+    var isUpiListenerBound by remember {
         mutableStateOf(
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            isUpiNotifGranted && UpiNotificationListenerService.isListenerActivelyBound(context)
         )
+    }
+    var isPostNotificationsGranted by remember {
+        mutableStateOf(UpiNotificationListenerService.hasPostNotificationPermission(context))
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -106,9 +109,13 @@ fun ProfileScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                isUpiNotifGranted = UpiNotificationListenerService.isPermissionGranted(context)
-                isPostNotificationsGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                val granted = UpiNotificationListenerService.isPermissionGranted(context)
+                isUpiNotifGranted = granted
+                if (granted) {
+                    UpiNotificationListenerService.ensureListenerBound(context)
+                }
+                isUpiListenerBound = granted && UpiNotificationListenerService.isListenerActivelyBound(context)
+                isPostNotificationsGranted = UpiNotificationListenerService.hasPostNotificationPermission(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -336,9 +343,9 @@ fun ProfileScreen(
 
                 PreferenceSwitchRow(
                     icon = Icons.Default.Notifications,
-                    title = "Budget Alerts & Insights",
+                    title = "Bills & Budget Alerts",
                     subtitle = if (isPostNotificationsGranted) {
-                        "Notify when approaching spending limits"
+                        "Notify for upcoming bills & spending limits"
                     } else {
                         "Tap to grant notification permission for alerts"
                     },
@@ -359,6 +366,7 @@ fun ProfileScreen(
                 val upiCardAccent = when {
                     !isUpiNotifGranted -> ZenithTheme.accentAmber
                     !isUpiAutoDetectionEnabled -> ZenithTheme.textSecondary
+                    !isUpiListenerBound -> ZenithTheme.accentAmber
                     else -> ZenithTheme.accentGreen
                 }
                 Surface(
@@ -366,6 +374,7 @@ fun ProfileScreen(
                     color = when {
                         !isUpiNotifGranted -> ZenithTheme.accentAmber.copy(alpha = 0.12f)
                         !isUpiAutoDetectionEnabled -> ZenithTheme.cardVariantSurface
+                        !isUpiListenerBound -> ZenithTheme.accentAmber.copy(alpha = 0.12f)
                         else -> ZenithTheme.accentGreen.copy(alpha = 0.12f)
                     },
                     border = BorderStroke(
@@ -373,6 +382,7 @@ fun ProfileScreen(
                         when {
                             !isUpiNotifGranted -> ZenithTheme.accentAmber.copy(alpha = 0.35f)
                             !isUpiAutoDetectionEnabled -> ZenithTheme.borderColor
+                            !isUpiListenerBound -> ZenithTheme.accentAmber.copy(alpha = 0.35f)
                             else -> ZenithTheme.accentGreen.copy(alpha = 0.35f)
                         }
                     ),
@@ -417,6 +427,7 @@ fun ProfileScreen(
                                         text = when {
                                             !isUpiNotifGranted -> "SETUP NEEDED"
                                             !isUpiAutoDetectionEnabled -> "PAUSED"
+                                            !isUpiListenerBound -> "RECONNECT"
                                             else -> "ACTIVE"
                                         },
                                         fontSize = 9.sp,
@@ -431,7 +442,8 @@ fun ProfileScreen(
                                 text = when {
                                     !isUpiNotifGranted -> "Tap to grant Android Notification Access so Zenith can auto-detect receipts."
                                     !isUpiAutoDetectionEnabled -> "Detection is temporarily paused in settings. Tap to configure."
-                                    else -> "Active: Intercepts GPay, PhonePe, Paytm, CRED & Bank notifications on-device."
+                                    !isUpiListenerBound -> "Notification Access granted, but background listener is disconnected. Tap to reconnect."
+                                    else -> "Active: Intercepts GPay, PhonePe, Paytm, CRED, Bank & SMS alerts on-device."
                                 },
                                 fontSize = 11.sp,
                                 color = ZenithTheme.textSecondary,
@@ -597,7 +609,9 @@ fun ProfileScreen(
     if (showUpiSettingsDialog) {
         UpiNotificationSettingsDialog(
             isPermissionGranted = isUpiNotifGranted,
+            isListenerBound = isUpiListenerBound,
             isAutoDetectEnabled = isUpiAutoDetectionEnabled,
+            isInstantAutoSaveEnabled = isUpiInstantAutoSaveEnabled,
             isPostNotificationsGranted = isPostNotificationsGranted,
             onRequestPostNotifications = {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -606,14 +620,45 @@ fun ProfileScreen(
             },
             onToggleAutoDetect = { enabled ->
                 viewModel.setUpiAutoDetectionEnabled(enabled)
+                if (enabled && isUpiNotifGranted) {
+                    isUpiListenerBound = UpiNotificationListenerService.isListenerActivelyBound(context)
+                }
                 Toast.makeText(context, if (enabled) "UPI auto-detection enabled." else "UPI auto-detection paused.", Toast.LENGTH_SHORT).show()
+            },
+            onToggleInstantAutoSave = { enabled ->
+                viewModel.setUpiInstantAutoSaveEnabled(enabled)
+                Toast.makeText(
+                    context,
+                    if (enabled) "Hands-free auto-save enabled." else "Switched back to 1-tap confirmation mode.",
+                    Toast.LENGTH_SHORT
+                ).show()
             },
             onOpenSystemSettings = {
                 UpiNotificationListenerService.openPermissionSettings(context)
             },
+            onOpenAppInfoSettings = {
+                UpiNotificationListenerService.openAppInfoSettings(context)
+            },
+            onReconnectListener = {
+                val requested = UpiNotificationListenerService.ensureListenerBound(context, forceRebind = true)
+                isUpiListenerBound = UpiNotificationListenerService.isListenerActivelyBound(context)
+                Toast.makeText(
+                    context,
+                    if (requested) "Requested background listener reconnect." else "Grant Notification Access in Settings first.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
             onSimulateTestPayment = {
                 viewModel.simulateTestUpiPayment()
                 Toast.makeText(context, "Simulated payment notification posted! Check modal prompt.", Toast.LENGTH_SHORT).show()
+            },
+            onTestShadeNotification = {
+                val posted = viewModel.simulateTestShadeNotification()
+                if (!posted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else if (posted) {
+                    Toast.makeText(context, "Posted test alert to your notification shade.", Toast.LENGTH_SHORT).show()
+                }
             },
             onDismiss = { showUpiSettingsDialog = false }
         )
@@ -1282,12 +1327,18 @@ fun AuthDialog(
 @Composable
 fun UpiNotificationSettingsDialog(
     isPermissionGranted: Boolean,
+    isListenerBound: Boolean = isPermissionGranted,
     isAutoDetectEnabled: Boolean,
+    isInstantAutoSaveEnabled: Boolean = false,
     isPostNotificationsGranted: Boolean = true,
     onRequestPostNotifications: () -> Unit = {},
     onToggleAutoDetect: (Boolean) -> Unit,
+    onToggleInstantAutoSave: (Boolean) -> Unit = {},
     onOpenSystemSettings: () -> Unit,
+    onOpenAppInfoSettings: () -> Unit = {},
+    onReconnectListener: () -> Unit = {},
     onSimulateTestPayment: () -> Unit,
+    onTestShadeNotification: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -1313,7 +1364,11 @@ fun UpiNotificationSettingsDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        val headerColor = if (isPermissionGranted && isAutoDetectEnabled) ZenithTheme.accentGreen else ZenithTheme.accentAmber
+                        val headerColor = when {
+                            !isPermissionGranted || (isAutoDetectEnabled && !isListenerBound) -> ZenithTheme.accentAmber
+                            !isAutoDetectEnabled -> ZenithTheme.textSecondary
+                            else -> ZenithTheme.accentGreen
+                        }
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
@@ -1355,6 +1410,7 @@ fun UpiNotificationSettingsDialog(
                 val statusAccent = when {
                     !isPermissionGranted -> ZenithTheme.accentAmber
                     !isAutoDetectEnabled -> ZenithTheme.textSecondary
+                    !isListenerBound -> ZenithTheme.accentAmber
                     else -> ZenithTheme.accentGreen
                 }
                 Surface(
@@ -1366,7 +1422,7 @@ fun UpiNotificationSettingsDialog(
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = if (isPermissionGranted && isAutoDetectEnabled) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                imageVector = if (isPermissionGranted && isAutoDetectEnabled && isListenerBound) Icons.Default.CheckCircle else Icons.Default.Warning,
                                 contentDescription = null,
                                 tint = statusAccent,
                                 modifier = Modifier.size(18.dp)
@@ -1376,6 +1432,7 @@ fun UpiNotificationSettingsDialog(
                                 text = when {
                                     !isPermissionGranted -> "Notification Listener Required"
                                     !isAutoDetectEnabled -> "Detection Paused in App"
+                                    !isListenerBound -> "Listener Disconnected by System"
                                     else -> "Service Active & Listening"
                                 },
                                 fontSize = 13.sp,
@@ -1388,9 +1445,10 @@ fun UpiNotificationSettingsDialog(
 
                         Text(
                             text = when {
-                                !isPermissionGranted -> "Android requires Notification Access so Zenith can detect payment receipts from your UPI apps. 100% private & on-device."
+                                !isPermissionGranted -> "Enable Notification Access for Zenith. On Android 13+ sideloaded APKs, first open App Info -> ⋮ menu -> Allow restricted settings."
                                 !isAutoDetectEnabled -> "Notification listener is granted in system, but paused by your in-app preference."
-                                else -> "Zenith is actively monitoring UPI receipts. When you make a payment in GPay, PhonePe, Paytm, or your banking app, Zenith will prompt you with one tap to save it."
+                                !isListenerBound -> "Permission is granted, but Android unbound the background listener (common after APK install or battery optimization). Tap Reconnect below."
+                                else -> "Zenith is actively monitoring UPI, banking, and transaction SMS notifications 100% on-device."
                             },
                             fontSize = 11.sp,
                             color = ZenithTheme.textSecondary,
@@ -1411,7 +1469,45 @@ fun UpiNotificationSettingsDialog(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Grant Listener in Settings", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                             }
-                        } else if (!isPostNotificationsGranted) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = onOpenAppInfoSettings,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(36.dp)
+                                ) {
+                                    Text("Open App Info (Restricted Settings)", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textPrimary)
+                                }
+                            }
+                        } else if (isAutoDetectEnabled && !isListenerBound) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = onReconnectListener,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.accentAmber),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(38.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Reconnect Background Listener", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = onOpenAppInfoSettings,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(36.dp)
+                            ) {
+                                Text("Check Battery / Unrestricted Usage", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textPrimary)
+                            }
+                        }
+
+                        if (isPermissionGranted && !isPostNotificationsGranted) {
                             Spacer(modifier = Modifier.height(10.dp))
                             Button(
                                 onClick = onRequestPostNotifications,
@@ -1442,6 +1538,16 @@ fun UpiNotificationSettingsDialog(
                         checked = isAutoDetectEnabled,
                         onCheckedChange = onToggleAutoDetect
                     )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = ZenithTheme.borderColor)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    PreferenceSwitchRow(
+                        icon = Icons.Default.Bolt,
+                        title = "Hands-Free Auto-Save",
+                        subtitle = "Log detected payments silently without 1-tap prompt",
+                        checked = isInstantAutoSaveEnabled,
+                        onCheckedChange = onToggleInstantAutoSave
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -1454,7 +1560,11 @@ fun UpiNotificationSettingsDialog(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
 
-                val supportedApps = listOf("Google Pay", "PhonePe", "Paytm", "CRED", "BHIM", "Amazon Pay", "SBI YONO", "HDFC PayZapp", "ICICI iMobile", "Axis Mobile")
+                val supportedApps = listOf(
+                    "Google Pay", "PhonePe", "Paytm", "CRED", "BHIM",
+                    "Amazon Pay", "PayZapp", "SBI YONO", "iMobile Pay", "Axis Mobile",
+                    "Kotak811", "Bank SMS"
+                )
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -1487,29 +1597,43 @@ fun UpiNotificationSettingsDialog(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
                         onClick = onSimulateTestPayment,
                         modifier = Modifier
                             .weight(1f)
-                            .height(44.dp),
-                        shape = RoundedCornerShape(12.dp)
+                            .height(42.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Test Detection", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("Test Modal", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    }
+
+                    OutlinedButton(
+                        onClick = onTestShadeNotification,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Icon(Icons.Default.Notifications, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("Test Shade", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                     }
 
                     Button(
                         onClick = onDismiss,
                         modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp),
+                            .weight(0.9f)
+                            .height(42.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen)
                     ) {
-                        Text("Done", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
+                        Text("Done", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White)
                     }
                 }
             }

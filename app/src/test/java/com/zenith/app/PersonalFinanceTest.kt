@@ -1,6 +1,9 @@
 package com.zenith.app
 
+import android.app.Notification
 import android.content.Context
+import android.provider.Settings
+import androidx.core.app.NotificationCompat
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DirectionsCar
@@ -13,6 +16,9 @@ import com.zenith.app.data.models.*
 import com.zenith.app.data.network.LocalAuthService
 import com.zenith.app.data.network.SyncEngine
 import com.zenith.app.data.repository.CashFlowRepository
+import com.zenith.app.data.upi.NotificationExpenseActionReceiver
+import com.zenith.app.data.upi.UpiNotificationListenerService
+import com.zenith.app.data.upi.UpiNotificationParser
 import com.zenith.app.data.upi.UpiPaymentBus
 import com.zenith.app.ui.components.categoryVectorFor
 import com.zenith.app.ui.screens.calculateBudgetSpent
@@ -337,5 +343,137 @@ class PersonalFinanceTest {
         assertEquals(Icons.Default.MedicalServices, categoryVectorFor("medical_services"))
         assertEquals(Icons.Default.Bolt, categoryVectorFor("Receipt", "Bills & Utilities"))
         assertEquals(Icons.Default.DirectionsCar, categoryVectorFor("", "Transportation"))
+    }
+
+    @Test
+    fun testNotificationListenerExtractsInboxLinesAndSkipsGroupSummary() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val notif = NotificationCompat.Builder(context, "test_upi_channel")
+            .setContentTitle("HDFC Bank")
+            .setSubText("UPI Alert")
+            .setStyle(
+                NotificationCompat.InboxStyle()
+                    .addLine("Rs.320.00 debited from a/c **1234 to Zomato")
+                    .addLine("UPI Ref No. 667788990011")
+            )
+            .build()
+
+        val (title, body) = UpiNotificationListenerService.extractNotificationPayload(notif)
+        assertEquals("HDFC Bank", title)
+        assertNotNull(body)
+
+        val parsed = UpiNotificationParser.parse("com.snapwork.hdfc", title, body)
+        assertNotNull(parsed)
+        assertEquals(320.0, parsed!!.amount, 0.01)
+        assertEquals("Zomato", parsed.payeeName)
+        assertEquals("667788990011", parsed.upiTransactionId)
+
+        assertTrue(
+            UpiNotificationListenerService.shouldIgnoreNotification(
+                sourcePackage = "com.phonepe.app",
+                ownPackage = context.packageName,
+                flags = Notification.FLAG_GROUP_SUMMARY
+            )
+        )
+        assertTrue(
+            UpiNotificationListenerService.shouldIgnoreNotification(
+                sourcePackage = context.packageName,
+                ownPackage = context.packageName,
+                flags = 0
+            )
+        )
+        assertFalse(
+            UpiNotificationListenerService.shouldIgnoreNotification(
+                sourcePackage = "com.phonepe.app",
+                ownPackage = context.packageName,
+                flags = 0
+            )
+        )
+    }
+
+    @Test
+    fun testListenerPermissionComponentNameMatching() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        Settings.Secure.putString(
+            context.contentResolver,
+            "enabled_notification_listeners",
+            "com.zenith.app.fake/com.zenith.app.fake.Listener"
+        )
+        assertFalse(UpiNotificationListenerService.isPermissionGranted(context))
+        assertFalse(UpiNotificationListenerService.ensureListenerBound(context))
+
+        Settings.Secure.putString(
+            context.contentResolver,
+            "enabled_notification_listeners",
+            "${context.packageName}/.data.upi.UpiNotificationListenerService"
+        )
+        assertTrue(UpiNotificationListenerService.isPermissionGranted(context))
+
+        Settings.Secure.putString(
+            context.contentResolver,
+            "enabled_notification_listeners",
+            "${context.packageName}/com.zenith.app.data.upi.UpiNotificationListenerService"
+        )
+        assertTrue(UpiNotificationListenerService.isPermissionGranted(context))
+        assertTrue(UpiNotificationListenerService.ensureListenerBound(context))
+    }
+
+    @Test
+    fun testNotificationActionPersistsExpenseCreditAndDedupsByUtr() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val now = System.currentTimeMillis()
+
+        val expenseSaved = NotificationExpenseActionReceiver.persistNotificationTransaction(
+            context = context,
+            db = db,
+            title = "Swiggy",
+            amount = 420.0,
+            category = "Food & Dining",
+            paymentMethod = "Google Pay",
+            upiId = "swiggy@okaxis",
+            utr = "991122334455",
+            dateMillis = now,
+            isDebit = true,
+            syncWithCloud = false
+        )
+        assertTrue(expenseSaved)
+
+        val duplicateSkipped = NotificationExpenseActionReceiver.persistNotificationTransaction(
+            context = context,
+            db = db,
+            title = "Swiggy",
+            amount = 420.0,
+            category = "Food & Dining",
+            paymentMethod = "HDFC Bank",
+            upiId = null,
+            utr = "991122334455",
+            dateMillis = now + 2_000L,
+            isDebit = true,
+            syncWithCloud = false
+        )
+        assertFalse(duplicateSkipped)
+
+        val creditSaved = NotificationExpenseActionReceiver.persistNotificationTransaction(
+            context = context,
+            db = db,
+            title = "Ramesh",
+            amount = 850.0,
+            category = "Other",
+            paymentMethod = "PhonePe",
+            upiId = "ramesh@ybl",
+            utr = "881122334466",
+            dateMillis = now,
+            isDebit = false,
+            syncWithCloud = false
+        )
+        assertTrue(creditSaved)
+
+        val all = db.transactionDao().getTransactionsByScope(FinanceScope.PERSONAL).first()
+        assertEquals(2, all.size)
+        val credit = all.first { it.upiTransactionId == "881122334466" }
+        val expense = all.first { it.upiTransactionId == "991122334455" }
+        assertEquals(TransactionType.INCOME, credit.type)
+        assertEquals(TransactionType.EXPENSE, expense.type)
     }
 }

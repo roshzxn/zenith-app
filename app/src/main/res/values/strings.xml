@@ -1,4 +1,19 @@
 <resources>
     <string name="app_name">Zenith</string>
+    <string name="widget_description">Track monthly spend, balance, upcoming bills, and quick-add expenses.</string>
+    <string name="widget_month_label">This Month</string>
+    <string name="widget_spent_label">Month Spent</string>
+    <string name="widget_balance_label">Net Balance</string>
+    <string name="widget_no_due_bills">No upcoming bills scheduled</string>
+    <string name="widget_action_add">+ Add</string>
+    <string name="widget_action_upi">UPI Pay</string>
+    <string name="shortcut_add_short">Add Entry</string>
+    <string name="shortcut_add_long">Add Expense or Income</string>
+    <string name="shortcut_upi_short">UPI Pay</string>
+    <string name="shortcut_upi_long">Pay &amp; Auto-Track UPI</string>
+    <string name="shortcut_qr_short">Scan QR</string>
+    <string name="shortcut_qr_long">Scan &amp; Pay UPI QR</string>
+    <string name="shortcut_voice_short">Voice AI</string>
+    <string name="shortcut_voice_long">Log Expense by Voice</string>
 </resources>
 

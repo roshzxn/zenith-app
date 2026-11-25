@@ -63,7 +63,23 @@ fun UPIPaySheet(
     val isAboveStandardP2pCap = amount > 100_000.0
     val canRedirectAndNote = amount > 0 && amount <= 500_000.0
     val isValid = canRedirectAndNote && purpose.isNotBlank() && vpaValid
-    val hasNotifAccess = remember { UpiNotificationListenerService.isPermissionGranted(context) }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var hasNotifAccess by remember { mutableStateOf(UpiNotificationListenerService.isPermissionGranted(context)) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                hasNotifAccess = UpiNotificationListenerService.isPermissionGranted(context)
+                if (hasNotifAccess) {
+                    UpiNotificationListenerService.ensureListenerBound(context)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,

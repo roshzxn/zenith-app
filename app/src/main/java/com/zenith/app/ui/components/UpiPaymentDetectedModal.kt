@@ -42,9 +42,9 @@ fun UpiPaymentDetectedModal(
         upiTransactionId: String?
     ) -> Unit
 ) {
-    var titleText by remember { mutableStateOf(payment.payeeName) }
-    var selectedCategory by remember { mutableStateOf(payment.detectedCategory) }
-    var isSubmitting by remember { mutableStateOf(false) }
+    var titleText by remember(payment) { mutableStateOf(payment.payeeName) }
+    var selectedCategory by remember(payment) { mutableStateOf(payment.detectedCategory) }
+    var isSubmitting by remember(payment) { mutableStateOf(false) }
 
     val categories = listOf(
         "Food & Dining",
@@ -56,6 +56,8 @@ fun UpiPaymentDetectedModal(
         "Investments",
         "Other"
     )
+
+    val accentColor = if (payment.isDebit) LightIncomeGreen else ZenithTheme.accentGreen
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -96,7 +98,7 @@ fun UpiPaymentDetectedModal(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                text = "UPI Payment Detected",
+                                text = if (payment.isDebit) "UPI Payment Detected" else "UPI Credit Detected",
                                 color = ZenithTheme.textPrimary,
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold
@@ -137,7 +139,7 @@ fun UpiPaymentDetectedModal(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Amount Paid",
+                            text = if (payment.isDebit) "Amount Paid" else "Amount Received",
                             color = ZenithTheme.textSecondary,
                             fontSize = 12.sp
                         )
@@ -165,7 +167,13 @@ fun UpiPaymentDetectedModal(
                 OutlinedTextField(
                     value = titleText,
                     onValueChange = { titleText = it },
-                    label = { Text("Merchant / Title", color = ZenithTheme.textSecondary, fontSize = 13.sp) },
+                    label = {
+                        Text(
+                            text = if (payment.isDebit) "Merchant / Title" else "Sender / Title",
+                            color = ZenithTheme.textSecondary,
+                            fontSize = 13.sp
+                        )
+                    },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = ZenithTheme.textPrimary,
@@ -257,7 +265,7 @@ fun UpiPaymentDetectedModal(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Record Expense",
+                            text = if (payment.isDebit) "Record Expense" else "Record Income",
                             color = Color.White,
                             fontWeight = FontWeight.Bold
                         )

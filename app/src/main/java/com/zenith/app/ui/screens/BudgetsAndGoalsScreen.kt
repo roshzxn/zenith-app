@@ -32,6 +32,7 @@ import com.zenith.app.data.models.CategoryEntity
 import com.zenith.app.data.models.SavingsGoalEntity
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
+import com.zenith.app.data.upi.RecurringSuggestion
 import com.zenith.app.ui.components.AddAutoPayReminderDialog
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.GlassCard
@@ -83,7 +84,10 @@ fun BudgetsAndGoalsScreen(
     onSaveAutoPayReminder: ((title: String, amount: Double, category: String, paymentMethod: String, frequency: String, dueDayOfMonth: Int, nextDueDateMillis: Long, isAutoDebit: Boolean, reminderDaysBefore: Int, notes: String, reminderId: Long) -> Unit)? = null,
     onDeleteAutoPayReminder: ((AutoPayReminderEntity) -> Unit)? = null,
     onTogglePauseAutoPayReminder: ((AutoPayReminderEntity) -> Unit)? = null,
-    onMarkAutoPayPaid: ((AutoPayReminderEntity) -> Unit)? = null
+    onMarkAutoPayPaid: ((AutoPayReminderEntity) -> Unit)? = null,
+    recurringSuggestions: List<RecurringSuggestion> = emptyList(),
+    onAddRecurringSuggestion: ((RecurringSuggestion) -> Unit)? = null,
+    onDismissRecurringSuggestion: ((RecurringSuggestion) -> Unit)? = null
 ) {
     var showAddBudgetModal by remember { mutableStateOf(false) }
     var editingBudget by remember { mutableStateOf<BudgetEntity?>(null) }
@@ -831,6 +835,84 @@ fun BudgetsAndGoalsScreen(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        if (recurringSuggestions.isNotEmpty()) {
+            items(recurringSuggestions, key = { "rec_suggest_${it.title.lowercase()}_${it.frequency}" }) { suggestion ->
+                CleanCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .testTag("card_recurring_suggestion"),
+                    backgroundColor = ZenithTheme.accentAmber.copy(alpha = 0.09f),
+                    borderColor = ZenithTheme.accentAmber.copy(alpha = 0.30f),
+                    contentPadding = PaddingValues(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = suggestion.title,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ZenithTheme.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = ZenithTheme.accentAmber.copy(alpha = 0.18f)
+                                ) {
+                                    Text(
+                                        text = suggestion.frequency,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ZenithTheme.accentAmber,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Detected ${suggestion.occurrenceCount}× around ${formatMoneyOrMask(suggestion.amount)} • Track as bill?",
+                                fontSize = 11.5.sp,
+                                color = ZenithTheme.textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                onClick = { onAddRecurringSuggestion?.invoke(suggestion) },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "Track",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ZenithTheme.accentGreen
+                                )
+                            }
+                            IconButton(
+                                onClick = { onDismissRecurringSuggestion?.invoke(suggestion) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss suggestion",
+                                    tint = ZenithTheme.textSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if (state.autoPayReminders.isEmpty()) {

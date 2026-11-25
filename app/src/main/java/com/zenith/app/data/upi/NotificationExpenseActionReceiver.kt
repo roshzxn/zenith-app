@@ -15,6 +15,7 @@ import com.zenith.app.data.models.TransactionType
 import com.zenith.app.data.network.SupabaseAuthService
 import com.zenith.app.data.network.SyncEngine
 import com.zenith.app.data.util.CategoryIconHelper
+import com.zenith.app.widget.ZenithSummaryWidgetProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -38,6 +39,88 @@ class NotificationExpenseActionReceiver : BroadcastReceiver() {
         const val EXTRA_UTR = "extra_utr"
         const val EXTRA_DATE_MILLIS = "extra_date_millis"
         const val EXTRA_NOTIFICATION_ID = "extra_notification_id"
+        const val EXTRA_IS_DEBIT = "extra_is_debit"
+
+        internal suspend fun persistNotificationTransaction(
+            context: Context,
+            db: CashFlowDatabase,
+            title: String,
+            amount: Double,
+            category: String,
+            paymentMethod: String,
+            upiId: String?,
+            utr: String?,
+            dateMillis: Long,
+            isDebit: Boolean,
+            syncWithCloud: Boolean = true
+        ): Boolean {
+            if (amount <= 0.0) return false
+            val txnType = if (isDebit) TransactionType.EXPENSE else TransactionType.INCOME
+            val transactionDao = db.transactionDao()
+
+            // Prevent duplicate insertion if already logged by UTR or in-app UPI flow within 5 minutes
+            val existingByUtr = utr?.takeIf { it.isNotBlank() }?.let { transactionDao.getTransactionByUtr(it) }
+            val existingDup = transactionDao.findPotentialDuplicates(
+                amount = amount,
+                type = txnType,
+                scope = FinanceScope.PERSONAL,
+                startMillis = dateMillis - 300_000L,
+                endMillis = dateMillis + 300_000L
+            ).firstOrNull()
+
+            if (existingByUtr != null || existingDup != null || !UpiPaymentBus.tryClaimRecording(amount, utr)) {
+                UpiPaymentBus.markRecorded(amount, utr)
+                PendingUpiDetectionStore.markResolved(amount, utr, context)
+                return false
+            }
+
+            val generatedServerId = UUID.randomUUID().toString()
+            val prefs = context.getSharedPreferences("zenith_prefs", Context.MODE_PRIVATE)
+            val currentUserId = prefs.getString("user_supabase_id", null) ?: "local_user_1"
+
+            val entity = TransactionEntity(
+                title = title,
+                amount = amount,
+                type = txnType,
+                category = category,
+                categoryIconName = CategoryIconHelper.iconNameForCategory(category),
+                note = if (isDebit) "Logged via notification tracker" else "Credited via notification tracker",
+                paymentMethod = paymentMethod,
+                dateMillis = dateMillis,
+                upiId = upiId,
+                upiTransactionId = utr,
+                financeScope = FinanceScope.PERSONAL,
+                createdByUserId = currentUserId,
+                serverId = generatedServerId,
+                syncStatus = "PENDING_CREATE",
+                updatedAt = System.currentTimeMillis(),
+                isDeleted = false
+            )
+
+            transactionDao.insertTransaction(entity)
+            UpiPaymentBus.markRecorded(amount, utr)
+            PendingUpiDetectionStore.markResolved(amount, utr, context)
+            MerchantCategoryRules.learn(title, upiId, category)
+            ZenithSummaryWidgetProvider.requestUpdate(context)
+            Log.i("NotifExpenseReceiver", "Recorded UPI ${txnType.name} via notification action (hasUtr=${!utr.isNullOrBlank()})")
+
+            if (syncWithCloud) {
+                try {
+                    val authService = SupabaseAuthService()
+                    val syncEngine = SyncEngine(
+                        transactionDao = transactionDao,
+                        authService = authService,
+                        budgetDao = db.budgetDao(),
+                        savingsGoalDao = db.savingsGoalDao(),
+                        autoPayReminderDao = db.autoPayReminderDao()
+                    )
+                    syncEngine.syncAll(currentUserId)
+                } catch (e: Exception) {
+                    Log.w("NotifExpenseReceiver", "Post-notification sync trigger: ${e.message}")
+                }
+            }
+            return true
+        }
     }
 
     private val tag = "NotifExpenseReceiver"
@@ -51,6 +134,11 @@ class NotificationExpenseActionReceiver : BroadcastReceiver() {
         notificationManager.cancel(notifId)
 
         if (action == ACTION_DISMISS_EXPENSE) {
+            val amount = intent.getDoubleExtra(EXTRA_AMOUNT, 0.0)
+            val utr = intent.getStringExtra(EXTRA_UTR)
+            if (amount > 0.0 || !utr.isNullOrBlank()) {
+                PendingUpiDetectionStore.markResolved(amount, utr, context)
+            }
             UpiPaymentBus.clearPending()
             Log.d(tag, "Expense notification dismissed by user.")
             return
@@ -64,76 +152,29 @@ class NotificationExpenseActionReceiver : BroadcastReceiver() {
             val upiId = intent.getStringExtra(EXTRA_UPI_ID)
             val utr = intent.getStringExtra(EXTRA_UTR)
             val dateMillis = intent.getLongExtra(EXTRA_DATE_MILLIS, System.currentTimeMillis())
+            val isDebit = intent.getBooleanExtra(EXTRA_IS_DEBIT, true)
 
             if (amount <= 0.0) return
 
             val pendingResult = goAsync()
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    val db = CashFlowDatabase.getDatabase(context)
-                    val transactionDao = db.transactionDao()
-
-                    // Prevent duplicate insertion if already logged by UTR or in-app UPI flow within 5 minutes
-                    val existingByUtr = utr?.takeIf { it.isNotBlank() }?.let { transactionDao.getTransactionByUtr(it) }
-                    val existingDup = transactionDao.findPotentialDuplicates(
-                        amount = amount,
-                        type = TransactionType.EXPENSE,
-                        scope = FinanceScope.PERSONAL,
-                        startMillis = dateMillis - 300_000L,
-                        endMillis = dateMillis + 300_000L
-                    ).firstOrNull()
-
-                    if (existingByUtr != null || existingDup != null || !UpiPaymentBus.tryClaimRecording(amount, utr)) {
-                        UpiPaymentBus.markRecorded(amount, utr)
-                        Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(context, "Already recorded ₹$amount at $title", Toast.LENGTH_SHORT).show()
-                        }
-                        return@launch
-                    }
-
-                    val generatedServerId = UUID.randomUUID().toString()
-                    val prefs = context.getSharedPreferences("zenith_prefs", Context.MODE_PRIVATE)
-                    val currentUserId = prefs.getString("user_supabase_id", null) ?: "local_user_1"
-
-                    val entity = TransactionEntity(
+                    val inserted = persistNotificationTransaction(
+                        context = context,
+                        db = CashFlowDatabase.getDatabase(context),
                         title = title,
                         amount = amount,
-                        type = TransactionType.EXPENSE,
                         category = category,
-                        categoryIconName = CategoryIconHelper.iconNameForCategory(category),
-                        note = "Logged via notification tracker",
                         paymentMethod = paymentMethod,
-                        dateMillis = dateMillis,
                         upiId = upiId,
-                        upiTransactionId = utr,
-                        financeScope = FinanceScope.PERSONAL,
-                        createdByUserId = currentUserId,
-                        serverId = generatedServerId,
-                        syncStatus = "PENDING_CREATE",
-                        updatedAt = System.currentTimeMillis(),
-                        isDeleted = false
+                        utr = utr,
+                        dateMillis = dateMillis,
+                        isDebit = isDebit
                     )
-
-                    transactionDao.insertTransaction(entity)
-                    UpiPaymentBus.markRecorded(amount, utr)
-                    Log.i(tag, "Successfully recorded ₹$amount at $title via notification action (serverId=$generatedServerId)")
-
-                    try {
-                        val authService = SupabaseAuthService()
-                        val syncEngine = SyncEngine(
-                            transactionDao = transactionDao,
-                            authService = authService,
-                            budgetDao = db.budgetDao(),
-                            savingsGoalDao = db.savingsGoalDao(),
-                            autoPayReminderDao = db.autoPayReminderDao()
-                        )
-                        syncEngine.syncAll(currentUserId)
-                    } catch (e: Exception) {
-                        Log.w(tag, "Post-notification sync trigger: ${e.message}")
-                    }
-
+                    val prep = if (isDebit) "at" else "from"
+                    val msg = if (inserted) "Recorded ₹$amount $prep $title" else "Already recorded ₹$amount $prep $title"
                     Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(context, "Recorded ₹$amount at $title", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     Log.e(tag, "Error saving expense from notification: ${e.message}", e)

@@ -1,0 +1,65 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_zenith"
+        android:shortcutId="zenith_quick_add"
+        android:shortcutLongLabel="@string/shortcut_add_long"
+        android:shortcutShortLabel="@string/shortcut_add_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.zenith.app.MainActivity"
+            android:targetPackage="com.zenith.app">
+            <extra
+                android:name="extra_quick_action"
+                android:value="add" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_zenith"
+        android:shortcutId="zenith_quick_upi"
+        android:shortcutLongLabel="@string/shortcut_upi_long"
+        android:shortcutShortLabel="@string/shortcut_upi_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.zenith.app.MainActivity"
+            android:targetPackage="com.zenith.app">
+            <extra
+                android:name="extra_quick_action"
+                android:value="upi_pay" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_zenith"
+        android:shortcutId="zenith_quick_qr"
+        android:shortcutLongLabel="@string/shortcut_qr_long"
+        android:shortcutShortLabel="@string/shortcut_qr_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.zenith.app.MainActivity"
+            android:targetPackage="com.zenith.app">
+            <extra
+                android:name="extra_quick_action"
+                android:value="scan_qr" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_zenith"
+        android:shortcutId="zenith_quick_voice"
+        android:shortcutLongLabel="@string/shortcut_voice_long"
+        android:shortcutShortLabel="@string/shortcut_voice_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.zenith.app.MainActivity"
+            android:targetPackage="com.zenith.app">
+            <extra
+                android:name="extra_quick_action"
+                android:value="voice" />
+        </intent>
+    </shortcut>
+</shortcuts>

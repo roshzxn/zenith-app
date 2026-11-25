@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.zenith.app.data.models.TransactionType
+import com.zenith.app.data.upi.UpiNotificationListenerService
 import com.zenith.app.ui.components.AddTransactionDialog
 import com.zenith.app.ui.components.ReceiptScanModal
 import com.zenith.app.ui.components.UPIPaySheet
@@ -69,10 +70,12 @@ enum class ZenithNavScreen {
 class MainActivity : ComponentActivity() {
 
     private val viewModel: CashFlowViewModel by viewModels()
+    private var pendingQuickAction by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        UpiNotificationListenerService.ensureListenerBound(this)
         checkNotificationLaunch(intent)
 
         setContent {
@@ -197,7 +200,11 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                             ZenithNavScreen.MAIN -> {
-                                CashFlowMainApp(viewModel = viewModel)
+                                CashFlowMainApp(
+                                    viewModel = viewModel,
+                                    quickAction = pendingQuickAction,
+                                    onQuickActionConsumed = { pendingQuickAction = null }
+                                )
                             }
                         }
                     }
@@ -213,6 +220,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        UpiNotificationListenerService.ensureListenerBound(this)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -221,6 +233,18 @@ class MainActivity : ComponentActivity() {
 
     private fun checkNotificationLaunch(intent: Intent?) {
         if (intent == null) return
+        if (intent.hasExtra("extra_open_tab")) {
+            val targetTab = intent.getIntExtra("extra_open_tab", 0).coerceIn(0, 4)
+            viewModel.setTab(targetTab)
+            intent.removeExtra("extra_open_tab")
+        }
+        if (intent.hasExtra("extra_quick_action")) {
+            val action = intent.getStringExtra("extra_quick_action")
+            intent.removeExtra("extra_quick_action")
+            if (!action.isNullOrBlank()) {
+                pendingQuickAction = action
+            }
+        }
         if (intent.hasExtra("extra_upi_amount")) {
             val amount = intent.getDoubleExtra("extra_upi_amount", 0.0)
             val payee = intent.getStringExtra("extra_upi_payee") ?: "Merchant"
@@ -228,6 +252,7 @@ class MainActivity : ComponentActivity() {
             val utr = intent.getStringExtra("extra_upi_utr")
             val vpa = intent.getStringExtra("extra_upi_vpa")
             val app = intent.getStringExtra("extra_upi_app") ?: "UPI"
+            val isDebit = intent.getBooleanExtra("extra_upi_is_debit", true)
 
             val payment = com.zenith.app.data.upi.ExtractedUpiPayment(
                 amount = amount,
@@ -235,7 +260,8 @@ class MainActivity : ComponentActivity() {
                 detectedCategory = category,
                 upiTransactionId = utr,
                 upiId = vpa,
-                sourceApp = app
+                sourceApp = app,
+                isDebit = isDebit
             )
             viewModel.showDetectedUpiPayment(payment)
         }
@@ -401,10 +427,28 @@ private fun AppLockOverlay(
 }
 
 @Composable
-fun CashFlowMainApp(viewModel: CashFlowViewModel) {
+fun CashFlowMainApp(
+    viewModel: CashFlowViewModel,
+    quickAction: String? = null,
+    onQuickActionConsumed: () -> Unit = {}
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val pendingUpiDetections by viewModel.pendingUpiDetections.collectAsStateWithLifecycle()
+    val recurringSuggestions by viewModel.recurringSuggestions.collectAsStateWithLifecycle()
     val syncUiState by viewModel.syncUiState.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(quickAction) {
+        when (quickAction) {
+            "add" -> showAddDialog = true
+            "upi_pay" -> viewModel.openUpiDialog()
+            "scan_qr" -> viewModel.openUpiScanDialog()
+            "voice" -> viewModel.openVoiceDialog()
+        }
+        if (quickAction != null) {
+            onQuickActionConsumed()
+        }
+    }
     val context = LocalContext.current
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -503,7 +547,12 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                                 ).show()
                             }
                         },
-                        onToggleHideBalance = { viewModel.toggleBalanceHidden() }
+                        onToggleHideBalance = { viewModel.toggleBalanceHidden() },
+                        pendingDetections = pendingUpiDetections,
+                        onReviewPendingDetection = { payment -> viewModel.showDetectedUpiPayment(payment) },
+                        onQuickLogPendingDetection = { payment -> viewModel.logPendingUpiDetection(payment) },
+                        onDismissPendingDetection = { payment -> viewModel.dismissPendingUpiDetection(payment) },
+                        onDismissAllPendingDetections = { viewModel.dismissAllPendingUpiDetections() }
                     )
                     1 -> TransactionsScreen(
                         state = uiState,
@@ -553,7 +602,13 @@ fun CashFlowMainApp(viewModel: CashFlowViewModel) {
                         },
                         onDeleteAutoPayReminder = { reminder -> viewModel.deleteAutoPayReminder(reminder) },
                         onTogglePauseAutoPayReminder = { reminder -> viewModel.togglePauseAutoPayReminder(reminder) },
-                        onMarkAutoPayPaid = { reminder -> viewModel.markAutoPayPaidAndLogTransaction(reminder) }
+                        onMarkAutoPayPaid = { reminder -> viewModel.markAutoPayPaidAndLogTransaction(reminder) },
+                        recurringSuggestions = recurringSuggestions,
+                        onAddRecurringSuggestion = { suggestion ->
+                            viewModel.acceptRecurringSuggestion(suggestion)
+                            android.widget.Toast.makeText(context, "Added ${suggestion.title} to Auto-Pay reminders", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        onDismissRecurringSuggestion = { suggestion -> viewModel.dismissRecurringSuggestion(suggestion) }
                     )
                     3 -> AnalyticsScreen(
                         state = uiState,

@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <queries>
         <intent>
@@ -72,6 +73,9 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <meta-data
@@ -106,6 +110,29 @@
                 <action android:name="com.zenith.app.ACTION_LOG_EXPENSE" />
                 <action android:name="com.zenith.app.ACTION_DISMISS_EXPENSE" />
             </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.zenith.app.data.notifications.ReminderAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="com.zenith.app.ACTION_DAILY_REMINDER_CHECK" />
+                <action android:name="com.zenith.app.ACTION_MARK_BILL_PAID" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.zenith.app.widget.ZenithSummaryWidgetProvider"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/zenith_widget_info" />
         </receiver>
     </application>
 </manifest>

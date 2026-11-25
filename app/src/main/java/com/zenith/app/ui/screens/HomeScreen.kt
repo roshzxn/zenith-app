@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
+import com.zenith.app.data.upi.ExtractedUpiPayment
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.RollingCounterText
 import com.zenith.app.ui.components.TransactionDetailModal
@@ -61,7 +62,12 @@ fun HomeScreen(
     currentUserName: String = "You",
     syncUiState: SyncUiState = SyncUiState.Idle,
     onSyncNow: (() -> Unit)? = null,
-    onToggleHideBalance: () -> Unit = {}
+    onToggleHideBalance: () -> Unit = {},
+    pendingDetections: List<ExtractedUpiPayment> = emptyList(),
+    onReviewPendingDetection: ((ExtractedUpiPayment) -> Unit)? = null,
+    onQuickLogPendingDetection: ((ExtractedUpiPayment) -> Unit)? = null,
+    onDismissPendingDetection: ((ExtractedUpiPayment) -> Unit)? = null,
+    onDismissAllPendingDetections: (() -> Unit)? = null
 ) {
     var selectedTransactionForDetails by remember { mutableStateOf<TransactionEntity?>(null) }
 
@@ -578,6 +584,124 @@ fun HomeScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // --- 3B. MISSED / PENDING DETECTED UPI PAYMENTS RECOVERY QUEUE ---
+        if (pendingDetections.isNotEmpty()) {
+            item {
+                val latest = pendingDetections.first()
+                CleanCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onReviewPendingDetection?.invoke(latest) }
+                        .testTag("card_pending_upi_detections"),
+                    backgroundColor = ZenithTheme.accentCyan.copy(alpha = 0.10f),
+                    borderColor = ZenithTheme.accentCyan.copy(alpha = 0.30f),
+                    contentPadding = PaddingValues(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(ZenithTheme.accentCyan.copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.NotificationsActive,
+                                    contentDescription = null,
+                                    tint = ZenithTheme.accentCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "Pending UPI Detection",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ZenithTheme.textPrimary
+                                    )
+                                    if (pendingDetections.size > 1) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = ZenithTheme.accentCyan.copy(alpha = 0.18f)
+                                        ) {
+                                            Text(
+                                                text = "${pendingDetections.size} queued",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = ZenithTheme.accentCyan,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                val amtLabel = if (state.isBalanceHidden) {
+                                    "${state.currencySymbol}••••"
+                                } else {
+                                    "${state.currencySymbol}${String.format(Locale.US, "%,.0f", latest.amount)}"
+                                }
+                                Text(
+                                    text = "$amtLabel ${if (latest.isDebit) "at" else "from"} ${latest.payeeName} (${latest.sourceApp})",
+                                    fontSize = 11.5.sp,
+                                    color = ZenithTheme.textSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                onClick = { onQuickLogPendingDetection?.invoke(latest) },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "Log",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ZenithTheme.accentGreen
+                                )
+                            }
+                            if (pendingDetections.size > 1 && onDismissAllPendingDetections != null) {
+                                TextButton(
+                                    onClick = { onDismissAllPendingDetections.invoke() },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "Clear",
+                                        fontSize = 11.sp,
+                                        color = ZenithTheme.textSecondary
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { onDismissPendingDetection?.invoke(latest) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss detection",
+                                    tint = ZenithTheme.textSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+            }
         }
 
         // --- 4. UPCOMING AUTO-PAY & BILLS SMART CARD ---

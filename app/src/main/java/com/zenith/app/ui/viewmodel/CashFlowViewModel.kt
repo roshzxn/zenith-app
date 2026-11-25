@@ -14,10 +14,16 @@ import com.zenith.app.data.models.*
 import com.zenith.app.data.network.AuthResult
 import com.zenith.app.data.network.SupabaseClientConfig
 import com.zenith.app.data.repository.CashFlowRepository
+import com.zenith.app.data.notifications.ReminderAlertEngine
 import com.zenith.app.data.upi.ExtractedUpiPayment
+import com.zenith.app.data.upi.MerchantCategoryRules
+import com.zenith.app.data.upi.PendingUpiDetectionStore
+import com.zenith.app.data.upi.RecurringPatternDetector
+import com.zenith.app.data.upi.RecurringSuggestion
 import com.zenith.app.data.upi.UpiNotificationListenerService
 import com.zenith.app.data.upi.UpiPaymentBus
 import com.zenith.app.data.util.CategoryIconHelper
+import com.zenith.app.widget.ZenithSummaryWidgetProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -174,6 +180,17 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     )
     val isUpiAutoDetectionEnabled: StateFlow<Boolean> = _isUpiAutoDetectionEnabled.asStateFlow()
 
+    private val _isUpiInstantAutoSaveEnabled = MutableStateFlow(
+        UpiNotificationListenerService.isInstantAutoSaveEnabled(application)
+    )
+    val isUpiInstantAutoSaveEnabled: StateFlow<Boolean> = _isUpiInstantAutoSaveEnabled.asStateFlow()
+
+    val pendingUpiDetections: StateFlow<List<ExtractedUpiPayment>> = PendingUpiDetectionStore.pendingDetections
+
+    private val _dismissedRecurringKeys = MutableStateFlow(
+        prefs.getStringSet("dismissed_recurring_keys", emptySet())?.toSet() ?: emptySet()
+    )
+
     private val _userSupabaseId = MutableStateFlow(prefs.getString("user_supabase_id", null))
     val userSupabaseId: StateFlow<String?> = _userSupabaseId.asStateFlow()
 
@@ -188,6 +205,9 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         get() = _activeUserName.value ?: authService.currentUser.value?.email?.substringBefore("@") ?: "You"
 
     init {
+        MerchantCategoryRules.init(application)
+        PendingUpiDetectionStore.init(application)
+
         val database = CashFlowDatabase.getDatabase(application)
         repository = CashFlowRepository(
             transactionDao = database.transactionDao(),
@@ -250,9 +270,10 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                 val dupByUtr = payment.upiTransactionId?.takeIf { it.isNotBlank() }?.let {
                     repository.getTransactionByUtr(it)
                 }
+                val expectedType = if (payment.isDebit) TransactionType.EXPENSE else TransactionType.INCOME
                 val dupNearby = repository.findPotentialDuplicates(
                     amount = payment.amount,
-                    type = TransactionType.EXPENSE,
+                    type = expectedType,
                     scope = FinanceScope.PERSONAL,
                     startMillis = payment.timestamp - 300_000L,
                     endMillis = payment.timestamp + 300_000L
@@ -265,6 +286,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
 
         viewModelScope.launch(Dispatchers.IO) {
             repository.deduplicateTransactions()
+            ReminderAlertEngine.checkAndNotify(getApplication())
         }
     }
 
@@ -301,6 +323,14 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     fun setNotificationsEnabled(enabled: Boolean) {
         _isNotificationsEnabled.value = enabled
         prefs.edit().putBoolean("is_notifications_enabled", enabled).apply()
+        val app = getApplication<Application>()
+        if (enabled) {
+            ReminderAlertEngine.ensureChannel(app)
+            ReminderAlertEngine.scheduleDailyCheck(app)
+            viewModelScope.launch(Dispatchers.IO) {
+                ReminderAlertEngine.checkAndNotify(app)
+            }
+        }
     }
 
     fun setAppLockEnabled(enabled: Boolean) {
@@ -313,12 +343,72 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         UpiNotificationListenerService.setAutoDetectionEnabled(getApplication<Application>(), enabled)
     }
 
+    fun setUpiInstantAutoSaveEnabled(enabled: Boolean) {
+        _isUpiInstantAutoSaveEnabled.value = enabled
+        UpiNotificationListenerService.setInstantAutoSaveEnabled(getApplication<Application>(), enabled)
+    }
+
     fun simulateTestUpiPayment(
         amount: Double = 150.0,
         payeeName: String = "Chai Point",
         sourceApp: String = "Google Pay"
     ) {
         UpiNotificationListenerService.simulateTestPayment(getApplication<Application>(), amount, payeeName, sourceApp)
+    }
+
+    fun simulateTestShadeNotification(
+        amount: Double = 150.0,
+        payeeName: String = "Chai Point",
+        sourceApp: String = "Google Pay"
+    ): Boolean {
+        return UpiNotificationListenerService.simulateShadeNotification(getApplication<Application>(), amount, payeeName, sourceApp)
+    }
+
+    fun logPendingUpiDetection(payment: ExtractedUpiPayment) {
+        MerchantCategoryRules.learn(payment.payeeName, payment.upiId, payment.detectedCategory)
+        addUpiTransaction(
+            title = payment.payeeName,
+            amount = payment.amount,
+            category = payment.detectedCategory,
+            upiId = payment.upiId,
+            upiTransactionId = payment.upiTransactionId,
+            dateMillis = payment.timestamp,
+            note = if (payment.isDebit) "Logged from missed UPI alerts" else "Credited from missed UPI alerts",
+            type = if (payment.isDebit) TransactionType.EXPENSE else TransactionType.INCOME
+        )
+    }
+
+    fun dismissPendingUpiDetection(payment: ExtractedUpiPayment) {
+        PendingUpiDetectionStore.removeItem(payment, getApplication())
+        UpiNotificationListenerService.cancelNotificationFor(getApplication(), payment.amount, payment.payeeName)
+    }
+
+    fun dismissAllPendingUpiDetections() {
+        PendingUpiDetectionStore.clearAll(getApplication())
+    }
+
+    fun acceptRecurringSuggestion(suggestion: RecurringSuggestion) {
+        val cal = Calendar.getInstance().apply { timeInMillis = suggestion.nextEstimatedDueMillis }
+        saveAutoPayReminder(
+            title = suggestion.title,
+            amount = suggestion.amount,
+            category = suggestion.category,
+            paymentMethod = suggestion.paymentMethod,
+            frequency = suggestion.frequency,
+            dueDayOfMonth = cal.get(Calendar.DAY_OF_MONTH),
+            nextDueDateMillis = suggestion.nextEstimatedDueMillis,
+            isAutoDebit = suggestion.paymentMethod.contains("UPI", ignoreCase = true) ||
+                suggestion.paymentMethod.contains("Pay", ignoreCase = true),
+            reminderDaysBefore = 2,
+            notes = "Auto-detected (${suggestion.occurrenceCount} matching payments)"
+        )
+    }
+
+    fun dismissRecurringSuggestion(suggestion: RecurringSuggestion) {
+        val key = RecurringPatternDetector.normalizeKey(suggestion.title)
+        val updated = _dismissedRecurringKeys.value + key
+        _dismissedRecurringKeys.value = updated
+        prefs.edit().putStringSet("dismissed_recurring_keys", updated).apply()
     }
 
     fun updateUserName(newName: String) {
@@ -345,6 +435,18 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     ) { (txList, catList, budgetList), (goalList, scannedList, autoPayList) ->
         BaseData(txList, catList, budgetList, goalList, scannedList, autoPayList)
     }
+
+    val recurringSuggestions: StateFlow<List<RecurringSuggestion>> = combine(
+        repository.allTransactions,
+        repository.allAutoPayReminders,
+        _dismissedRecurringKeys
+    ) { txs, reminders, dismissed ->
+        RecurringPatternDetector.detectSuggestions(
+            transactions = txs,
+            existingReminders = reminders,
+            dismissedKeys = dismissed
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val filterState: Flow<FilterState> = combine(
         _searchQuery,
@@ -511,6 +613,9 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             repository.wipeLocalDatabase()
             repository.reseedDefaultCategories()
             db.userProfileDao().deleteAllProfiles()
+            MerchantCategoryRules.clear()
+            PendingUpiDetectionStore.clearAll(app)
+            ZenithSummaryWidgetProvider.requestUpdate(app)
             Log.d("CashFlowVM", "clearLocalUserCache: Local user data purged successfully.")
         } catch (e: Exception) {
             Log.w("CashFlowVM", "clearLocalUserCache failed: ${e.message}")
@@ -695,6 +800,10 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                     syncStatus = "PENDING_CREATE"
                 )
             )
+            ZenithSummaryWidgetProvider.requestUpdate(getApplication())
+            viewModelScope.launch(Dispatchers.IO) {
+                ReminderAlertEngine.checkAndNotify(getApplication())
+            }
             triggerBackgroundSync()
         }
     }
@@ -708,7 +817,8 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         upiId: String?,
         upiTransactionId: String?,
         dateMillis: Long = System.currentTimeMillis(),
-        note: String = "UPI Payment"
+        note: String = "UPI Payment",
+        type: TransactionType = TransactionType.EXPENSE
     ) {
         if (amount <= 0.0 || amount.isNaN() || amount.isInfinite()) return
         UpiPaymentBus.tryClaimRecording(amount, upiTransactionId)
@@ -719,7 +829,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                 }
                 val existingNearby = repository.findPotentialDuplicates(
                     amount = amount,
-                    type = TransactionType.EXPENSE,
+                    type = type,
                     scope = FinanceScope.PERSONAL,
                     startMillis = dateMillis - 300_000L,
                     endMillis = dateMillis + 300_000L
@@ -731,7 +841,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                         TransactionEntity(
                             title = title,
                             amount = amount,
-                            type = TransactionType.EXPENSE,
+                            type = type,
                             category = category,
                             categoryIconName = iconName,
                             paymentMethod = "UPI",
@@ -749,20 +859,29 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                     try {
                         Log.d(
                             "CashFlowViewModel",
-                            "Recorded UPI expense amount=$amount maskedVpa=${com.zenith.app.data.upi.UpiService.maskVpa(upiId)} hasRef=${!upiTransactionId.isNullOrBlank()}"
+                            "Recorded UPI ${type.name} amount=$amount maskedVpa=${com.zenith.app.data.upi.UpiService.maskVpa(upiId)} hasRef=${!upiTransactionId.isNullOrBlank()}"
                         )
                     } catch (_: Throwable) {
                     }
                     triggerBackgroundSync()
                 }
                 UpiPaymentBus.markRecorded(amount, upiTransactionId)
+                PendingUpiDetectionStore.markResolved(amount, upiTransactionId, getApplication())
+                MerchantCategoryRules.learn(title, upiId, category)
                 UpiNotificationListenerService.cancelNotificationFor(getApplication(), amount, title)
+                ZenithSummaryWidgetProvider.requestUpdate(getApplication())
+                viewModelScope.launch(Dispatchers.IO) {
+                    ReminderAlertEngine.checkAndNotify(getApplication())
+                }
                 _detectedUpiPayment.value = null
             }
         }
     }
 
     fun dismissDetectedUpiPayment() {
+        _detectedUpiPayment.value?.let {
+            PendingUpiDetectionStore.removeItem(it, getApplication())
+        }
         _detectedUpiPayment.value = null
         UpiPaymentBus.clearPending()
     }
@@ -778,25 +897,33 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         upiId: String?,
         upiTransactionId: String?
     ) {
-        val ts = _detectedUpiPayment.value?.timestamp ?: System.currentTimeMillis()
+        val detected = _detectedUpiPayment.value
+        val ts = detected?.timestamp ?: System.currentTimeMillis()
+        val isDebit = detected?.isDebit ?: true
+        val txnType = if (isDebit) TransactionType.EXPENSE else TransactionType.INCOME
+        val noteText = if (isDebit) "UPI Payment" else "UPI Credit"
         addUpiTransaction(
             title = title,
             amount = amount,
             category = category,
             upiId = upiId,
             upiTransactionId = upiTransactionId,
-            dateMillis = ts
+            dateMillis = ts,
+            note = noteText,
+            type = txnType
         )
     }
 
     fun updateTransaction(transaction: TransactionEntity) {
         viewModelScope.launch {
+            MerchantCategoryRules.learn(transaction.title, transaction.upiId, transaction.category)
             repository.updateTransaction(
                 transaction.copy(
                     categoryIconName = CategoryIconHelper.iconNameForCategory(transaction.category),
                     syncStatus = "PENDING_UPDATE"
                 )
             )
+            ZenithSummaryWidgetProvider.requestUpdate(getApplication())
             triggerBackgroundSync()
         }
     }
@@ -804,6 +931,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     fun deleteTransaction(transaction: TransactionEntity) {
         viewModelScope.launch {
             repository.deleteTransaction(transaction)
+            ZenithSummaryWidgetProvider.requestUpdate(getApplication())
             triggerBackgroundSync()
         }
     }
@@ -1041,6 +1169,10 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                 updatedAt = System.currentTimeMillis()
             )
             repository.saveAutoPayReminder(reminder)
+            ZenithSummaryWidgetProvider.requestUpdate(getApplication())
+            viewModelScope.launch(Dispatchers.IO) {
+                ReminderAlertEngine.checkAndNotify(getApplication())
+            }
             triggerBackgroundSync()
         }
     }
@@ -1048,6 +1180,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     fun deleteAutoPayReminder(reminder: AutoPayReminderEntity) {
         viewModelScope.launch {
             repository.deleteAutoPayReminder(reminder)
+            ZenithSummaryWidgetProvider.requestUpdate(getApplication())
             triggerBackgroundSync()
         }
     }
@@ -1382,6 +1515,9 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch(Dispatchers.IO) {
             repository.wipeLocalDatabase()
             repository.reseedDefaultCategories()
+            MerchantCategoryRules.clear()
+            PendingUpiDetectionStore.clearAll(getApplication())
+            ZenithSummaryWidgetProvider.requestUpdate(getApplication())
         }
     }
 
