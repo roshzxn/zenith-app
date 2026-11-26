@@ -21,6 +21,7 @@ enum class FinanceScope {
         Index(value = ["familyId", "isDeleted"]),
         Index(value = ["syncStatus"]),
         Index(value = ["serverId"]),
+        Index(value = ["upiTransactionId"]),
         Index(value = ["category"]),
         Index(value = ["type"])
     ]
@@ -44,7 +45,8 @@ data class TransactionEntity(
     val serverId: String? = null,
     val syncStatus: String = "PENDING_CREATE",
     val updatedAt: Long = System.currentTimeMillis(),
-    val isDeleted: Boolean = false
+    val isDeleted: Boolean = false,
+    val customLabel: String = ""
 )
 
 @Entity(
@@ -70,6 +72,7 @@ data class CategoryEntity(
         Index(value = ["monthYear", "isDeleted"]),
         Index(value = ["financeScope", "isDeleted"]),
         Index(value = ["familyId", "isDeleted"]),
+        Index(value = ["serverId"]),
         Index(value = ["syncStatus"])
     ]
 )
@@ -94,6 +97,7 @@ data class BudgetEntity(
         Index(value = ["targetDateMillis"]),
         Index(value = ["financeScope", "isDeleted"]),
         Index(value = ["familyId", "isDeleted"]),
+        Index(value = ["serverId"]),
         Index(value = ["syncStatus"])
     ]
 )
@@ -181,6 +185,7 @@ data class ReceiptItemEntity(
         Index(value = ["nextDueDateMillis", "isDeleted"]),
         Index(value = ["financeScope", "isDeleted"]),
         Index(value = ["familyId", "isDeleted"]),
+        Index(value = ["serverId"]),
         Index(value = ["syncStatus"])
     ]
 )
@@ -204,5 +209,149 @@ data class AutoPayReminderEntity(
     val syncStatus: String = "PENDING_CREATE",
     val updatedAt: Long = System.currentTimeMillis(),
     val isDeleted: Boolean = false
+)
+
+@Entity(
+    tableName = "families",
+    indices = [
+        Index(value = ["ownerId"]),
+        Index(value = ["isDeleted"])
+    ]
+)
+data class FamilyEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val avatarEmoji: String = "🏠",
+    val description: String = "",
+    val ownerId: String = "",
+    val monthlyBudgetLimit: Double = 0.0,
+    val syncStatus: String = "SYNCED",
+    val isDeleted: Boolean = false,
+    val updatedAt: Long = System.currentTimeMillis(),
+    val familyLabel: String = ""
+)
+
+@Entity(
+    tableName = "family_members",
+    indices = [
+        Index(value = ["familyId", "status"]),
+        Index(value = ["userId"])
+    ]
+)
+data class FamilyMemberEntity(
+    @PrimaryKey val id: String,
+    val familyId: String,
+    val userId: String,
+    val displayName: String,
+    val avatarEmoji: String = "🙂",
+    val avatarColor: String = "#10B981",
+    val role: String = "MEMBER",
+    val status: String = "ACTIVE",
+    val joinedAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+    val memberLabel: String = ""
+)
+
+@Entity(
+    tableName = "family_categories",
+    indices = [
+        Index(value = ["familyId", "isDeleted"]),
+        Index(value = ["familyId", "name", "type"], unique = true)
+    ]
+)
+data class FamilyCategoryEntity(
+    @PrimaryKey val id: String,
+    val familyId: String,
+    val name: String,
+    val iconName: String = "Category",
+    val colorHex: String = "#10B981",
+    val type: TransactionType = TransactionType.EXPENSE,
+    val isDefault: Boolean = false,
+    val createdBy: String? = null,
+    val isDeleted: Boolean = false,
+    val syncStatus: String = "SYNCED",
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "family_transactions",
+    indices = [
+        Index(value = ["familyId", "isDeleted", "transactionDateMillis"]),
+        Index(value = ["familyId", "paidBy"]),
+        Index(value = ["familyId", "createdBy"]),
+        Index(value = ["clientTxId"], unique = true),
+        Index(value = ["syncStatus"])
+    ]
+)
+data class FamilyTransactionEntity(
+    @PrimaryKey val id: String,
+    val familyId: String,
+    val createdBy: String,
+    val paidBy: String? = null,
+    val createdByName: String = "Member",
+    val paidByName: String = "Member",
+    val transactionType: TransactionType = TransactionType.EXPENSE,
+    val amount: Double,
+    val categoryId: String? = null,
+    val categoryName: String = "Other",
+    val title: String,
+    val description: String = "",
+    val paymentMethod: String = "UPI",
+    val upiId: String? = null,
+    val upiTransactionId: String? = null,
+    val transactionDateMillis: Long = System.currentTimeMillis(),
+    val clientTxId: String,
+    val syncVersion: Long = 1L,
+    val syncStatus: String = "PENDING_CREATE",
+    val isDeleted: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+    val customLabel: String = ""
+)
+
+@Entity(
+    tableName = "family_budgets",
+    indices = [
+        Index(value = ["familyId", "isDeleted"]),
+        Index(value = ["syncStatus"])
+    ]
+)
+data class FamilyBudgetEntity(
+    @PrimaryKey val id: String,
+    val familyId: String,
+    val categoryId: String? = null,
+    val categoryName: String,
+    val monthlyLimit: Double,
+    val monthYear: String = "2026-07",
+    val periodType: String = "MONTHLY",
+    val updatedBy: String? = null,
+    val syncStatus: String = "PENDING_CREATE",
+    val isDeleted: Boolean = false,
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "family_messages",
+    indices = [
+        Index(value = ["familyId", "isDeleted", "createdAtMillis"]),
+        Index(value = ["clientMsgId"], unique = true),
+        Index(value = ["syncStatus"])
+    ]
+)
+data class FamilyMessageEntity(
+    @PrimaryKey val id: String,
+    val familyId: String,
+    val senderUserId: String,
+    val senderName: String,
+    val senderAvatar: String = "🙂",
+    val messageType: String = "TEXT",
+    val body: String,
+    val relatedTransactionId: String? = null,
+    val replyToMessageId: String? = null,
+    val clientMsgId: String,
+    val syncStatus: String = "PENDING_CREATE",
+    val isDeleted: Boolean = false,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
 )
 

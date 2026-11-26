@@ -432,6 +432,9 @@ object UpiService {
         }
 
         val hasSign = rawPairs.any { it.substringBefore("=").equals("sign", ignoreCase = true) }
+        val isOverridingExplicitSignedAmount = hasSign &&
+            existingAmRaw != null &&
+            normalizeAmount(existingAmRaw) != normalizedAmount
         val updatedPairs = mutableListOf<String>()
         var amUpdated = false
         var hasCurrency = false
@@ -440,6 +443,10 @@ object UpiService {
             val key = pair.substringBefore("=")
             if (key.equals("cu", ignoreCase = true)) {
                 hasCurrency = true
+            }
+            if (isOverridingExplicitSignedAmount && key.equals("sign", ignoreCase = true)) {
+                // Modifying a signed dynamic QR's non-empty amount invalidates the original cryptographic signature
+                continue
             }
             if (key.equals("am", ignoreCase = true)) {
                 updatedPairs.add("$key=$normalizedAmount")

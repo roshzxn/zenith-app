@@ -11,6 +11,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -20,19 +22,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.zenith.app.data.models.AutoPayReminderEntity
 import com.zenith.app.data.models.BudgetEntity
 import com.zenith.app.data.models.CategoryEntity
 import com.zenith.app.data.models.SavingsGoalEntity
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
+import com.zenith.app.data.repository.FamilyTxAttribution
 import com.zenith.app.data.upi.RecurringSuggestion
+import com.zenith.app.domain.FamilyMemberInfo
+import com.zenith.app.domain.FinancialMode
 import com.zenith.app.ui.components.AddAutoPayReminderDialog
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.GlassCard
@@ -40,6 +51,45 @@ import com.zenith.app.ui.theme.ZenithTheme
 import com.zenith.app.ui.viewmodel.CashFlowUiState
 import java.text.SimpleDateFormat
 import java.util.*
+
+private val BUDGET_MONTH_FMT = ThreadLocal.withInitial { SimpleDateFormat("yyyy-MM", Locale.US) }
+private val BUDGET_YEAR_FMT = ThreadLocal.withInitial { SimpleDateFormat("yyyy", Locale.US) }
+
+internal data class BudgetOverviewTotals(
+    val totalBudgeted: Double,
+    val totalSpent: Double,
+    val hasOverallCap: Boolean
+)
+
+internal data class MemberSpendContribution(
+    val userId: String,
+    val displayName: String,
+    val emoji: String,
+    val amount: Double
+)
+
+private fun TransactionEntity.matchesBudgetWindow(
+    budget: BudgetEntity,
+    sdfMonth: SimpleDateFormat,
+    sdfYear: SimpleDateFormat,
+    nowCal: Calendar
+): Boolean {
+    if (type != TransactionType.EXPENSE) return false
+    if (!budget.categoryName.equals("Overall", ignoreCase = true) && category != budget.categoryName) {
+        return false
+    }
+    val date = Date(dateMillis)
+    return when (budget.periodType) {
+        "MONTHLY" -> budget.monthYear.isNotBlank() && sdfMonth.format(date) == budget.monthYear
+        "YEARLY" -> budget.monthYear.length >= 4 && sdfYear.format(date) == budget.monthYear.take(4)
+        "WEEKLY" -> {
+            val txCal = Calendar.getInstance().apply { timeInMillis = dateMillis }
+            txCal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) &&
+                txCal.get(Calendar.WEEK_OF_YEAR) == nowCal.get(Calendar.WEEK_OF_YEAR)
+        }
+        else -> true
+    }
+}
 
 /**
  * Computes total expenses for [budget] inside its configured period window
@@ -50,27 +100,109 @@ internal fun calculateBudgetSpent(
     transactions: List<TransactionEntity>,
     nowMillis: Long = System.currentTimeMillis()
 ): Double {
-    val sdfMonth = SimpleDateFormat("yyyy-MM", Locale.US)
-    val sdfYear = SimpleDateFormat("yyyy", Locale.US)
+    val sdfMonth = BUDGET_MONTH_FMT.get()!!
+    val sdfYear = BUDGET_YEAR_FMT.get()!!
     val nowCal = Calendar.getInstance().apply { timeInMillis = nowMillis }
 
     return transactions
         .asSequence()
-        .filter { it.type == TransactionType.EXPENSE && it.category == budget.categoryName }
-        .filter { tx ->
-            val date = Date(tx.dateMillis)
-            when (budget.periodType) {
-                "MONTHLY" -> budget.monthYear.isNotBlank() && sdfMonth.format(date) == budget.monthYear
-                "YEARLY" -> budget.monthYear.length >= 4 && sdfYear.format(date) == budget.monthYear.take(4)
-                "WEEKLY" -> {
-                    val txCal = Calendar.getInstance().apply { timeInMillis = tx.dateMillis }
-                    txCal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) &&
-                        txCal.get(Calendar.WEEK_OF_YEAR) == nowCal.get(Calendar.WEEK_OF_YEAR)
-                }
-                else -> true
-            }
-        }
+        .filter { it.matchesBudgetWindow(budget, sdfMonth, sdfYear, nowCal) }
         .sumOf { it.amount }
+}
+
+internal fun calculateBudgetSpentByMember(
+    budget: BudgetEntity,
+    transactions: List<TransactionEntity>,
+    attributionByServerId: Map<String, FamilyTxAttribution>,
+    members: List<FamilyMemberInfo>,
+    nowMillis: Long = System.currentTimeMillis()
+): List<MemberSpendContribution> {
+    val sdfMonth = BUDGET_MONTH_FMT.get()!!
+    val sdfYear = BUDGET_YEAR_FMT.get()!!
+    val nowCal = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val memberByUserId = members.associateBy { it.userId }
+    val totals = LinkedHashMap<String, MemberSpendContribution>()
+
+    transactions.forEach { tx ->
+        if (!tx.matchesBudgetWindow(budget, sdfMonth, sdfYear, nowCal)) return@forEach
+        val attr = tx.serverId?.let { attributionByServerId[it] }
+        val userId = attr?.paidByUserId ?: tx.createdByUserId ?: "unknown"
+        val member = memberByUserId[userId]
+        val name = (member?.displayName ?: attr?.paidByName ?: "Member").trim().ifBlank { "Member" }
+        val emoji = member?.avatarEmoji ?: "🙂"
+        val prev = totals[userId]
+        totals[userId] = if (prev == null) {
+            MemberSpendContribution(userId = userId, displayName = name, emoji = emoji, amount = tx.amount)
+        } else {
+            prev.copy(amount = prev.amount + tx.amount)
+        }
+    }
+    return totals.values.sortedByDescending { it.amount }
+}
+
+internal fun computeBudgetOverviewTotals(
+    filteredBudgets: List<BudgetEntity>,
+    transactions: List<TransactionEntity>,
+    isFamilyMode: Boolean,
+    familyFallbackOverall: Double?,
+    selectedPeriodFilter: String,
+    nowMillis: Long = System.currentTimeMillis()
+): BudgetOverviewTotals {
+    val sdfMonth = BUDGET_MONTH_FMT.get()!!
+    val currentMonthYear = sdfMonth.format(Date(nowMillis))
+    val overallBudgets = filteredBudgets.filter { it.categoryName.equals("Overall", ignoreCase = true) }
+    val categoryBudgets = filteredBudgets.filterNot { it.categoryName.equals("Overall", ignoreCase = true) }
+
+    val explicitOverall = overallBudgets.firstOrNull()
+    if (explicitOverall != null) {
+        val categoryLimitSum = categoryBudgets.sumOf { it.monthlyLimit }
+        return BudgetOverviewTotals(
+            totalBudgeted = maxOf(explicitOverall.monthlyLimit, categoryLimitSum),
+            totalSpent = calculateBudgetSpent(explicitOverall, transactions, nowMillis),
+            hasOverallCap = true
+        )
+    }
+
+    if (familyFallbackOverall != null && (selectedPeriodFilter == "ALL" || selectedPeriodFilter == "MONTHLY")) {
+        val fallbackBudget = BudgetEntity(
+            categoryName = "Overall",
+            monthlyLimit = familyFallbackOverall,
+            monthYear = currentMonthYear,
+            periodType = "MONTHLY"
+        )
+        return BudgetOverviewTotals(
+            totalBudgeted = maxOf(familyFallbackOverall, categoryBudgets.sumOf { it.monthlyLimit }),
+            totalSpent = calculateBudgetSpent(fallbackBudget, transactions, nowMillis),
+            hasOverallCap = true
+        )
+    }
+
+    if (categoryBudgets.isNotEmpty()) {
+        return BudgetOverviewTotals(
+            totalBudgeted = categoryBudgets.sumOf { it.monthlyLimit },
+            totalSpent = categoryBudgets.sumOf { calculateBudgetSpent(it, transactions, nowMillis) },
+            hasOverallCap = false
+        )
+    }
+
+    val familyMonthSpend = if (isFamilyMode) {
+        calculateBudgetSpent(
+            BudgetEntity(
+                categoryName = "Overall",
+                monthlyLimit = 0.0,
+                monthYear = currentMonthYear,
+                periodType = "MONTHLY"
+            ),
+            transactions,
+            nowMillis
+        )
+    } else 0.0
+
+    return BudgetOverviewTotals(
+        totalBudgeted = 0.0,
+        totalSpent = familyMonthSpend,
+        hasOverallCap = false
+    )
 }
 
 @Composable
@@ -87,7 +219,9 @@ fun BudgetsAndGoalsScreen(
     onMarkAutoPayPaid: ((AutoPayReminderEntity) -> Unit)? = null,
     recurringSuggestions: List<RecurringSuggestion> = emptyList(),
     onAddRecurringSuggestion: ((RecurringSuggestion) -> Unit)? = null,
-    onDismissRecurringSuggestion: ((RecurringSuggestion) -> Unit)? = null
+    onDismissRecurringSuggestion: ((RecurringSuggestion) -> Unit)? = null,
+    onOpenFamilyChat: (() -> Unit)? = null,
+    bottomContentPadding: Dp = 144.dp
 ) {
     var showAddBudgetModal by remember { mutableStateOf(false) }
     var editingBudget by remember { mutableStateOf<BudgetEntity?>(null) }
@@ -103,27 +237,74 @@ fun BudgetsAndGoalsScreen(
     var autoPayToDelete by remember { mutableStateOf<AutoPayReminderEntity?>(null) }
 
     var selectedPeriodFilter by remember { mutableStateOf("ALL") }
+    val isFamilyMode = state.activeMode == FinancialMode.FAMILY
+    val canEditBudgets = !isFamilyMode || (state.activeFamilyRole?.canAdmin() == true)
 
-    val filteredBudgets = remember(state.budgets, selectedPeriodFilter) {
+    val filteredBudgets = remember(state.budgets, selectedPeriodFilter, isFamilyMode) {
         when (selectedPeriodFilter) {
             "MONTHLY" -> state.budgets.filter { it.periodType == "MONTHLY" }
             "WEEKLY" -> state.budgets.filter { it.periodType == "WEEKLY" }
+            "YEARLY" -> state.budgets.filter { it.periodType == "YEARLY" }
             "CUSTOM" -> state.budgets.filter { it.periodType == "CUSTOM" || it.periodType == "YEARLY" }
             else -> state.budgets
         }
     }
 
-    // Use allTransactions so Activity filters never skew Budget burn rates
-    val totalBudgeted = remember(filteredBudgets) { filteredBudgets.sumOf { it.monthlyLimit } }
-    val totalSpentOnBudgets = remember(filteredBudgets, state.allTransactions) {
-        filteredBudgets.sumOf { budget -> calculateBudgetSpent(budget, state.allTransactions) }
+    val familyFallbackOverall = remember(isFamilyMode, state.budgets, state.activeFamily) {
+        if (isFamilyMode && state.budgets.none { it.categoryName.equals("Overall", ignoreCase = true) }) {
+            (state.activeFamily?.monthlyBudgetLimit ?: 0.0).takeIf { it > 0.0 }
+        } else null
     }
+
+    // Use allTransactions so Activity filters never skew Budget burn rates, and avoid double-counting Overall + categories
+    val overviewTotals = remember(
+        filteredBudgets,
+        state.allTransactions,
+        isFamilyMode,
+        familyFallbackOverall,
+        selectedPeriodFilter
+    ) {
+        computeBudgetOverviewTotals(
+            filteredBudgets = filteredBudgets,
+            transactions = state.allTransactions,
+            isFamilyMode = isFamilyMode,
+            familyFallbackOverall = familyFallbackOverall,
+            selectedPeriodFilter = selectedPeriodFilter
+        )
+    }
+    val totalBudgeted = overviewTotals.totalBudgeted
+    val totalSpentOnBudgets = overviewTotals.totalSpent
     val totalRemaining = remember(totalBudgeted, totalSpentOnBudgets) { totalBudgeted - totalSpentOnBudgets }
     val overallProgress = remember(totalBudgeted, totalSpentOnBudgets) {
         if (totalBudgeted > 0) (totalSpentOnBudgets / totalBudgeted).toFloat().coerceIn(0f, 1f) else 0f
     }
     val overbudgetCount = remember(filteredBudgets, state.allTransactions) {
         filteredBudgets.count { budget -> calculateBudgetSpent(budget, state.allTransactions) > budget.monthlyLimit }
+    }
+    val overviewMemberSpend = remember(
+        isFamilyMode,
+        filteredBudgets,
+        state.allTransactions,
+        state.txAttributionByServerId,
+        state.activeFamilyMembers
+    ) {
+        if (!isFamilyMode) emptyList()
+        else {
+            val sdfMonth = BUDGET_MONTH_FMT.get()!!
+            val overallOrMonth = filteredBudgets.firstOrNull { it.categoryName.equals("Overall", ignoreCase = true) }
+                ?: BudgetEntity(
+                    categoryName = "Overall",
+                    monthlyLimit = 0.0,
+                    monthYear = sdfMonth.format(Date()),
+                    periodType = "MONTHLY"
+                )
+            calculateBudgetSpentByMember(
+                budget = overallOrMonth,
+                transactions = state.allTransactions,
+                attributionByServerId = state.txAttributionByServerId,
+                members = state.activeFamilyMembers
+            )
+        }
     }
 
     fun formatMoneyOrMask(amount: Double, decimals: Int = 2): String =
@@ -133,8 +314,9 @@ fun BudgetsAndGoalsScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 144.dp)
+            .padding(horizontal = 16.dp)
+            .testTag("budgets_lazy_column"),
+        contentPadding = PaddingValues(top = 16.dp, bottom = bottomContentPadding)
     ) {
         // --- 1. BUDGET HEALTH OVERVIEW CLEAN CARD ---
         item {
@@ -151,15 +333,20 @@ fun BudgetsAndGoalsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f, fill = false)) {
                         Text(
-                            text = "Budget Overview",
+                            text = if (isFamilyMode) "Shared Family Budget" else "Budget Overview",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             color = ZenithTheme.textPrimary
                         )
                         Text(
-                            text = "Tracking ${state.budgets.size} active spending limits",
+                            text = if (isFamilyMode && state.activeFamily != null) {
+                                val modeHint = if (canEditBudgets) "Admin controls active" else "Member view • Shared limits"
+                                "${state.activeFamily.avatarEmoji} ${state.activeFamily.name} • $modeHint"
+                            } else {
+                                "Tracking ${state.budgets.size} active spending limits"
+                            },
                             fontSize = 12.sp,
-                            color = ZenithTheme.textSecondary
+                            color = if (isFamilyMode) ZenithTheme.accentCyan else ZenithTheme.textSecondary
                         )
                     }
 
@@ -199,7 +386,7 @@ fun BudgetsAndGoalsScreen(
                 ) {
                     Column {
                         Text(
-                            text = "Total Spent",
+                            text = if (totalBudgeted <= 0.0 && isFamilyMode) "Spent This Month" else "Total Spent",
                             fontSize = 11.sp,
                             color = ZenithTheme.textSecondary
                         )
@@ -218,53 +405,102 @@ fun BudgetsAndGoalsScreen(
                             color = ZenithTheme.textSecondary
                         )
                         Text(
-                            text = formatMoneyOrMask(totalBudgeted),
+                            text = if (totalBudgeted > 0.0) formatMoneyOrMask(totalBudgeted) else "Not Set",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
-                            color = ZenithTheme.textPrimary
+                            color = if (totalBudgeted > 0.0) ZenithTheme.textPrimary else ZenithTheme.textMuted
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                if (totalBudgeted > 0.0) {
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                LinearProgressIndicator(
-                    progress = { overallProgress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(10.dp)
-                        .clip(CircleShape),
-                    color = when {
-                        overallProgress >= 1.0f -> ZenithTheme.accentRed
-                        overallProgress >= 0.8f -> ZenithTheme.accentAmber
-                        else -> ZenithTheme.accentGreen
-                    },
-                    trackColor = ZenithTheme.cardVariantSurface
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = if (totalRemaining >= 0) {
-                            "Remaining: ${formatMoneyOrMask(totalRemaining)}"
-                        } else {
-                            "Over budget by ${formatMoneyOrMask(-totalRemaining)}"
+                    LinearProgressIndicator(
+                        progress = { overallProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(10.dp)
+                            .clip(CircleShape),
+                        color = when {
+                            overallProgress >= 1.0f -> ZenithTheme.accentRed
+                            overallProgress >= 0.8f -> ZenithTheme.accentAmber
+                            else -> ZenithTheme.accentGreen
                         },
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (totalRemaining < 0) ZenithTheme.accentRed else ZenithTheme.accentGreen
+                        trackColor = ZenithTheme.cardVariantSurface,
+                        gapSize = 0.dp,
+                        drawStopIndicator = {}
                     )
 
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (totalRemaining >= 0) {
+                                "Remaining: ${formatMoneyOrMask(totalRemaining)}"
+                            } else {
+                                "Over budget by ${formatMoneyOrMask(-totalRemaining)}"
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (totalRemaining < 0) ZenithTheme.accentRed else ZenithTheme.accentGreen
+                        )
+
+                        Text(
+                            text = "${(overallProgress * 100).toInt()}% Used",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ZenithTheme.textPrimary
+                        )
+                    }
+                } else {
+                    Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "${(overallProgress * 100).toInt()}% Used",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = ZenithTheme.textPrimary
+                        text = if (isFamilyMode && !canEditBudgets) {
+                            "No monthly cap set yet — showing live shared spend for this month."
+                        } else {
+                            "Create a category or overall cap below to track % used."
+                        },
+                        fontSize = 11.sp,
+                        color = ZenithTheme.textSecondary
                     )
+                }
+
+                if (isFamilyMode && overviewMemberSpend.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Monthly Spend by Member",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = ZenithTheme.textSecondary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("family_budget_member_breakdown"),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(overviewMemberSpend, key = { "overview_member_${it.userId}" }) { contrib ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = ZenithTheme.cardVariantSurface,
+                                border = BorderStroke(1.dp, ZenithTheme.borderColor)
+                            ) {
+                                Text(
+                                    text = "${contrib.emoji} ${contrib.displayName}: ${formatMoneyOrMask(contrib.amount, decimals = 0)}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = ZenithTheme.textPrimary,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -278,33 +514,40 @@ fun BudgetsAndGoalsScreen(
             ) {
                 Column(modifier = Modifier.weight(1f, fill = false)) {
                     Text(
-                        text = "Category Budgets",
+                        text = if (isFamilyMode) "Shared Category Budgets" else "Category Budgets",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         color = ZenithTheme.textPrimary
                     )
                     Text(
-                        text = "Set spending limits for monthly, weekly or custom periods",
+                        text = if (canEditBudgets) {
+                            if (isFamilyMode) "Set shared limits for monthly, weekly or yearly periods"
+                            else "Set spending limits for monthly, weekly or custom periods"
+                        } else {
+                            "Only Family Admins/Owner can create or edit shared budgets"
+                        },
                         fontSize = 12.sp,
                         color = ZenithTheme.textSecondary
                     )
                 }
 
-                Button(
-                    onClick = {
-                        editingBudget = null
-                        showAddBudgetModal = true
-                    },
-                    modifier = Modifier
-                        .height(42.dp)
-                        .testTag("add_budget_btn"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
-                    contentPadding = PaddingValues(horizontal = 12.dp)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("New Budget", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
+                if (canEditBudgets) {
+                    Button(
+                        onClick = {
+                            editingBudget = null
+                            showAddBudgetModal = true
+                        },
+                        modifier = Modifier
+                            .height(42.dp)
+                            .testTag("add_budget_btn"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
+                        contentPadding = PaddingValues(horizontal = 12.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("New Budget", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
+                    }
                 }
             }
 
@@ -337,10 +580,12 @@ fun BudgetsAndGoalsScreen(
                     )
                 }
                 item {
+                    val lastFilterKey = if (isFamilyMode) "YEARLY" else "CUSTOM"
+                    val lastFilterLabel = if (isFamilyMode) "Yearly" else "Custom"
                     FilterChip(
-                        selected = selectedPeriodFilter == "CUSTOM",
-                        onClick = { selectedPeriodFilter = "CUSTOM" },
-                        label = { Text("Custom", fontSize = 12.sp) }
+                        selected = selectedPeriodFilter == lastFilterKey,
+                        onClick = { selectedPeriodFilter = lastFilterKey },
+                        label = { Text(lastFilterLabel, fontSize = 12.sp) }
                     )
                 }
             }
@@ -364,24 +609,48 @@ fun BudgetsAndGoalsScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
-                            Icons.Default.PieChart,
+                            imageVector = if (isFamilyMode && !canEditBudgets) Icons.Default.Groups else Icons.Default.PieChart,
                             contentDescription = null,
-                            tint = ZenithTheme.textMuted,
+                            tint = if (isFamilyMode) ZenithTheme.accentCyan else ZenithTheme.textMuted,
                             modifier = Modifier.size(36.dp)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "No budgets yet",
+                            text = if (isFamilyMode) "No shared budgets yet" else "No budgets yet",
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
                             color = ZenithTheme.textPrimary
                         )
                         Text(
-                            text = "Set your first spending limit to start controlling expenses.",
+                            text = when {
+                                isFamilyMode && !canEditBudgets ->
+                                    "Your Family Admin hasn't added category spending limits yet. You can ask them in Family Chat."
+                                isFamilyMode ->
+                                    "Create an Overall or category limit so all family members can track shared burn rates."
+                                else ->
+                                    "Set your first spending limit to start controlling expenses."
+                            },
                             fontSize = 12.sp,
                             color = ZenithTheme.textSecondary,
+                            textAlign = TextAlign.Center,
                             modifier = Modifier.padding(top = 4.dp)
                         )
+                        if (isFamilyMode && !canEditBudgets && onOpenFamilyChat != null) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedButton(
+                                onClick = onOpenFamilyChat,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("family_budget_chat_cta")
+                            ) {
+                                Icon(
+                                    Icons.Default.ChatBubbleOutline,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Ask in Family Chat", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
                     }
                 }
             }
@@ -389,6 +658,21 @@ fun BudgetsAndGoalsScreen(
             items(filteredBudgets, key = { "budget_${it.id}" }) { budget ->
                 val categorySpent = remember(state.allTransactions, budget) {
                     calculateBudgetSpent(budget, state.allTransactions)
+                }
+                val memberSpendForBudget = remember(
+                    isFamilyMode,
+                    state.allTransactions,
+                    state.txAttributionByServerId,
+                    state.activeFamilyMembers,
+                    budget
+                ) {
+                    if (!isFamilyMode) emptyList()
+                    else calculateBudgetSpentByMember(
+                        budget = budget,
+                        transactions = state.allTransactions,
+                        attributionByServerId = state.txAttributionByServerId,
+                        members = state.activeFamilyMembers
+                    )
                 }
 
                 val remaining = budget.monthlyLimit - categorySpent
@@ -491,35 +775,37 @@ fun BudgetsAndGoalsScreen(
                             }
                         }
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(start = 4.dp)
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    editingBudget = budget
-                                    showAddBudgetModal = true
-                                },
-                                modifier = Modifier.size(32.dp)
+                        if (canEditBudgets) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(start = 4.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.Edit,
-                                    contentDescription = "Edit",
-                                    tint = ZenithTheme.accentGreen,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
+                                IconButton(
+                                    onClick = {
+                                        editingBudget = budget
+                                        showAddBudgetModal = true
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        contentDescription = "Edit",
+                                        tint = ZenithTheme.accentGreen,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
 
-                            IconButton(
-                                onClick = { budgetToDelete = budget },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = "Delete",
-                                    tint = ZenithTheme.accentRed.copy(alpha = 0.8f),
-                                    modifier = Modifier.size(16.dp)
-                                )
+                                IconButton(
+                                    onClick = { budgetToDelete = budget },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        tint = ZenithTheme.accentRed.copy(alpha = 0.8f),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -565,8 +851,33 @@ fun BudgetsAndGoalsScreen(
                             .height(8.dp)
                             .clip(CircleShape),
                         color = progressColor,
-                        trackColor = ZenithTheme.cardVariantSurface
+                        trackColor = ZenithTheme.cardVariantSurface,
+                        gapSize = 0.dp,
+                        drawStopIndicator = {}
                     )
+
+                    if (isFamilyMode && memberSpendForBudget.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(memberSpendForBudget, key = { "b_${budget.id}_m_${it.userId}" }) { contrib ->
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = ZenithTheme.cardVariantSurface
+                                ) {
+                                    Text(
+                                        text = "${contrib.emoji} ${contrib.displayName}: ${formatMoneyOrMask(contrib.amount, decimals = 0)}",
+                                        fontSize = 10.sp,
+                                        color = ZenithTheme.textSecondary,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -575,7 +886,27 @@ fun BudgetsAndGoalsScreen(
             Spacer(modifier = Modifier.height(24.dp))
         }
 
-        // --- 4. SAVINGS GOALS SECTION ---
+        if (isFamilyMode) {
+            item {
+                Spacer(modifier = Modifier.height(14.dp))
+                GlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("family_budgets_scope_note"),
+                    backgroundColor = ZenithTheme.glassCardBg
+                ) {
+                    Text(
+                        text = "Personal Savings Goals & Auto-Pay reminders remain isolated inside Personal Mode.",
+                        fontSize = 12.sp,
+                        color = ZenithTheme.textSecondary,
+                        modifier = Modifier.padding(14.dp)
+                    )
+                }
+            }
+        }
+
+        // --- 4. SAVINGS GOALS SECTION (Personal Mode Only) ---
+        if (!isFamilyMode) {
         item {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -761,7 +1092,9 @@ fun BudgetsAndGoalsScreen(
                             .height(8.dp)
                             .clip(CircleShape),
                         color = if (progress >= 1f) ZenithTheme.accentAmber else ZenithTheme.accentGreen,
-                        trackColor = ZenithTheme.cardVariantSurface
+                        trackColor = ZenithTheme.cardVariantSurface,
+                        gapSize = 0.dp,
+                        drawStopIndicator = {}
                     )
                 }
             }
@@ -1088,6 +1421,7 @@ fun BudgetsAndGoalsScreen(
                 }
             }
         }
+        }
     }
 
     // --- MODALS & DIALOGS ---
@@ -1097,6 +1431,7 @@ fun BudgetsAndGoalsScreen(
             categories = state.categories,
             existingBudget = editingBudget,
             currencySymbol = state.currencySymbol,
+            isFamilyMode = isFamilyMode,
             onDismiss = {
                 showAddBudgetModal = false
                 editingBudget = null
@@ -1254,12 +1589,15 @@ fun AddOrEditBudgetModal(
     categories: List<CategoryEntity>,
     existingBudget: BudgetEntity?,
     currencySymbol: String,
+    isFamilyMode: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (categoryName: String, limit: Double, periodType: String, customPeriodName: String) -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
     val selectableCategories = remember(categories) {
+        val overallEntry = CategoryEntity(name = "Overall", iconName = "AccountBalanceWallet", colorHex = "#06B6D4", type = TransactionType.EXPENSE)
         val expenseCats = categories.filter { it.type == TransactionType.EXPENSE || !it.name.equals("Income", ignoreCase = true) }
-        expenseCats.ifEmpty { categories }
+        (listOf(overallEntry) + expenseCats.filterNot { it.name.equals("Overall", ignoreCase = true) }).ifEmpty { listOf(overallEntry) }
     }
     var selectedCat by remember {
         mutableStateOf(existingBudget?.categoryName ?: selectableCategories.firstOrNull()?.name ?: "Food & Dining")
@@ -1268,22 +1606,38 @@ fun AddOrEditBudgetModal(
         mutableStateOf(existingBudget?.monthlyLimit?.let { if (it > 0) it.toString() else "" } ?: "")
     }
     var selectedPeriodType by remember {
-        mutableStateOf(existingBudget?.periodType ?: "MONTHLY")
+        mutableStateOf(
+            existingBudget?.periodType?.let {
+                if (isFamilyMode && it == "CUSTOM") "MONTHLY" else it
+            } ?: "MONTHLY"
+        )
     }
     var customPeriodTitle by remember {
         mutableStateOf(existingBudget?.customPeriodName ?: "")
     }
+    val periodOptions = remember(isFamilyMode) {
+        if (isFamilyMode) listOf("MONTHLY" to "Monthly", "WEEKLY" to "Weekly", "YEARLY" to "Yearly")
+        else listOf("MONTHLY" to "Monthly", "WEEKLY" to "Weekly", "CUSTOM" to "Custom")
+    }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(decorFitsSystemWindows = false, usePlatformDefaultWidth = false)
+    ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = ZenithTheme.cardSurface,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 4.dp),
+                .padding(horizontal = 20.dp)
+                .imePadding(),
             border = BorderStroke(1.dp, ZenithTheme.borderColor)
         ) {
-            Column(modifier = Modifier.padding(24.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp)
+            ) {
                 Text(
                     text = if (existingBudget == null) "Create Budget Limit" else "Edit Budget Limit",
                     fontSize = 20.sp,
@@ -1291,7 +1645,7 @@ fun AddOrEditBudgetModal(
                     color = ZenithTheme.textPrimary
                 )
                 Text(
-                    text = "Track and limit spending for any category",
+                    text = if (isFamilyMode) "Track shared spending for any category" else "Track and limit spending for any category",
                     fontSize = 12.sp,
                     color = ZenithTheme.textSecondary
                 )
@@ -1303,6 +1657,11 @@ fun AddOrEditBudgetModal(
                     onValueChange = { limitText = it },
                     label = { Text("Budget Limit ($currencySymbol)") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("budget_limit_input")
@@ -1316,7 +1675,7 @@ fun AddOrEditBudgetModal(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf("MONTHLY" to "Monthly", "WEEKLY" to "Weekly", "CUSTOM" to "Custom").forEach { (typeKey, label) ->
+                    periodOptions.forEach { (typeKey, label) ->
                         FilterChip(
                             selected = selectedPeriodType == typeKey,
                             onClick = { selectedPeriodType = typeKey },
@@ -1325,13 +1684,15 @@ fun AddOrEditBudgetModal(
                     }
                 }
 
-                if (selectedPeriodType == "CUSTOM") {
+                if (!isFamilyMode && selectedPeriodType == "CUSTOM") {
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = customPeriodTitle,
                         onValueChange = { customPeriodTitle = it },
                         label = { Text("Custom Period Title (e.g. Vacation, Q3)") },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -1371,9 +1732,10 @@ fun AddOrEditBudgetModal(
 
                 Button(
                     onClick = {
+                        focusManager.clearFocus()
                         val limit = limitText.toDoubleOrNull() ?: 0.0
                         if (limit > 0) {
-                            onSave(selectedCat, limit, selectedPeriodType, customPeriodTitle)
+                            onSave(selectedCat, limit, selectedPeriodType, if (isFamilyMode) "" else customPeriodTitle)
                         }
                     },
                     modifier = Modifier
@@ -1397,20 +1759,29 @@ fun AddOrEditGoalModal(
     onDismiss: () -> Unit,
     onSave: (title: String, targetAmount: Double, currentAmount: Double) -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
     var title by remember { mutableStateOf(existingGoal?.title ?: "") }
     var targetText by remember { mutableStateOf(existingGoal?.targetAmount?.toString() ?: "") }
     var currentText by remember { mutableStateOf(existingGoal?.currentAmount?.toString() ?: "0") }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(decorFitsSystemWindows = false, usePlatformDefaultWidth = false)
+    ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = ZenithTheme.cardSurface,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 4.dp),
+                .padding(horizontal = 20.dp)
+                .imePadding(),
             border = BorderStroke(1.dp, ZenithTheme.borderColor)
         ) {
-            Column(modifier = Modifier.padding(24.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp)
+            ) {
                 Text(
                     if (existingGoal == null) "Create Savings Goal" else "Edit Savings Goal",
                     fontSize = 20.sp,
@@ -1424,6 +1795,7 @@ fun AddOrEditGoalModal(
                     onValueChange = { title = it },
                     label = { Text("Goal Title (e.g. Emergency Fund, Trip)") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("goal_title_input")
@@ -1436,6 +1808,10 @@ fun AddOrEditGoalModal(
                     onValueChange = { targetText = it },
                     label = { Text("Target Amount ($currencySymbol)") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Next
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("goal_target_input")
@@ -1448,6 +1824,11 @@ fun AddOrEditGoalModal(
                     onValueChange = { currentText = it },
                     label = { Text("Current Saved ($currencySymbol)") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -1455,6 +1836,7 @@ fun AddOrEditGoalModal(
 
                 Button(
                     onClick = {
+                        focusManager.clearFocus()
                         val target = targetText.toDoubleOrNull() ?: 0.0
                         val current = currentText.toDoubleOrNull() ?: 0.0
                         if (title.isNotBlank() && target > 0) onSave(title, target, current)
@@ -1480,18 +1862,27 @@ fun DepositGoalModal(
     onDismiss: () -> Unit,
     onDeposit: (Double) -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
     var depositText by remember { mutableStateOf("") }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(decorFitsSystemWindows = false, usePlatformDefaultWidth = false)
+    ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = ZenithTheme.cardSurface,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 4.dp),
+                .padding(horizontal = 20.dp)
+                .imePadding(),
             border = BorderStroke(1.dp, ZenithTheme.borderColor)
         ) {
-            Column(modifier = Modifier.padding(24.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp)
+            ) {
                 Text("Deposit to ${goal.title}", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
                 Text(
                     "Current Saved: $currencySymbol${String.format(Locale.US, "%,.2f", goal.currentAmount)} / $currencySymbol${String.format(Locale.US, "%,.2f", goal.targetAmount)}",
@@ -1506,6 +1897,11 @@ fun DepositGoalModal(
                     onValueChange = { depositText = it },
                     label = { Text("Deposit Amount ($currencySymbol)") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("deposit_amount_input")
@@ -1550,6 +1946,7 @@ fun DepositGoalModal(
 
                 Button(
                     onClick = {
+                        focusManager.clearFocus()
                         val amount = depositText.toDoubleOrNull() ?: 0.0
                         if (amount > 0) onDeposit(amount)
                     },

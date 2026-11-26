@@ -11,6 +11,19 @@
 -keep class androidx.compose.** { *; }
 -keep class androidx.lifecycle.** { *; }
 -keep class androidx.navigation.** { *; }
+-keep class androidx.biometric.** { *; }
+-dontwarn androidx.biometric.**
+
+# --- Java Cryptography / Android Keystore ---
+-keep class java.security.** { *; }
+-keep class javax.crypto.** { *; }
+
+# --- Strip Verbose/Debug Logs in Release Builds ---
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+}
 
 # --- Kotlin Coroutines ---
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
@@ -52,10 +65,16 @@
 }
 
 # --- Domain, Sync DTOs, ViewModel & Components ---
+-keep class com.zenith.app.domain.** { *; }
 -keep class com.zenith.app.data.models.** { *; }
 -keep class com.zenith.app.data.network.** { *; }
+-keep class com.zenith.app.data.repository.** { *; }
+-keep class com.zenith.app.data.export.** { *; }
+-keep class com.zenith.app.data.notifications.** { *; }
+-keep class com.zenith.app.data.util.** { *; }
 -keep class com.zenith.app.data.ai.** { *; }
 -keep class com.zenith.app.data.upi.** { *; }
+-keep class com.zenith.app.widget.** { *; }
 -keep class com.zenith.app.ui.viewmodel.** { *; }
 -keep class com.zenith.app.BuildConfig { *; }
 

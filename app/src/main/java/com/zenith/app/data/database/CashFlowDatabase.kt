@@ -13,6 +13,182 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 
+val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val indexStatements = listOf(
+            "CREATE INDEX IF NOT EXISTS `index_transactions_upiTransactionId` ON `transactions` (`upiTransactionId`)",
+            "CREATE INDEX IF NOT EXISTS `index_budgets_serverId` ON `budgets` (`serverId`)",
+            "CREATE INDEX IF NOT EXISTS `index_savings_goals_serverId` ON `savings_goals` (`serverId`)",
+            "CREATE INDEX IF NOT EXISTS `index_auto_pay_reminders_serverId` ON `auto_pay_reminders` (`serverId`)"
+        )
+        for (sql in indexStatements) {
+            db.execSQL(sql)
+        }
+    }
+}
+
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val alterations = listOf(
+            "ALTER TABLE `families` ADD COLUMN `familyLabel` TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE `family_members` ADD COLUMN `memberLabel` TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE `family_transactions` ADD COLUMN `customLabel` TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE `transactions` ADD COLUMN `customLabel` TEXT NOT NULL DEFAULT ''"
+        )
+        for (sql in alterations) {
+            try {
+                db.execSQL(sql)
+            } catch (_: Exception) {
+            }
+        }
+    }
+}
+
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `families` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `avatarEmoji` TEXT NOT NULL,
+                `description` TEXT NOT NULL,
+                `ownerId` TEXT NOT NULL,
+                `monthlyBudgetLimit` REAL NOT NULL,
+                `syncStatus` TEXT NOT NULL,
+                `isDeleted` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_families_ownerId` ON `families` (`ownerId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_families_isDeleted` ON `families` (`isDeleted`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `family_members` (
+                `id` TEXT NOT NULL,
+                `familyId` TEXT NOT NULL,
+                `userId` TEXT NOT NULL,
+                `displayName` TEXT NOT NULL,
+                `avatarEmoji` TEXT NOT NULL,
+                `avatarColor` TEXT NOT NULL,
+                `role` TEXT NOT NULL,
+                `status` TEXT NOT NULL,
+                `joinedAt` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_members_familyId_status` ON `family_members` (`familyId`, `status`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_members_userId` ON `family_members` (`userId`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `family_categories` (
+                `id` TEXT NOT NULL,
+                `familyId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `iconName` TEXT NOT NULL,
+                `colorHex` TEXT NOT NULL,
+                `type` TEXT NOT NULL,
+                `isDefault` INTEGER NOT NULL,
+                `createdBy` TEXT,
+                `isDeleted` INTEGER NOT NULL,
+                `syncStatus` TEXT NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_categories_familyId_isDeleted` ON `family_categories` (`familyId`, `isDeleted`)")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_family_categories_familyId_name_type` ON `family_categories` (`familyId`, `name`, `type`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `family_transactions` (
+                `id` TEXT NOT NULL,
+                `familyId` TEXT NOT NULL,
+                `createdBy` TEXT NOT NULL,
+                `paidBy` TEXT,
+                `createdByName` TEXT NOT NULL,
+                `paidByName` TEXT NOT NULL,
+                `transactionType` TEXT NOT NULL,
+                `amount` REAL NOT NULL,
+                `categoryId` TEXT,
+                `categoryName` TEXT NOT NULL,
+                `title` TEXT NOT NULL,
+                `description` TEXT NOT NULL,
+                `paymentMethod` TEXT NOT NULL,
+                `upiId` TEXT,
+                `upiTransactionId` TEXT,
+                `transactionDateMillis` INTEGER NOT NULL,
+                `clientTxId` TEXT NOT NULL,
+                `syncVersion` INTEGER NOT NULL,
+                `syncStatus` TEXT NOT NULL,
+                `isDeleted` INTEGER NOT NULL,
+                `createdAt` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_transactions_familyId_isDeleted_transactionDateMillis` ON `family_transactions` (`familyId`, `isDeleted`, `transactionDateMillis`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_transactions_familyId_paidBy` ON `family_transactions` (`familyId`, `paidBy`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_transactions_familyId_createdBy` ON `family_transactions` (`familyId`, `createdBy`)")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_family_transactions_clientTxId` ON `family_transactions` (`clientTxId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_transactions_syncStatus` ON `family_transactions` (`syncStatus`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `family_budgets` (
+                `id` TEXT NOT NULL,
+                `familyId` TEXT NOT NULL,
+                `categoryId` TEXT,
+                `categoryName` TEXT NOT NULL,
+                `monthlyLimit` REAL NOT NULL,
+                `monthYear` TEXT NOT NULL,
+                `periodType` TEXT NOT NULL,
+                `updatedBy` TEXT,
+                `syncStatus` TEXT NOT NULL,
+                `isDeleted` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_budgets_familyId_isDeleted` ON `family_budgets` (`familyId`, `isDeleted`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_budgets_syncStatus` ON `family_budgets` (`syncStatus`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `family_messages` (
+                `id` TEXT NOT NULL,
+                `familyId` TEXT NOT NULL,
+                `senderUserId` TEXT NOT NULL,
+                `senderName` TEXT NOT NULL,
+                `senderAvatar` TEXT NOT NULL,
+                `messageType` TEXT NOT NULL,
+                `body` TEXT NOT NULL,
+                `relatedTransactionId` TEXT,
+                `replyToMessageId` TEXT,
+                `clientMsgId` TEXT NOT NULL,
+                `syncStatus` TEXT NOT NULL,
+                `isDeleted` INTEGER NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `updatedAtMillis` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_messages_familyId_isDeleted_createdAtMillis` ON `family_messages` (`familyId`, `isDeleted`, `createdAtMillis`)")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_family_messages_clientMsgId` ON `family_messages` (`clientMsgId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_family_messages_syncStatus` ON `family_messages` (`syncStatus`)")
+    }
+}
+
 val MIGRATION_15_16 = object : Migration(15, 16) {
     override fun migrate(db: SupportSQLiteDatabase) {
         val obsoleteTables = listOf(
@@ -279,9 +455,15 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         ScannedItemEntity::class,
         UserProfileEntity::class,
         ReceiptEntity::class,
-        ReceiptItemEntity::class
+        ReceiptItemEntity::class,
+        FamilyEntity::class,
+        FamilyMemberEntity::class,
+        FamilyCategoryEntity::class,
+        FamilyTransactionEntity::class,
+        FamilyBudgetEntity::class,
+        FamilyMessageEntity::class
     ],
-    version = 16,
+    version = 19,
     exportSchema = false
 )
 abstract class CashFlowDatabase : RoomDatabase() {
@@ -293,6 +475,7 @@ abstract class CashFlowDatabase : RoomDatabase() {
     abstract fun scannedItemDao(): ScannedItemDao
     abstract fun userProfileDao(): UserProfileDao
     abstract fun receiptDao(): ReceiptDao
+    abstract fun familyDao(): FamilyDao
 
     companion object {
         @Volatile
@@ -305,9 +488,13 @@ abstract class CashFlowDatabase : RoomDatabase() {
                     CashFlowDatabase::class.java,
                     "cashflow_database"
                 )
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
-                    .fallbackToDestructiveMigration(true)
-                    .fallbackToDestructiveMigrationOnDowngrade(true)
+                    .addMigrations(
+                        MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+                        MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+                        MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+                        MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19
+                    )
+                    .fallbackToDestructiveMigration(false)
                     .addCallback(DatabaseCallback(context.applicationContext))
                     .build()
                 INSTANCE = instance

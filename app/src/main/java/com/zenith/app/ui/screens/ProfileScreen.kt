@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -54,7 +55,12 @@ fun ProfileScreen(
     viewModel: CashFlowViewModel,
     onCurrencySelect: (String) -> Unit,
     onDeleteScannedItem: (com.zenith.app.data.models.ScannedItemEntity) -> Unit,
-    onNavigateToActivity: () -> Unit = {}
+    onNavigateToActivity: () -> Unit = {},
+    onOpenCreateFamily: () -> Unit = {},
+    onOpenJoinFamily: () -> Unit = {},
+    onOpenFamilyManage: () -> Unit = {},
+    onOpenFamilyChat: () -> Unit = {},
+    bottomContentPadding: Dp = 144.dp
 ) {
     val context = LocalContext.current
     val currencies = listOf("₹", "$", "€", "£", "¥")
@@ -74,6 +80,7 @@ fun ProfileScreen(
     val isUpiInstantAutoSaveEnabled by viewModel.isUpiInstantAutoSaveEnabled.collectAsStateWithLifecycle()
 
     val syncState by viewModel.syncUiState.collectAsStateWithLifecycle()
+    val financialContext by viewModel.financialContext.collectAsStateWithLifecycle()
 
     var showAuthDialog by remember { mutableStateOf(false) }
     var initialAuthModeIsSignUp by remember { mutableStateOf(false) }
@@ -128,7 +135,7 @@ fun ProfileScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 144.dp)
+        contentPadding = PaddingValues(top = 16.dp, bottom = bottomContentPadding)
     ) {
         // --- 1. USER PROFILE HEADER CARD ---
         item {
@@ -225,6 +232,200 @@ fun ProfileScreen(
                     },
                     label = "Default Payment Method"
                 )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+        }
+
+        // --- 2B. FAMILY TRACKER SECTION ---
+        item {
+            ProfileSectionTitle("Family Tracker")
+
+            CleanCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("card_settings_family_tracker"),
+                backgroundColor = ZenithTheme.cardGlassBackground
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text(
+                            text = "Enable Family",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ZenithTheme.textPrimary
+                        )
+                        Text(
+                            text = if (financialContext.isFamilyEnabled) {
+                                "Family mode switcher & shared ledger tools enabled"
+                            } else {
+                                "Hidden from dashboard • Personal finances untouched"
+                            },
+                            fontSize = 11.sp,
+                            color = ZenithTheme.textSecondary
+                        )
+                    }
+                    Switch(
+                        checked = financialContext.isFamilyEnabled,
+                        onCheckedChange = { enabled -> viewModel.setFamilyFeatureEnabled(enabled) },
+                        modifier = Modifier.testTag("switch_enable_family")
+                    )
+                }
+
+                if (financialContext.isFamilyEnabled) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = ZenithTheme.borderColor)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    val isCloudSignedIn = isAuthenticated && !isGuestMode
+                    when {
+                        !isCloudSignedIn -> {
+                            Text(
+                                text = "Sign in to your Zenith account above to create or join a family.",
+                                fontSize = 12.sp,
+                                color = ZenithTheme.accentAmber
+                            )
+                        }
+                        financialContext.familyMembershipStatus == com.zenith.app.domain.FamilyMembershipStatus.LOADING -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = ZenithTheme.accentCyan
+                                )
+                                Text(
+                                    text = "Checking family membership...",
+                                    fontSize = 12.sp,
+                                    color = ZenithTheme.textSecondary
+                                )
+                            }
+                        }
+                        financialContext.familyMembershipStatus == com.zenith.app.domain.FamilyMembershipStatus.ACTIVE &&
+                            financialContext.activeFamily != null -> {
+                            val activeFamily = financialContext.activeFamily!!
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(CircleShape)
+                                            .background(ZenithTheme.accentCyan.copy(alpha = 0.16f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(activeFamily.avatarEmoji, fontSize = 18.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = activeFamily.name,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = ZenithTheme.textPrimary
+                                        )
+                                        Text(
+                                            text = "${financialContext.membershipRole?.name ?: "MEMBER"} • ${financialContext.activeMembers.size} member(s)",
+                                            fontSize = 11.sp,
+                                            color = ZenithTheme.textSecondary
+                                        )
+                                    }
+                                }
+                                FilterChip(
+                                    selected = financialContext.mode == com.zenith.app.domain.FinancialMode.FAMILY,
+                                    onClick = {
+                                        val nextMode = if (financialContext.mode == com.zenith.app.domain.FinancialMode.FAMILY) {
+                                            com.zenith.app.domain.FinancialMode.PERSONAL
+                                        } else {
+                                            com.zenith.app.domain.FinancialMode.FAMILY
+                                        }
+                                        viewModel.selectFinancialMode(nextMode)
+                                    },
+                                    label = {
+                                        Text(
+                                            text = if (financialContext.mode == com.zenith.app.domain.FinancialMode.FAMILY) "In Family" else "Open Family",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = onOpenFamilyManage,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Manage Family", fontSize = 12.sp)
+                                }
+                                Button(
+                                    onClick = onOpenFamilyChat,
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidIndigo),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Family Chat", fontSize = 12.sp, color = Color.White)
+                                }
+                            }
+                        }
+                        else -> {
+                            financialContext.membershipError?.let { err ->
+                                Text(
+                                    text = err,
+                                    fontSize = 11.5.sp,
+                                    color = ZenithTheme.accentRed,
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+                            }
+                            Text(
+                                text = "You don't belong to a family yet. Create a new family or join with an invitation.",
+                                fontSize = 12.sp,
+                                color = ZenithTheme.textSecondary
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = onOpenCreateFamily,
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("btn_profile_create_family")
+                                ) {
+                                    Text("Create Family", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                }
+                                OutlinedButton(
+                                    onClick = onOpenJoinFamily,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("btn_profile_join_family")
+                                ) {
+                                    Text("Join Family", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(18.dp))
@@ -509,8 +710,16 @@ fun ProfileScreen(
 
                 PreferenceActionRow(
                     icon = Icons.Default.DeleteOutline,
-                    title = "Clear Local Transactions",
-                    subtitle = "Reset device ledger history",
+                    title = if (financialContext.isFamilyModeActive) "Clear Family Transactions" else "Clear Transactions & Ledger",
+                    subtitle = if (financialContext.isFamilyModeActive) {
+                        if (financialContext.membershipRole?.canAdmin() == true) {
+                            "Deletes family transactions in device & Supabase database"
+                        } else {
+                            "Deletes your own family transactions in device & cloud"
+                        }
+                    } else {
+                        "Clears transactions & ledger on device and cloud (no regain)"
+                    },
                     actionLabel = "Clear",
                     accentColor = ZenithTheme.accentRed,
                     onClick = { showClearDataDialog = true }
@@ -569,8 +778,7 @@ fun ProfileScreen(
                         accentColor = ZenithTheme.accentRed,
                         onClick = {
                             viewModel.signOut()
-                            viewModel.clearAllLocalData()
-                            Toast.makeText(context, "Account data reset.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Signed out and local device cache cleared.", Toast.LENGTH_SHORT).show()
                         }
                     )
                 } else {
@@ -665,25 +873,44 @@ fun ProfileScreen(
     }
 
     if (showClearDataDialog) {
+        val inFamily = financialContext.isFamilyModeActive
+        val isFamAdmin = financialContext.membershipRole?.canAdmin() == true
         AlertDialog(
             onDismissRequest = { showClearDataDialog = false },
-            title = { Text("Reset Local Database?", color = ZenithTheme.textPrimary) },
+            title = {
+                Text(
+                    if (inFamily) "Clear Family Transactions?" else "Clear All Ledger Data?",
+                    color = ZenithTheme.textPrimary
+                )
+            },
             text = {
                 Text(
-                    "This will permanently wipe all local transactions, budgets, goals, and auto-pay reminders, and re-initialize clean default categories.",
+                    if (inFamily) {
+                        if (isFamAdmin) {
+                            "This will delete shared family transactions from both this device and the Supabase family database so they stay cleared."
+                        } else {
+                            "This will delete the family transactions you entered from both this device and Supabase (other members' entries stay untouched)."
+                        }
+                    } else {
+                        "This will delete all personal transactions, budgets, goals, and auto-pay reminders from both this device and your Supabase cloud database so they won't reappear on sync."
+                    },
                     color = ZenithTheme.textSecondary
                 )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.clearAllLocalData()
+                        viewModel.clearAllLocalData(alsoClearCloud = true)
                         showClearDataDialog = false
-                        Toast.makeText(context, "Local database reset successfully.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            if (inFamily) "Family transactions cleared." else "Ledger cleared across device & cloud.",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidRed)
                 ) {
-                    Text("Reset Database", color = Color.White)
+                    Text(if (inFamily) "Clear Family" else "Clear Everywhere", color = Color.White)
                 }
             },
             dismissButton = {
@@ -813,7 +1040,10 @@ fun ProfileScreen(
         ExportDataModal(
             transactions = state.allTransactions,
             currencySymbol = state.currencySymbol,
-            onDismiss = { showExportModal = false }
+            onDismiss = { showExportModal = false },
+            isFamilyMode = state.activeMode == com.zenith.app.domain.FinancialMode.FAMILY,
+            workspaceName = state.activeFamily?.name ?: "Personal",
+            txAttributionByServerId = state.txAttributionByServerId
         )
     }
 

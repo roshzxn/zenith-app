@@ -39,12 +39,13 @@ fun GlassCard(
     } else {
         backgroundColor
     }
+    val effectiveElevation = if (isDark || effectiveBg.alpha < 0.98f) 0.dp else 3.dp
     Card(
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = effectiveBg),
         modifier = modifier
             .shadow(
-                elevation = if (isDark) 0.dp else 3.dp,
+                elevation = effectiveElevation,
                 shape = shape,
                 ambientColor = Color.Black.copy(alpha = 0.06f),
                 spotColor = Color.Black.copy(alpha = 0.10f)
@@ -70,12 +71,13 @@ fun CleanCard(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val isDark = ZenithTheme.isDark
+    val effectiveElevation = if (ZenithTheme.isOled || backgroundColor.alpha < 0.98f) 0.dp else elevation
     Card(
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = backgroundColor),
         modifier = modifier
             .shadow(
-                elevation = if (ZenithTheme.isOled) 0.dp else elevation,
+                elevation = effectiveElevation,
                 shape = shape,
                 ambientColor = Color.Black.copy(alpha = if (isDark) 0.30f else 0.08f),
                 spotColor = Color.Black.copy(alpha = if (isDark) 0.40f else 0.12f)

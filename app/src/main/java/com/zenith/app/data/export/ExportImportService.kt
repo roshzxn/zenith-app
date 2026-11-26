@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Environment
 import androidx.core.content.FileProvider
 import com.zenith.app.data.models.*
+import com.zenith.app.data.repository.FamilyTxAttribution
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -82,7 +83,7 @@ object ExportImportService {
 
     fun filterTransactions(transactions: List<TransactionEntity>, options: ExportOptions): List<TransactionEntity> {
         val now = Calendar.getInstance()
-        var filtered = transactions
+        var filtered = transactions.filter { !it.isDeleted }
 
         // Filter by scope
         if (options.scopeFilter != null) {
@@ -127,30 +128,77 @@ object ExportImportService {
     }
 
     // --- 1. CSV EXPORT ---
-    fun exportCsv(context: Context, transactions: List<TransactionEntity>, currencyCode: String, options: ExportOptions): ExportResult {
+    fun exportCsv(
+        context: Context,
+        transactions: List<TransactionEntity>,
+        currencyCode: String,
+        options: ExportOptions,
+        txAttributionByServerId: Map<String, FamilyTxAttribution> = emptyMap(),
+        workspaceName: String = "Personal"
+    ): ExportResult {
         val filtered = filterTransactions(transactions, options)
         val todayStr = dateFormat.format(Date())
-        val fileName = "zenith_transactions_$todayStr.csv"
+        val scopeSlug = if (workspaceName.equals("Personal", ignoreCase = true)) "personal" else "family"
+        val fileName = "zenith_${scopeSlug}_transactions_$todayStr.csv"
         val file = File(context.cacheDir, fileName)
 
         val csvBuilder = StringBuilder()
-        csvBuilder.append("transaction_id,date,title,type,amount,currency,category,payment_method,account,notes,created_at,updated_at\n")
+        val isFamily = options.scopeFilter == FinanceScope.FAMILY || txAttributionByServerId.isNotEmpty() || !workspaceName.equals("Personal", ignoreCase = true)
+        val headers = mutableListOf("transaction_id", "date", "title", "type", "amount", "currency")
+        if (options.includeCategories) {
+            headers.add("category")
+            headers.add("custom_label")
+        }
+        if (options.includePaymentMethods) {
+            headers.add("payment_method")
+        }
+        if (isFamily) {
+            headers.add("entered_by")
+            headers.add("paid_by")
+        }
+        headers.add("account")
+        if (options.includeNotes) {
+            headers.add("notes")
+        }
+        headers.add("created_at")
+        headers.add("updated_at")
+        csvBuilder.append(headers.joinToString(",")).append("\n")
 
         filtered.forEach { tx ->
             val dateStr = dateFormat.format(Date(tx.dateMillis))
             val typeStr = if (tx.type == TransactionType.INCOME) "income" else "expense"
-            val cleanTitle = escapeCsv(tx.title)
-            val cleanNotes = escapeCsv(tx.note)
-            val cleanCat = escapeCsv(tx.category)
-            val cleanMethod = escapeCsv(tx.paymentMethod)
-            val accountStr = if (tx.financeScope == FinanceScope.FAMILY) "Family" else "Personal"
+            val accountStr = if (tx.financeScope == FinanceScope.FAMILY) escapeCsv("Family ($workspaceName)") else "Personal"
             val createdAtStr = dateStr + " " + timeFormat.format(Date(tx.dateMillis))
             val updatedAtStr = dateStr + " " + timeFormat.format(Date(tx.updatedAt))
-
-            // Amount strictly numeric without formatting
             val numAmount = String.format(Locale.US, "%.2f", tx.amount)
 
-            csvBuilder.append("TXN${tx.id},$dateStr,$cleanTitle,$typeStr,$numAmount,$currencyCode,$cleanCat,$cleanMethod,$accountStr,$cleanNotes,$createdAtStr,$updatedAtStr\n")
+            val rowValues = mutableListOf(
+                "TXN${tx.id}",
+                dateStr,
+                escapeCsv(tx.title),
+                typeStr,
+                numAmount,
+                currencyCode
+            )
+            if (options.includeCategories) {
+                rowValues.add(escapeCsv(tx.category))
+                rowValues.add(escapeCsv(tx.customLabel))
+            }
+            if (options.includePaymentMethods) {
+                rowValues.add(escapeCsv(tx.paymentMethod))
+            }
+            if (isFamily) {
+                val attr = tx.serverId?.let { txAttributionByServerId[it] }
+                rowValues.add(escapeCsv(attr?.createdByName ?: "Member"))
+                rowValues.add(escapeCsv(attr?.paidByName ?: attr?.createdByName ?: "Member"))
+            }
+            rowValues.add(accountStr)
+            if (options.includeNotes) {
+                rowValues.add(escapeCsv(tx.note))
+            }
+            rowValues.add(createdAtStr)
+            rowValues.add(updatedAtStr)
+            csvBuilder.append(rowValues.joinToString(",")).append("\n")
         }
 
         file.writeText(csvBuilder.toString(), Charsets.UTF_8)
@@ -167,10 +215,18 @@ object ExportImportService {
     }
 
     // --- 2. EXCEL EXPORT (Structured XML Spreadsheet / CSV Excel Compatible) ---
-    fun exportExcel(context: Context, transactions: List<TransactionEntity>, currencyCode: String, options: ExportOptions): ExportResult {
+    fun exportExcel(
+        context: Context,
+        transactions: List<TransactionEntity>,
+        currencyCode: String,
+        options: ExportOptions,
+        txAttributionByServerId: Map<String, FamilyTxAttribution> = emptyMap(),
+        workspaceName: String = "Personal"
+    ): ExportResult {
         val filtered = filterTransactions(transactions, options)
         val todayStr = dateFormat.format(Date())
-        val fileName = "zenith_transactions_$todayStr.xlsx"
+        val scopeSlug = if (workspaceName.equals("Personal", ignoreCase = true)) "personal" else "family"
+        val fileName = "zenith_${scopeSlug}_transactions_$todayStr.xlsx"
         val file = File(context.cacheDir, fileName)
 
         // Generate clean XML Spreadsheet (valid .xlsx / Excel XML document readable by all spreadsheet apps)
@@ -190,8 +246,24 @@ object ExportImportService {
         xmlBuilder.append(" <Worksheet ss:Name=\"Zenith Transactions\">\n")
         xmlBuilder.append("  <Table>\n")
 
-        // Columns
-        val headers = listOf("Transaction ID", "Date", "Title", "Type", "Amount", "Currency", "Category", "Payment Method", "Account", "Notes")
+        // Columns (honoring ExportOptions toggles)
+        val isFamily = options.scopeFilter == FinanceScope.FAMILY || txAttributionByServerId.isNotEmpty() || !workspaceName.equals("Personal", ignoreCase = true)
+        val headers = mutableListOf("Transaction ID", "Date", "Title", "Type", "Amount", "Currency")
+        if (options.includeCategories) {
+            headers.add("Category")
+            headers.add("Label")
+        }
+        if (options.includePaymentMethods) {
+            headers.add("Payment Method")
+        }
+        if (isFamily) {
+            headers.add("Entered By")
+            headers.add("Paid By")
+        }
+        headers.add("Account")
+        if (options.includeNotes) {
+            headers.add("Notes")
+        }
         xmlBuilder.append("   <Row ss:StyleID=\"Header\">\n")
         headers.forEach { h ->
             xmlBuilder.append("    <Cell><Data ss:Type=\"String\">$h</Data></Cell>\n")
@@ -202,7 +274,7 @@ object ExportImportService {
             val dateStr = dateFormat.format(Date(tx.dateMillis))
             val isIncome = tx.type == TransactionType.INCOME
             val typeStr = if (isIncome) "income" else "expense"
-            val accountStr = if (tx.financeScope == FinanceScope.FAMILY) "Family" else "Personal"
+            val accountStr = if (tx.financeScope == FinanceScope.FAMILY) "Family ($workspaceName)" else "Personal"
 
             xmlBuilder.append("   <Row>\n")
             xmlBuilder.append("    <Cell><Data ss:Type=\"String\">TXN${tx.id}</Data></Cell>\n")
@@ -211,10 +283,22 @@ object ExportImportService {
             xmlBuilder.append("    <Cell ss:StyleID=\"${if (isIncome) "Income" else "Expense"}\"><Data ss:Type=\"String\">$typeStr</Data></Cell>\n")
             xmlBuilder.append("    <Cell ss:StyleID=\"Number\"><Data ss:Type=\"Number\">${String.format(Locale.US, "%.2f", tx.amount)}</Data></Cell>\n")
             xmlBuilder.append("    <Cell><Data ss:Type=\"String\">$currencyCode</Data></Cell>\n")
-            xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(tx.category)}</Data></Cell>\n")
-            xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(tx.paymentMethod)}</Data></Cell>\n")
-            xmlBuilder.append("    <Cell><Data ss:Type=\"String\">$accountStr</Data></Cell>\n")
-            xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(tx.note)}</Data></Cell>\n")
+            if (options.includeCategories) {
+                xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(tx.category)}</Data></Cell>\n")
+                xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(tx.customLabel)}</Data></Cell>\n")
+            }
+            if (options.includePaymentMethods) {
+                xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(tx.paymentMethod)}</Data></Cell>\n")
+            }
+            if (isFamily) {
+                val attr = tx.serverId?.let { txAttributionByServerId[it] }
+                xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(attr?.createdByName ?: "Member")}</Data></Cell>\n")
+                xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(attr?.paidByName ?: attr?.createdByName ?: "Member")}</Data></Cell>\n")
+            }
+            xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(accountStr)}</Data></Cell>\n")
+            if (options.includeNotes) {
+                xmlBuilder.append("    <Cell><Data ss:Type=\"String\">${escapeXml(tx.note)}</Data></Cell>\n")
+            }
             xmlBuilder.append("   </Row>\n")
         }
 
@@ -240,11 +324,14 @@ object ExportImportService {
         context: Context,
         transactions: List<TransactionEntity>,
         currencySymbol: String,
-        options: ExportOptions
+        options: ExportOptions,
+        txAttributionByServerId: Map<String, FamilyTxAttribution> = emptyMap(),
+        workspaceName: String = "Personal"
     ): ExportResult {
         val filtered = filterTransactions(transactions, options)
         val todayStr = dateFormat.format(Date())
-        val fileName = "zenith_financial_report_$todayStr.pdf"
+        val isFamily = options.scopeFilter == FinanceScope.FAMILY || txAttributionByServerId.isNotEmpty() || !workspaceName.equals("Personal", ignoreCase = true)
+        val fileName = "zenith_${if (isFamily) "family" else "personal"}_report_$todayStr.pdf"
         val file = File(context.cacheDir, fileName)
 
         val totalIncome = filtered.filter { it.type == TransactionType.INCOME }.sumOf { it.amount }
@@ -327,8 +414,11 @@ object ExportImportService {
 
             if (pageIndex == 0) {
                 // Header Banner
-                canvas.drawText("ZENITH", margin, y + 20f, titlePaint)
-                canvas.drawText("Transaction & Financial Summary Report", margin, y + 34f, subPaint)
+                canvas.drawText(if (isFamily) "ZENITH FAMILY ($workspaceName)" else "ZENITH", margin, y + 20f, titlePaint)
+                canvas.drawText(
+                    if (isFamily) "Family Financial Summary Report" else "Transaction & Financial Summary Report",
+                    margin, y + 34f, subPaint
+                )
                 canvas.drawText("Report Period: $startDateStr – $endDateStr", margin, y + 46f, subPaint)
 
                 // Date generated (Right aligned)
@@ -388,7 +478,12 @@ object ExportImportService {
                 val amountStr = "${if (isIncome) "+" else "-"}$currencySymbol${String.format(Locale.US, "%,.2f", tx.amount)}"
                 val titleTruncated = if (tx.title.length > 25) tx.title.take(23) + "…" else tx.title
                 val catTruncated = if (tx.category.length > 16) tx.category.take(14) + "…" else tx.category
-                val scopeStr = if (tx.financeScope == FinanceScope.FAMILY) "Family" else "Personal"
+                val attr = tx.serverId?.let { txAttributionByServerId[it] }
+                val scopeStr = if (tx.financeScope == FinanceScope.FAMILY) {
+                    attr?.paidByName?.take(10) ?: "Family"
+                } else {
+                    "Personal"
+                }
 
                 canvas.drawText(dateStr, margin + 8f, y + 14f, textPaint)
                 canvas.drawText(titleTruncated, margin + 70f, y + 14f, boldTextPaint)
@@ -640,12 +735,24 @@ object ExportImportService {
         }
 
         // Check if JSON
-        if (rawContent.trim().startsWith("{")) {
+        val trimmedRaw = rawContent.trim()
+        if (trimmedRaw.startsWith("{")) {
             return parseJsonImport(rawContent, existingTransactions)
         }
 
+        // Check if Zenith SpreadsheetML Excel XML (.xlsx XML)
+        if (trimmedRaw.startsWith("<?xml", ignoreCase = true) || trimmedRaw.contains("<Workbook", ignoreCase = true)) {
+            return parseSpreadsheetXmlImport(trimmedRaw, existingTransactions)
+        }
+
         val headerLine = lines.first()
-        val isHeaderPresent = headerLine.lowercase().contains("title") || headerLine.lowercase().contains("amount")
+        val headerCols = parseCsvLine(headerLine).map {
+            it.trim().lowercase().replace(" ", "_")
+        }
+        val isHeaderPresent = headerCols.any {
+            it == "title" || it == "amount" || it == "transaction_id" || it == "date"
+        }
+        val colIndex = if (isHeaderPresent) headerCols.withIndex().associate { it.value to it.index } else emptyMap()
         val dataRows = if (isHeaderPresent) lines.drop(1) else lines
 
         dataRows.forEachIndexed { idx, line ->
@@ -657,14 +764,21 @@ object ExportImportService {
                 return@forEachIndexed
             }
 
-            val dateStr = cols.getOrNull(0)?.trim() ?: ""
-            val titleStr = cols.getOrNull(1)?.trim() ?: ""
-            val typeStr = cols.getOrNull(2)?.trim()?.lowercase() ?: "expense"
-            val amountRaw = cols.getOrNull(3)?.trim() ?: ""
-            val catStr = cols.getOrNull(5)?.trim() ?: cols.getOrNull(4)?.trim() ?: "Food & Dining"
-            val methodStr = cols.getOrNull(6)?.trim() ?: "UPI"
-            val accountStr = cols.getOrNull(7)?.trim() ?: "Personal"
-            val noteStr = cols.getOrNull(8)?.trim() ?: ""
+            fun col(name: String, defaultIdx: Int): String? {
+                val mappedIdx = colIndex[name]
+                val resolvedIdx = if (isHeaderPresent) mappedIdx else defaultIdx
+                return resolvedIdx?.let { cols.getOrNull(it)?.trim() }
+            }
+
+            val dateStr = col("date", 0) ?: ""
+            val titleStr = col("title", 1) ?: ""
+            val typeStr = (col("type", 2) ?: "expense").lowercase()
+            val amountRaw = col("amount", 3) ?: ""
+            val catStr = col("category", 5) ?: col("category", 4) ?: "Food & Dining"
+            val labelStr = col("custom_label", -1) ?: col("label", -1) ?: ""
+            val methodStr = col("payment_method", 6) ?: "UPI"
+            val accountStr = col("account", 7) ?: "Personal"
+            val noteStr = col("notes", 8) ?: ""
 
             // Validate Title
             if (titleStr.isBlank()) {
@@ -673,9 +787,9 @@ object ExportImportService {
             }
 
             // Validate Amount
-            val cleanAmountNum = amountRaw.replace("$", "").replace("₹", "").replace("€", "").replace(",", "")
+            val cleanAmountNum = amountRaw.replace("$", "").replace("₹", "").replace("€", "").replace("£", "").replace(",", "")
             val parsedAmount = cleanAmountNum.toDoubleOrNull()
-            if (parsedAmount == null || parsedAmount <= 0) {
+            if (parsedAmount == null || parsedAmount <= 0 || !parsedAmount.isFinite()) {
                 errorList.add(ImportRowError(rowNumber, line, "Invalid amount: '$amountRaw'. Expected positive number (e.g. 150.0)"))
                 return@forEachIndexed
             }
@@ -687,9 +801,9 @@ object ExportImportService {
                 System.currentTimeMillis()
             }
 
-            // Validate Type
+            // Validate Type & Scope
             val parsedType = if (typeStr == "income" || typeStr == "inflow") TransactionType.INCOME else TransactionType.EXPENSE
-            val parsedScope = if (accountStr.equals("family", ignoreCase = true)) FinanceScope.FAMILY else FinanceScope.PERSONAL
+            val parsedScope = if (accountStr.contains("family", ignoreCase = true)) FinanceScope.FAMILY else FinanceScope.PERSONAL
 
             val newTx = TransactionEntity(
                 title = titleStr,
@@ -698,6 +812,7 @@ object ExportImportService {
                 category = if (catStr.isBlank()) "Food & Dining" else catStr,
                 paymentMethod = if (methodStr.isBlank()) "UPI" else methodStr,
                 note = noteStr,
+                customLabel = labelStr,
                 dateMillis = parsedMillis,
                 financeScope = parsedScope,
                 syncStatus = "PENDING_CREATE",
@@ -840,30 +955,78 @@ object ExportImportService {
         }
     }
 
+    private fun parseSpreadsheetXmlImport(
+        xmlContent: String,
+        existingTransactions: List<TransactionEntity>
+    ): ImportValidationResult {
+        val rowRegex = Regex("""<Row(?:\s+[^>]*)?>(.*?)</Row>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val cellRegex = Regex("""<Data[^>]*>(.*?)</Data>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        fun unescapeXml(s: String): String = s
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+
+        val rows = rowRegex.findAll(xmlContent).map { rowMatch ->
+            cellRegex.findAll(rowMatch.groupValues[1]).map { unescapeXml(it.groupValues[1]) }.toList()
+        }.filter { it.isNotEmpty() }.toList()
+
+        if (rows.isEmpty()) {
+            return ImportValidationResult(0, emptyList(), emptyList(), listOf(ImportRowError(1, "", "Spreadsheet contains no rows")))
+        }
+
+        val csvLines = rows.joinToString("\n") { cells ->
+            cells.joinToString(",") { cell ->
+                if (cell.contains(",") || cell.contains("\"") || cell.contains("\n")) {
+                    "\"${cell.replace("\"", "\"\"")}\""
+                } else {
+                    cell
+                }
+            }
+        }
+        return validateAndParseImport(csvLines, existingTransactions)
+    }
+
     private fun parseCsvLine(line: String): List<String> {
         val tokens = mutableListOf<String>()
         var inQuotes = false
         val sb = StringBuilder()
 
-        line.forEach { ch ->
+        var i = 0
+        while (i < line.length) {
+            val ch = line[i]
             when {
-                ch == '\"' -> inQuotes = !inQuotes
+                ch == '\"' -> {
+                    if (inQuotes && i + 1 < line.length && line[i + 1] == '\"') {
+                        sb.append('\"')
+                        i++
+                    } else {
+                        inQuotes = !inQuotes
+                    }
+                }
                 ch == ',' && !inQuotes -> {
                     tokens.add(sb.toString().trim())
                     sb.setLength(0)
                 }
                 else -> sb.append(ch)
             }
+            i++
         }
         tokens.add(sb.toString().trim())
         return tokens
     }
 
     private fun escapeCsv(value: String): String {
-        return if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
-            "\"${value.replace("\"", "\"\"")}\""
+        val neutralized = if (value.isNotEmpty() && value[0] in charArrayOf('=', '+', '-', '@', '\t', '\r')) {
+            "'$value"
         } else {
             value
+        }
+        return if (neutralized.contains(",") || neutralized.contains("\"") || neutralized.contains("\n") || neutralized.contains("\r") || neutralized != value) {
+            "\"${neutralized.replace("\"", "\"\"")}\""
+        } else {
+            neutralized
         }
     }
 

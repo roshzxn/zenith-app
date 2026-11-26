@@ -11,6 +11,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.UUID
 
 class SupabaseAuthService(
@@ -68,13 +72,19 @@ class SupabaseAuthService(
         }
 
         if (!SupabaseClientConfig.isConfigured) {
+            val cached = loadUserFromCache()
+            if (cached != null && cached.email.equals(cleanEmail, ignoreCase = true) && !verifyOfflineCredential(cleanEmail, password)) {
+                return@withContext AuthResult(false, "Invalid email or password.")
+            }
             val user = AuthUser(
                 id = UUID.nameUUIDFromBytes(cleanEmail.lowercase().toByteArray()).toString(),
                 email = cleanEmail,
-                fullName = cleanEmail.substringBefore("@").replaceFirstChar { it.uppercase() }
+                fullName = cached?.takeIf { it.email.equals(cleanEmail, ignoreCase = true) }?.fullName
+                    ?: cleanEmail.substringBefore("@").replaceFirstChar { it.uppercase() }
             )
             _currentUser.value = user
             saveUserToCache(user)
+            storeOfflineCredential(cleanEmail, password)
             return@withContext AuthResult(
                 success = true,
                 message = "Signed in successfully (Offline Vault)",
@@ -90,13 +100,15 @@ class SupabaseAuthService(
             }
             val user = SupabaseClientConfig.supabase.auth.currentUserOrNull()
             if (user != null) {
+                val metaName = user.userMetadata?.get("full_name")?.toString()?.trim('"')?.takeIf { it.isNotBlank() }
                 val authUser = AuthUser(
                     id = user.id,
                     email = cleanEmail,
-                    fullName = cleanEmail.substringBefore("@").replaceFirstChar { it.uppercase() }
+                    fullName = metaName ?: cleanEmail.substringBefore("@").replaceFirstChar { it.uppercase() }
                 )
                 _currentUser.value = authUser
                 saveUserToCache(authUser)
+                storeOfflineCredential(cleanEmail, password)
                 return@withContext AuthResult(
                     success = true,
                     message = "Welcome back to Zenith!",
@@ -111,14 +123,20 @@ class SupabaseAuthService(
 
             if (isNetwork) {
                 val cached = loadUserFromCache()
-                if (cached != null && cached.email.equals(cleanEmail, ignoreCase = true)) {
+                if (cached != null &&
+                    cached.email.equals(cleanEmail, ignoreCase = true) &&
+                    verifyOfflineCredential(cleanEmail, password)
+                ) {
                     _currentUser.value = cached
                     return@withContext AuthResult(
                         success = true,
-                        message = "Network unavailable. Signed in using cached offline vault.",
+                        message = "Network unavailable. Signed in using verified offline vault.",
                         isOffline = true,
                         user = cached
                     )
+                }
+                if (cached != null && cached.email.equals(cleanEmail, ignoreCase = true) && hasOfflineCredential(cleanEmail)) {
+                    return@withContext AuthResult(false, "Incorrect password for cached offline vault.")
                 }
                 return@withContext AuthResult(
                     success = false,
@@ -169,6 +187,7 @@ class SupabaseAuthService(
             )
             _currentUser.value = user
             saveUserToCache(user)
+            storeOfflineCredential(cleanEmail, password)
             return@withContext AuthResult(
                 success = true,
                 message = "Account created successfully (Offline Vault)",
@@ -181,6 +200,9 @@ class SupabaseAuthService(
             SupabaseClientConfig.supabase.auth.signUpWith(Email) {
                 this.email = cleanEmail
                 this.password = password
+                data = buildJsonObject {
+                    put("full_name", cleanName)
+                }
             }
             val user = SupabaseClientConfig.supabase.auth.currentUserOrNull()
             if (user != null) {
@@ -191,6 +213,7 @@ class SupabaseAuthService(
                 )
                 _currentUser.value = authUser
                 saveUserToCache(authUser)
+                storeOfflineCredential(cleanEmail, password)
                 try {
                     val profile = ProfileDto(
                         id = user.id,
@@ -299,10 +322,46 @@ class SupabaseAuthService(
                 ?.remove(KEY_USER_ID)
                 ?.remove(KEY_USER_EMAIL)
                 ?.remove(KEY_USER_NAME)
+                ?.remove(KEY_CREDENTIAL_VERIFIER)
                 ?.apply()
         } catch (e: Exception) {
             Log.w(tag, "Failed to clear user cache: ${e.message}")
         }
+    }
+
+    private fun storeOfflineCredential(email: String, password: String) {
+        try {
+            val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+            val saltHex = salt.joinToString("") { "%02x".format(it) }
+            val hashHex = hashPassword(email, password, saltHex)
+            prefs?.edit()
+                ?.putString(KEY_CREDENTIAL_VERIFIER, "${email.trim().lowercase()}|$saltHex|$hashHex")
+                ?.apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun hasOfflineCredential(email: String): Boolean {
+        val raw = prefs?.getString(KEY_CREDENTIAL_VERIFIER, null) ?: return false
+        return raw.substringBefore("|").equals(email.trim().lowercase(), ignoreCase = true)
+    }
+
+    private fun verifyOfflineCredential(email: String, password: String): Boolean {
+        val raw = prefs?.getString(KEY_CREDENTIAL_VERIFIER, null) ?: return false
+        val parts = raw.split("|")
+        if (parts.size != 3) return false
+        if (!parts[0].equals(email.trim().lowercase(), ignoreCase = true)) return false
+        val expectedHash = hashPassword(email, password, parts[1])
+        return MessageDigest.isEqual(
+            expectedHash.toByteArray(Charsets.UTF_8),
+            parts[2].toByteArray(Charsets.UTF_8)
+        )
+    }
+
+    private fun hashPassword(email: String, password: String, saltHex: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val input = "${email.trim().lowercase()}:$saltHex:$password".toByteArray(Charsets.UTF_8)
+        return digest.digest(input).joinToString("") { "%02x".format(it) }
     }
 
     private fun isNetworkException(e: Exception): Boolean {
@@ -331,5 +390,6 @@ class SupabaseAuthService(
         private const val KEY_USER_ID = "cached_user_id"
         private const val KEY_USER_EMAIL = "cached_user_email"
         private const val KEY_USER_NAME = "cached_user_name"
+        private const val KEY_CREDENTIAL_VERIFIER = "cached_credential_verifier"
     }
 }

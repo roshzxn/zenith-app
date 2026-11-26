@@ -13,14 +13,32 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE syncStatus = 'PENDING_UPDATE' AND isDeleted = 0")
     suspend fun getPendingUpdates(): List<TransactionEntity>
 
-    @Query("SELECT * FROM transactions WHERE syncStatus = 'PENDING_DELETE' OR isDeleted = 1")
+    @Query("SELECT * FROM transactions WHERE syncStatus = 'PENDING_DELETE' OR (isDeleted = 1 AND syncStatus != 'PENDING_UNDO_DELETE')")
     suspend fun getPendingDeletes(): List<TransactionEntity>
 
     @Query("SELECT serverId FROM transactions WHERE isDeleted = 1 AND serverId IS NOT NULL")
     suspend fun getDeletedServerIds(): List<String>
 
+    @Query("UPDATE transactions SET isDeleted = 1, syncStatus = 'PENDING_UNDO_DELETE', updatedAt = :updatedAt WHERE id = :id")
+    suspend fun markTransactionPendingUndoDelete(id: Long, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE id = :id AND isDeleted = 1 AND syncStatus = 'PENDING_UNDO_DELETE'")
+    suspend fun commitPendingUndoDelete(id: Long, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE isDeleted = 1 AND syncStatus = 'PENDING_UNDO_DELETE'")
+    suspend fun commitAllPendingUndoDeletes(updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET isDeleted = 1, syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE financeScope = 'PERSONAL' AND serverId IS NOT NULL AND serverId != ''")
+    suspend fun markAllPersonalTransactionsPendingDelete(updatedAt: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM transactions WHERE financeScope = 'PERSONAL' AND (serverId IS NULL OR serverId = '')")
+    suspend fun deleteLocalOnlyPersonalTransactions()
+
     @Query("SELECT * FROM transactions WHERE serverId = :serverId LIMIT 1")
     suspend fun getTransactionByServerId(serverId: String): TransactionEntity?
+
+    @Query("SELECT * FROM transactions WHERE id = :id LIMIT 1")
+    suspend fun getTransactionById(id: Long): TransactionEntity?
 
     @Query("SELECT * FROM transactions WHERE upiTransactionId = :utr AND isDeleted = 0 LIMIT 1")
     suspend fun getTransactionByUtr(utr: String): TransactionEntity?
@@ -85,7 +103,7 @@ interface TransactionDao {
     @Query("UPDATE transactions SET isDeleted = 0, syncStatus = 'PENDING_UPDATE', updatedAt = :updatedAt WHERE serverId = :serverId")
     suspend fun restoreTransactionByServerId(serverId: String, updatedAt: Long = System.currentTimeMillis())
 
-    @Query("UPDATE transactions SET createdByUserId = :newUserId, syncStatus = 'PENDING_CREATE', updatedAt = :updatedAt WHERE (createdByUserId = 'local_user_1' OR createdByUserId IS NULL OR createdByUserId != :newUserId) AND financeScope = 'PERSONAL' AND isDeleted = 0")
+    @Query("UPDATE transactions SET createdByUserId = :newUserId, syncStatus = CASE WHEN serverId IS NULL OR serverId = '' THEN 'PENDING_CREATE' ELSE syncStatus END, updatedAt = :updatedAt WHERE (createdByUserId = 'local_user_1' OR createdByUserId IS NULL OR createdByUserId != :newUserId) AND financeScope = 'PERSONAL' AND isDeleted = 0")
     suspend fun reassignPersonalTransactionsToUser(newUserId: String, updatedAt: Long = System.currentTimeMillis()): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -96,6 +114,12 @@ interface TransactionDao {
 
     @Delete
     suspend fun deleteTransaction(transaction: TransactionEntity)
+
+    @Query("DELETE FROM receipts WHERE transactionId = :id")
+    suspend fun deleteReceiptForTransactionCleanup(id: Long)
+
+    @Query("DELETE FROM receipt_items WHERE transactionId = :id")
+    suspend fun deleteReceiptItemsForLocalCleanup(id: Long)
 
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteTransactionById(id: Long)
@@ -166,6 +190,12 @@ interface BudgetDao {
     @Query("DELETE FROM budgets WHERE id = :id")
     suspend fun deleteBudgetById(id: Long)
 
+    @Query("UPDATE budgets SET isDeleted = 1, syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE financeScope = 'PERSONAL' AND serverId IS NOT NULL AND serverId != ''")
+    suspend fun markAllPersonalBudgetsPendingDelete(updatedAt: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM budgets WHERE financeScope = 'PERSONAL' AND (serverId IS NULL OR serverId = '')")
+    suspend fun deleteLocalOnlyPersonalBudgets()
+
     @Query("DELETE FROM budgets")
     suspend fun deleteAllBudgets()
 }
@@ -210,6 +240,12 @@ interface SavingsGoalDao {
 
     @Query("DELETE FROM savings_goals WHERE id = :id")
     suspend fun deleteGoalById(id: Long)
+
+    @Query("UPDATE savings_goals SET isDeleted = 1, syncStatus = 'PENDING_DELETE', updatedAt = :updatedAt WHERE financeScope = 'PERSONAL' AND serverId IS NOT NULL AND serverId != ''")
+    suspend fun markAllPersonalGoalsPendingDelete(updatedAt: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM savings_goals WHERE financeScope = 'PERSONAL' AND (serverId IS NULL OR serverId = '')")
+    suspend fun deleteLocalOnlyPersonalGoals()
 
     @Query("DELETE FROM savings_goals")
     suspend fun deleteAllGoals()
@@ -267,6 +303,30 @@ interface ReceiptDao {
 
     @Query("DELETE FROM receipts WHERE transactionId = :transactionId")
     suspend fun deleteReceiptByTransactionId(transactionId: Long)
+
+    @Transaction
+    suspend fun insertReceiptWithItems(receipt: ReceiptEntity, items: List<ReceiptItemEntity>): Long {
+        val receiptId = insertReceipt(receipt)
+        if (items.isNotEmpty()) {
+            insertReceiptItems(items.map { it.copy(receiptId = receiptId, transactionId = receipt.transactionId) })
+        }
+        return receiptId
+    }
+
+    @Transaction
+    suspend fun replaceReceiptWithItems(receipt: ReceiptEntity, items: List<ReceiptItemEntity>) {
+        updateReceipt(receipt)
+        deleteReceiptItemsByTransactionId(receipt.transactionId)
+        if (items.isNotEmpty()) {
+            insertReceiptItems(items.map { it.copy(receiptId = receipt.id, transactionId = receipt.transactionId) })
+        }
+    }
+
+    @Transaction
+    suspend fun deleteReceiptAndItemsByTransactionId(transactionId: Long) {
+        deleteReceiptItemsByTransactionId(transactionId)
+        deleteReceiptByTransactionId(transactionId)
+    }
 
     @Query("DELETE FROM receipts")
     suspend fun deleteAllReceipts()

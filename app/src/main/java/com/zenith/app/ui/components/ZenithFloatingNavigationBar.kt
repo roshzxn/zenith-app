@@ -82,11 +82,11 @@ fun ZenithFloatingNavigationBar(
         contentAlignment = Alignment.Center
     ) {
 
-        // Floating Frosted Glass Capsule
+        // Floating Frosted Glass Capsule (allows taller growth for OS large font scales)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(64.dp)
+                .defaultMinSize(minHeight = 64.dp)
                 .shadow(
                     elevation = if (isOled) 0.dp else if (isDark) 18.dp else 10.dp,
                     shape = RoundedCornerShape(32.dp),
@@ -105,8 +105,9 @@ fun ZenithFloatingNavigationBar(
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 64.dp)
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceAround,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -134,7 +135,7 @@ fun ZenithFloatingNavigationBar(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .fillMaxHeight()
+                            .defaultMinSize(minHeight = 52.dp)
                             .scale(animatedScale)
                             .clip(RoundedCornerShape(22.dp))
                             .then(
@@ -175,6 +176,7 @@ fun ZenithFloatingNavigationBar(
                         contentAlignment = Alignment.Center
                     ) {
                         Column(
+                            modifier = Modifier.padding(horizontal = 2.dp, vertical = 2.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
@@ -187,10 +189,12 @@ fun ZenithFloatingNavigationBar(
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = tab.title,
-                                fontSize = 10.5.sp,
+                                fontSize = 10.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                 color = activeContentColor,
-                                maxLines = 1
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                             // Glowing micro-indicator bar under active tab
                             AnimatedVisibility(

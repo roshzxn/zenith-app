@@ -220,12 +220,33 @@ object UpiNotificationParser {
     }
 
     fun extractAmount(text: String): Double? {
+        val ignoredPrefixRegex = Regex(
+            """(?:avl\.?\s*bal|avbl\.?\s*bal|available\s+balance|clear\s+bal|bal(?:ance)?\s*(?:is|:)?|limit|cashback|reward|up\s*to)\s*$""",
+            RegexOption.IGNORE_CASE
+        )
         val matcher = AMOUNT_REGEX.matcher(text)
-        if (matcher.find()) {
-            val rawAmount = matcher.group(1)?.replace(",", "") ?: return null
-            return rawAmount.toDoubleOrNull()
+        val candidates = mutableListOf<Pair<Double, Int>>()
+        while (matcher.find()) {
+            val start = matcher.start()
+            val fullMatch = matcher.group(0).orEmpty().lowercase()
+            val preceding = text.substring(maxOf(0, start - 32), start).lowercase()
+            if (ignoredPrefixRegex.containsMatchIn(preceding)) continue
+            val value = matcher.group(1)?.replace(",", "")?.toDoubleOrNull() ?: continue
+            if (value <= 0.0) continue
+            val isExplicitAction = fullMatch.contains("debited") ||
+                fullMatch.contains("credited") ||
+                fullMatch.contains("paid") ||
+                fullMatch.contains("sent") ||
+                fullMatch.contains("received") ||
+                fullMatch.contains("transfer of") ||
+                fullMatch.contains("payment of") ||
+                fullMatch.contains("spent") ||
+                preceding.contains("debited") ||
+                preceding.contains("credited") ||
+                preceding.contains("paid")
+            candidates.add(value to if (isExplicitAction) 2 else 1)
         }
-        return null
+        return candidates.maxByOrNull { it.second }?.first
     }
 
     fun extractUtr(text: String): String? {
@@ -318,7 +339,7 @@ object UpiNotificationParser {
         return raw
             .replace(Regex("""\s+(?:on\s+[0-9]|successfully|successful|via|from|using|with|upi|ref\s*no|refno|ref|utr|rrn|txn|for|debited|credited|not\s+you).*$""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""[0-9]{10,}"""), "") // Remove phone numbers or account numbers
-            .replace(Regex("""[^\w\s.&'-]"""), "") // Keep periods for "Dr. Sharma" or initials
+            .replace(Regex("""[^\p{L}\p{N}\s.&'-]"""), "") // Support Unicode names cleanly
             .trim(' ', '.', '-', ':')
             .takeIf { it.length in 2..50 } ?: ""
     }
@@ -356,6 +377,12 @@ object UpiNotificationParser {
     }
 
     private fun containsAny(source: String, vararg keywords: String): Boolean {
-        return keywords.any { source.contains(it) }
+        return keywords.any { kw ->
+            if (kw.length <= 4 && kw.all { it.isLetterOrDigit() }) {
+                Regex("""\b${Regex.escape(kw)}\b""", RegexOption.IGNORE_CASE).containsMatchIn(source)
+            } else {
+                source.contains(kw)
+            }
+        }
     }
 }

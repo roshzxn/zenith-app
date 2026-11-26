@@ -15,7 +15,9 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object UpiPaymentBus {
     private const val RECENTLY_RECORDED_WINDOW_MS = 300_000L // 5 minutes
-    private val recentlyRecordedKeys = ConcurrentHashMap<String, Long>()
+    private data class RecordedAmountEntry(val timestampMillis: Long, val utrLower: String?)
+    private val recentlyRecordedUtrs = ConcurrentHashMap<String, Long>()
+    private val recentlyRecordedAmounts = ConcurrentHashMap<String, RecordedAmountEntry>()
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val _detectedPayments = MutableSharedFlow<ExtractedUpiPayment>(
@@ -41,9 +43,10 @@ object UpiPaymentBus {
     fun markRecorded(amount: Double, utr: String? = null) {
         val now = System.currentTimeMillis()
         cleanup(now)
-        recentlyRecordedKeys[buildAmountKey(amount)] = now
-        if (!utr.isNullOrBlank()) {
-            recentlyRecordedKeys["utr_${utr.trim().lowercase()}"] = now
+        val cleanUtr = utr?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+        recentlyRecordedAmounts[buildAmountKey(amount)] = RecordedAmountEntry(now, cleanUtr)
+        if (cleanUtr != null) {
+            recentlyRecordedUtrs["utr_$cleanUtr"] = now
         }
         clearPending()
     }
@@ -51,14 +54,20 @@ object UpiPaymentBus {
     fun wasRecentlyRecorded(amount: Double, utr: String? = null): Boolean {
         val now = System.currentTimeMillis()
         cleanup(now)
-        if (!utr.isNullOrBlank()) {
-            val utrTime = recentlyRecordedKeys["utr_${utr.trim().lowercase()}"]
+        val cleanUtr = utr?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+        if (cleanUtr != null) {
+            val utrTime = recentlyRecordedUtrs["utr_$cleanUtr"]
             if (utrTime != null && (now - utrTime) < RECENTLY_RECORDED_WINDOW_MS) {
                 return true
             }
+            // If incoming has a distinct non-blank UTR, only match prior amount entry that had no UTR
+            val amtEntry = recentlyRecordedAmounts[buildAmountKey(amount)]
+            return amtEntry != null &&
+                amtEntry.utrLower == null &&
+                (now - amtEntry.timestampMillis) < RECENTLY_RECORDED_WINDOW_MS
         }
-        val amtTime = recentlyRecordedKeys[buildAmountKey(amount)]
-        return amtTime != null && (now - amtTime) < RECENTLY_RECORDED_WINDOW_MS
+        val amtEntry = recentlyRecordedAmounts[buildAmountKey(amount)]
+        return amtEntry != null && (now - amtEntry.timestampMillis) < RECENTLY_RECORDED_WINDOW_MS
     }
 
     /**
@@ -76,11 +85,16 @@ object UpiPaymentBus {
     }
 
     private fun cleanup(now: Long) {
-        val it = recentlyRecordedKeys.entries.iterator()
-        while (it.hasNext()) {
-            val entry = it.next()
-            if (now - entry.value > RECENTLY_RECORDED_WINDOW_MS) {
-                it.remove()
+        val utrIt = recentlyRecordedUtrs.entries.iterator()
+        while (utrIt.hasNext()) {
+            if (now - utrIt.next().value > RECENTLY_RECORDED_WINDOW_MS) {
+                utrIt.remove()
+            }
+        }
+        val amtIt = recentlyRecordedAmounts.entries.iterator()
+        while (amtIt.hasNext()) {
+            if (now - amtIt.next().value.timestampMillis > RECENTLY_RECORDED_WINDOW_MS) {
+                amtIt.remove()
             }
         }
     }

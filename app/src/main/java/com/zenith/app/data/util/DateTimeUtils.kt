@@ -29,8 +29,10 @@ object IsoDateUtils {
         }
     }
 
-    fun fromIsoString(isoString: String?): Long {
-        if (isoString.isNullOrBlank()) return System.currentTimeMillis()
+    fun fromIsoString(isoString: String?): Long = fromIsoString(isoString, System.currentTimeMillis())
+
+    fun fromIsoString(isoString: String?, fallbackMillis: Long): Long {
+        if (isoString.isNullOrBlank()) return fallbackMillis
         try {
             val parsed = isoFormat.get()?.parse(isoString)
             if (parsed != null) return parsed.time
@@ -45,6 +47,6 @@ object IsoDateUtils {
                 if (parsed != null) return parsed.time
             } catch (_: Exception) {}
         }
-        return System.currentTimeMillis()
+        return fallbackMillis
     }
 }

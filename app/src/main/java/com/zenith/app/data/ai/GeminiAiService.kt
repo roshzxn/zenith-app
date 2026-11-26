@@ -159,105 +159,116 @@ object GeminiAiService {
                 note = "Gemini API key not configured. Enter details manually."
             )
         }
-        try {
-            val systemInstruction = """
-                You are a financial transaction voice parser. Transcribe the spoken audio in English and extract the transaction into ONLY a JSON object:
-                - "title": concise English title (e.g. "Lunch", "Groceries", "Salary")
-                - "amount": total amount as number (e.g. 250.0)
-                - "type": "EXPENSE" or "INCOME"
-                - "category": ("Food & Dining", "Transportation", "Shopping", "Entertainment", "Bills & Utilities", "Housing & Rent", "Healthcare", "Education", "Salary & Income", "Investments", "Other")
-                - "paymentMethod": ("UPI", "Cash", "Credit Card", "Debit Card", "Bank Transfer")
-                - "note": transcription in English
-                Return plain JSON only without markdown formatting.
-            """.trimIndent()
+        val candidateModels = listOf("gemini-3.5-flash-lite", "gemini-flash-lite-latest")
+        var lastCode = 0
+        for (model in candidateModels) {
+            var conn: HttpURLConnection? = null
+            try {
+                val systemInstruction = """
+                    You are a financial transaction voice parser. Transcribe the spoken audio in English and extract the transaction into ONLY a JSON object:
+                    - "title": concise English title (e.g. "Lunch", "Groceries", "Salary")
+                    - "amount": total amount as number (e.g. 250.0)
+                    - "type": "EXPENSE" or "INCOME"
+                    - "category": ("Food & Dining", "Transportation", "Shopping", "Entertainment", "Bills & Utilities", "Housing & Rent", "Healthcare", "Education", "Salary & Income", "Investments", "Other")
+                    - "paymentMethod": ("UPI", "Cash", "Credit Card", "Debit Card", "Bank Transfer")
+                    - "note": transcription in English
+                    Return plain JSON only without markdown formatting.
+                """.trimIndent()
 
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$apiKey")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.doOutput = true
-            conn.connectTimeout = 8000
-            conn.readTimeout = 15000
+                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
+                conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+                conn.connectTimeout = 8000
+                conn.readTimeout = 15000
 
-            val requestPayload = JSONObject().apply {
-                put("systemInstruction", JSONObject().apply {
-                    put("parts", JSONArray().put(JSONObject().apply { put("text", systemInstruction) }))
-                })
-                put("generationConfig", JSONObject().apply {
-                    put("temperature", 0.1)
-                    put("maxOutputTokens", 256)
-                    put("responseMimeType", "application/json")
-                })
-                put("contents", JSONArray().put(JSONObject().apply {
-                    put("parts", JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("inlineData", JSONObject().apply {
-                                put("mimeType", "audio/mp4")
-                                put("data", audioBase64)
+                val requestPayload = JSONObject().apply {
+                    put("systemInstruction", JSONObject().apply {
+                        put("parts", JSONArray().put(JSONObject().apply { put("text", systemInstruction) }))
+                    })
+                    put("generationConfig", JSONObject().apply {
+                        put("temperature", 0.1)
+                        put("maxOutputTokens", 256)
+                        put("responseMimeType", "application/json")
+                    })
+                    put("contents", JSONArray().put(JSONObject().apply {
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("inlineData", JSONObject().apply {
+                                    put("mimeType", "audio/mp4")
+                                    put("data", audioBase64)
+                                })
                             })
                         })
-                    })
-                }))
-            }
+                    }))
+                }
 
-            OutputStreamWriter(conn.outputStream).use { writer ->
-                writer.write(requestPayload.toString())
-                writer.flush()
-            }
+                OutputStreamWriter(conn.outputStream).use { writer ->
+                    writer.write(requestPayload.toString())
+                    writer.flush()
+                }
 
-            if (conn.responseCode == 200) {
-                val responseString = conn.inputStream.bufferedReader().readText()
-                val respObj = JSONObject(responseString)
-                val candidates = respObj.optJSONArray("candidates")
-                val firstCandidate = candidates?.optJSONObject(0)
-                val content = firstCandidate?.optJSONObject("content")
-                val parts = content?.optJSONArray("parts")
-                var text = ""
-                if (parts != null) {
-                    for (p in 0 until parts.length()) {
-                        val partObj = parts.optJSONObject(p) ?: continue
-                        val t = partObj.optString("text", "")
-                        if (t.isNotBlank() && !partObj.optBoolean("thought", false)) {
-                            text = t
-                            break
+                lastCode = conn.responseCode
+                if (lastCode == 200) {
+                    val responseString = conn.inputStream.bufferedReader().use { it.readText() }
+                    val respObj = JSONObject(responseString)
+                    val candidates = respObj.optJSONArray("candidates")
+                    val firstCandidate = candidates?.optJSONObject(0)
+                    val content = firstCandidate?.optJSONObject("content")
+                    val parts = content?.optJSONArray("parts")
+                    var text = ""
+                    if (parts != null) {
+                        for (p in 0 until parts.length()) {
+                            val partObj = parts.optJSONObject(p) ?: continue
+                            val t = partObj.optString("text", "")
+                            if (t.isNotBlank() && !partObj.optBoolean("thought", false)) {
+                                text = t
+                                break
+                            }
+                        }
+                        if (text.isBlank() && parts.length() > 0) {
+                            text = parts.optJSONObject(0)?.optString("text", "") ?: ""
                         }
                     }
-                    if (text.isBlank() && parts.length() > 0) {
-                        text = parts.optJSONObject(0)?.optString("text", "") ?: ""
-                    }
-                }
-                val jsonClean = text.replace("```json", "").replace("```", "").trim()
-                val jsonObj = JSONObject(jsonClean)
-                val title = jsonObj.optString("title", "Voice Entry")
-                val amount = jsonObj.optDouble("amount", 0.0)
-                val typeStr = jsonObj.optString("type", "EXPENSE")
-                val type = if (typeStr.uppercase() == "INCOME") TransactionType.INCOME else TransactionType.EXPENSE
-                val category = jsonObj.optString("category", if (type == TransactionType.INCOME) "Salary & Income" else "Food & Dining")
-                val paymentMethod = jsonObj.optString("paymentMethod", "UPI")
-                val note = jsonObj.optString("note", "")
+                    val jsonClean = text.replace("```json", "").replace("```", "").trim()
+                    val jsonObj = JSONObject(jsonClean)
+                    val title = jsonObj.optString("title", "Voice Entry").ifBlank { "Voice Entry" }
+                    val amount = jsonObj.optDouble("amount", 0.0)
+                    val typeStr = jsonObj.optString("type", "EXPENSE")
+                    val type = if (typeStr.uppercase() == "INCOME") TransactionType.INCOME else TransactionType.EXPENSE
+                    val category = jsonObj.optString("category", if (type == TransactionType.INCOME) "Salary & Income" else "Food & Dining")
+                    val paymentMethod = jsonObj.optString("paymentMethod", "UPI")
+                    val note = jsonObj.optString("note", "")
 
-                ParsedVoiceExpense(
-                    title = title,
-                    amount = if (amount > 0) amount else 0.0,
-                    type = type,
-                    category = category,
-                    paymentMethod = paymentMethod,
-                    note = note
-                )
-            } else {
-                ParsedVoiceExpense(
-                    title = "Voice Entry",
-                    amount = 0.0,
-                    note = "Audio recognition failed (HTTP ${conn.responseCode}). Enter amount manually or re-speak."
-                )
+                    return@withContext ParsedVoiceExpense(
+                        title = title,
+                        amount = if (amount > 0 && amount.isFinite()) amount else 0.0,
+                        type = type,
+                        category = category,
+                        paymentMethod = paymentMethod,
+                        note = note
+                    )
+                } else if (lastCode == 404) {
+                    continue
+                } else {
+                    break
+                }
+            } catch (_: Exception) {
+                // Retry next candidate model or fail gracefully below
+            } finally {
+                conn?.disconnect()
             }
-        } catch (e: Exception) {
-            ParsedVoiceExpense(
-                title = "Voice Entry",
-                amount = 0.0,
-                note = "Could not transcribe audio. Enter amount manually or re-speak."
-            )
         }
+        return@withContext ParsedVoiceExpense(
+            title = "Voice Entry",
+            amount = 0.0,
+            note = if (lastCode != 0 && lastCode != 200) {
+                "Audio recognition failed (HTTP $lastCode). Enter amount manually or re-speak."
+            } else {
+                "Could not transcribe audio. Enter amount manually or re-speak."
+            }
+        )
     }
 
     suspend fun parseReceiptOcr(receiptText: String): ParsedReceipt = withContext(Dispatchers.IO) {
@@ -392,14 +403,19 @@ object GeminiAiService {
         )
     }
 
-    suspend fun getFinancialCoachAdvice(totalIncome: Double, totalExpense: Double, topExpenseCategory: String): String = withContext(Dispatchers.IO) {
+    suspend fun getFinancialCoachAdvice(
+        totalIncome: Double,
+        totalExpense: Double,
+        topExpenseCategory: String,
+        currencySymbol: String = "₹"
+    ): String = withContext(Dispatchers.IO) {
         val apiKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
         if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
             return@withContext "Aim to save at least 20% of your income each month. Keep non-essential expenses in $topExpenseCategory measured to build a strong savings cushion."
         }
         try {
             val systemInstruction = "You are an empathetic financial coach. Provide a concise, actionable 2-sentence piece of financial advice in English based on the user's spending."
-            val prompt = "Monthly Income: ₹$totalIncome, Total Expenses: ₹$totalExpense, Top Expense Category: $topExpenseCategory. Give 2 crisp tips."
+            val prompt = "Monthly Income: $currencySymbol$totalIncome, Total Expenses: $currencySymbol$totalExpense, Top Expense Category: $topExpenseCategory. Give 2 crisp tips."
             val response = callGeminiApi(apiKey, systemInstruction, prompt)
             response.trim().ifBlank { "Track your recurring bills carefully and build an emergency fund of 3-6 months expenses." }
         } catch (e: Exception) {
@@ -413,9 +429,10 @@ object GeminiAiService {
         var lastError: Exception? = null
 
         for (model in candidateModels) {
+            var conn: HttpURLConnection? = null
             try {
                 val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
-                val conn = url.openConnection() as HttpURLConnection
+                conn = url.openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.doOutput = true
@@ -443,7 +460,7 @@ object GeminiAiService {
                 }
 
                 if (conn.responseCode == 200) {
-                    val responseString = conn.inputStream.bufferedReader().readText()
+                    val responseString = conn.inputStream.bufferedReader().use { it.readText() }
                     val respObj = JSONObject(responseString)
                     val candidates = respObj.optJSONArray("candidates")
                     val firstCandidate = candidates?.optJSONObject(0)
@@ -471,6 +488,8 @@ object GeminiAiService {
                 }
             } catch (e: Exception) {
                 lastError = e
+            } finally {
+                conn?.disconnect()
             }
         }
         throw lastError ?: RuntimeException("Gemini API request failed across all candidate models")
@@ -759,7 +778,7 @@ object GeminiAiService {
                 detectedAmount = num1 ?: num2
             }
             if (detectedAmount == null || detectedAmount <= 0.0) {
-                detectedAmount = allNumbers.maxOrNull()
+                detectedAmount = allNumbers.filter { it > 0.0 && it <= 10_000_000.0 }.maxOrNull()
             }
         }
 
@@ -767,7 +786,7 @@ object GeminiAiService {
         var matchedMeta: ItemMeta? = null
         var bestKeyword = ""
         for ((key, meta) in ENGLISH_ITEM_DICTIONARY) {
-            val matches = if (key.length <= 3) {
+            val matches = if (key.length <= 5 && key.all { it.isLetterOrDigit() }) {
                 Regex("""\b${Regex.escape(key)}\b""").containsMatchIn(lower)
             } else {
                 lower.contains(key)

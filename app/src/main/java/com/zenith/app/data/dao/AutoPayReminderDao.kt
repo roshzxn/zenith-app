@@ -50,6 +50,12 @@ interface AutoPayReminderDao {
     @Query("UPDATE auto_pay_reminders SET nextDueDateMillis = :nextDueDateMillis, lastPaidDateMillis = :lastPaidMillis, syncStatus = CASE WHEN serverId IS NOT NULL THEN 'PENDING_UPDATE' ELSE syncStatus END, updatedAt = :now WHERE id = :id")
     suspend fun markAsPaid(id: Long, nextDueDateMillis: Long, lastPaidMillis: Long, now: Long = System.currentTimeMillis())
 
+    @Query("UPDATE auto_pay_reminders SET isDeleted = 1, syncStatus = 'PENDING_DELETE', updatedAt = :now WHERE financeScope = 'PERSONAL' AND serverId IS NOT NULL AND serverId != ''")
+    suspend fun markAllPersonalRemindersPendingDelete(now: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM auto_pay_reminders WHERE financeScope = 'PERSONAL' AND (serverId IS NULL OR serverId = '')")
+    suspend fun deleteLocalOnlyPersonalReminders()
+
     @Query("DELETE FROM auto_pay_reminders")
     suspend fun deleteAllReminders()
 }

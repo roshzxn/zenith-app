@@ -56,6 +56,7 @@ enum class UpiModalStep {
 fun UpiQrScanModal(
     currencySymbol: String = "₹",
     onDismiss: () -> Unit,
+    onFamilyInviteQrScanned: ((String) -> Unit)? = null,
     onSaveTransaction: (
         title: String,
         amount: Double,
@@ -151,6 +152,12 @@ fun UpiQrScanModal(
     }
 
     fun handleQrDecoded(rawPayload: String) {
+        val familyInvite = parseFamilyInviteQrPayload(rawPayload)
+        if (familyInvite != null && onFamilyInviteQrScanned != null) {
+            qrErrorMsg = null
+            onFamilyInviteQrScanned(familyInvite)
+            return
+        }
         val parsed = UpiService.parseQrPayload(rawPayload)
         if (parsed != null && UpiService.isValidVpa(parsed.payeeAddress)) {
             qrErrorMsg = null
@@ -167,7 +174,7 @@ fun UpiQrScanModal(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
         Surface(
             shape = RoundedCornerShape(26.dp),
@@ -176,6 +183,7 @@ fun UpiQrScanModal(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
                 .padding(vertical = 20.dp)
+                .imePadding()
                 .testTag("upi_qr_scan_modal")
         ) {
             Column(

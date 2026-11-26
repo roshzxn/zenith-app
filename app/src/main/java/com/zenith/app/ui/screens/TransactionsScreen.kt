@@ -22,10 +22,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
+import com.zenith.app.domain.FinancialMode
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.TransactionDetailModal
 import com.zenith.app.ui.components.TransactionItemCard
@@ -42,7 +44,12 @@ fun TransactionsScreen(
     onDeleteTransaction: (TransactionEntity) -> Unit,
     onOpenAddTransaction: () -> Unit,
     onOpenVoiceAssistant: (() -> Unit)? = null,
-    onUpdateTransaction: ((TransactionEntity) -> Unit)? = null
+    onUpdateTransaction: ((TransactionEntity) -> Unit)? = null,
+    canModifyTransaction: (TransactionEntity) -> Boolean = { true },
+    onUpdateFamilyTransaction: ((TransactionEntity, String?) -> Unit)? = null,
+    onSelectMemberFilter: ((String?) -> Unit)? = null,
+    onSelectLabelFilter: ((String?) -> Unit)? = null,
+    bottomContentPadding: Dp = 116.dp
 ) {
     var selectedTransactionForDetails by remember { mutableStateOf<TransactionEntity?>(null) }
     var transactionToDelete by remember { mutableStateOf<TransactionEntity?>(null) }
@@ -50,6 +57,9 @@ fun TransactionsScreen(
 
     val distinctCategories = remember(state.categories) {
         state.categories.distinctBy { it.name.trim() }
+    }
+    val distinctCustomLabels = remember(state.allTransactions) {
+        state.allTransactions.mapNotNull { it.customLabel.trim().takeIf(String::isNotBlank) }.distinct()
     }
 
     val filteredTransactions = remember(state.transactions, selectedDateRange) {
@@ -109,9 +119,13 @@ fun TransactionsScreen(
                     color = ZenithTheme.textPrimary
                 )
                 Text(
-                    text = "${filteredTransactions.size} records • Tap for details",
+                    text = if (state.activeMode == FinancialMode.FAMILY && state.activeFamily != null) {
+                        "${state.activeFamily.avatarEmoji} ${state.activeFamily.name} • ${filteredTransactions.size} entries"
+                    } else {
+                        "${filteredTransactions.size} records • Tap for details"
+                    },
                     fontSize = 12.sp,
-                    color = ZenithTheme.textSecondary
+                    color = if (state.activeMode == FinancialMode.FAMILY) ZenithTheme.accentCyan else ZenithTheme.textSecondary
                 )
             }
 
@@ -178,7 +192,7 @@ fun TransactionsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            contentPadding = PaddingValues(top = 6.dp, bottom = 116.dp)
+            contentPadding = PaddingValues(top = 6.dp, bottom = bottomContentPadding)
         ) {
             item(key = "activity_search") {
                 OutlinedTextField(
@@ -301,6 +315,72 @@ fun TransactionsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
+            if (state.activeMode == FinancialMode.FAMILY && state.activeFamilyMembers.isNotEmpty() && onSelectMemberFilter != null) {
+                item(key = "activity_family_member_chips") {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = state.selectedFilterMemberId == null,
+                                onClick = { onSelectMemberFilter(null) },
+                                label = { Text("All Members", fontSize = 11.sp) }
+                            )
+                        }
+                        items(state.activeFamilyMembers, key = { "mem_${it.userId}" }) { member ->
+                            val selected = state.selectedFilterMemberId == member.userId
+                            FilterChip(
+                                selected = selected,
+                                onClick = {
+                                    onSelectMemberFilter(if (selected) null else member.userId)
+                                },
+                                label = {
+                                    val labelTxt = if (member.memberLabel.isNotBlank()) {
+                                        "${member.avatarEmoji} ${member.displayName} (${member.memberLabel})"
+                                    } else {
+                                        "${member.avatarEmoji} ${member.displayName}"
+                                    }
+                                    Text(
+                                        labelTxt,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+
+            if (distinctCustomLabels.isNotEmpty() && onSelectLabelFilter != null) {
+                item(key = "activity_custom_label_chips") {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = state.selectedFilterLabel == null,
+                                onClick = { onSelectLabelFilter(null) },
+                                label = { Text("All Labels", fontSize = 11.sp) }
+                            )
+                        }
+                        items(distinctCustomLabels, key = { "lbl_$it" }) { lbl ->
+                            val selected = state.selectedFilterLabel.equals(lbl, ignoreCase = true)
+                            FilterChip(
+                                selected = selected,
+                                onClick = { onSelectLabelFilter(if (selected) null else lbl) },
+                                label = { Text("#$lbl", fontSize = 11.sp, maxLines = 1) }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+
             if (filteredTransactions.isEmpty()) {
                 item(key = "activity_empty") {
                     CleanCard(
@@ -386,6 +466,7 @@ fun TransactionsScreen(
                             transaction = tx,
                             currencySymbol = state.currencySymbol,
                             isMasked = state.isBalanceHidden,
+                            familyAttribution = tx.serverId?.let { state.txAttributionByServerId[it] },
                             onClick = { selectedTransactionForDetails = it },
                             onLongClick = { selectedTransactionForDetails = it },
                             modifier = Modifier.animateItem()
@@ -397,6 +478,7 @@ fun TransactionsScreen(
     }
 
     selectedTransactionForDetails?.let { tx ->
+        val attr = tx.serverId?.let { state.txAttributionByServerId[it] }
         TransactionDetailModal(
             transaction = tx,
             currencySymbol = state.currencySymbol,
@@ -407,6 +489,17 @@ fun TransactionsScreen(
             },
             onUpdate = { updated ->
                 onUpdateTransaction?.invoke(updated)
+                selectedTransactionForDetails = null
+            },
+            familyAttribution = attr,
+            canModify = canModifyTransaction(tx),
+            familyMembers = if (state.activeMode == FinancialMode.FAMILY) state.activeFamilyMembers else emptyList(),
+            onUpdateWithPaidBy = { updated, paidById ->
+                if (onUpdateFamilyTransaction != null) {
+                    onUpdateFamilyTransaction.invoke(updated, paidById)
+                } else {
+                    onUpdateTransaction?.invoke(updated)
+                }
                 selectedTransactionForDetails = null
             }
         )

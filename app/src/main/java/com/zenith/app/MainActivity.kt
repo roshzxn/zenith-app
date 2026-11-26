@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,9 +43,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.data.upi.UpiNotificationListenerService
@@ -115,8 +122,27 @@ class MainActivity : ComponentActivity() {
                 }
                 var initialAuthIsSignUp by remember { mutableStateOf(false) }
 
-                // App lock state (enforced when user enables App Lock in Profile and has device lock configured)
-                var isAppUnlocked by remember(isAppLockEnabled) { mutableStateOf(!isAppLockEnabled) }
+                // App lock state: remember across recompositions; lock only on startup or background return
+                var isAppUnlocked by remember { mutableStateOf(!isAppLockEnabled) }
+                var isUnlockPromptInFlight by remember { mutableStateOf(false) }
+                val lifecycleOwner = LocalLifecycleOwner.current
+
+                DisposableEffect(lifecycleOwner, isAppLockEnabled) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_STOP &&
+                            isAppLockEnabled &&
+                            currentScreen == ZenithNavScreen.MAIN &&
+                            !isUnlockPromptInFlight &&
+                            !this@MainActivity.isChangingConfigurations
+                        ) {
+                            isAppUnlocked = false
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+
+                val isVaultLocked = currentScreen == ZenithNavScreen.MAIN && isAppLockEnabled && !isAppUnlocked
 
                 val context = LocalContext.current
 
@@ -140,8 +166,12 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Safe Back Navigation Handler
+                // Safe Back Navigation Handler (never switches tabs behind App Lock)
                 BackHandler(enabled = true) {
+                    if (isVaultLocked) {
+                        finish()
+                        return@BackHandler
+                    }
                     when (currentScreen) {
                         ZenithNavScreen.AUTH -> currentScreen = ZenithNavScreen.SPLASH
                         ZenithNavScreen.MAIN -> {
@@ -177,6 +207,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onContinueAsGuest = {
                                         viewModel.continueAsGuest()
+                                        isAppUnlocked = true
                                         currentScreen = ZenithNavScreen.MAIN
                                     }
                                 )
@@ -202,18 +233,33 @@ class MainActivity : ComponentActivity() {
                             ZenithNavScreen.MAIN -> {
                                 CashFlowMainApp(
                                     viewModel = viewModel,
-                                    quickAction = pendingQuickAction,
-                                    onQuickActionConsumed = { pendingQuickAction = null }
+                                    quickAction = if (isVaultLocked) null else pendingQuickAction,
+                                    onQuickActionConsumed = { pendingQuickAction = null },
+                                    isVaultLocked = isVaultLocked
                                 )
                             }
                         }
                     }
 
-                    if (currentScreen == ZenithNavScreen.MAIN && isAppLockEnabled && !isAppUnlocked) {
-                        AppLockOverlay(
-                            activity = this@MainActivity,
-                            onUnlocked = { isAppUnlocked = true }
-                        )
+                    if (isVaultLocked) {
+                        Dialog(
+                            onDismissRequest = {},
+                            properties = DialogProperties(
+                                usePlatformDefaultWidth = false,
+                                decorFitsSystemWindows = false,
+                                dismissOnBackPress = false,
+                                dismissOnClickOutside = false
+                            )
+                        ) {
+                            AppLockOverlay(
+                                activity = this@MainActivity,
+                                onPromptStateChanged = { inFlight -> isUnlockPromptInFlight = inFlight },
+                                onUnlocked = {
+                                    isUnlockPromptInFlight = false
+                                    isAppUnlocked = true
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -245,6 +291,17 @@ class MainActivity : ComponentActivity() {
                 pendingQuickAction = action
             }
         }
+        if (intent.data != null) {
+            val uri = intent.data!!
+            if (uri.scheme == "zenith" && uri.host == "join") {
+                val tokenOrCode = uri.getQueryParameter("token")
+                    ?: uri.getQueryParameter("code")
+                    ?: uri.lastPathSegment
+                if (!tokenOrCode.isNullOrBlank()) {
+                    viewModel.onFamilyInviteLinkReceived(tokenOrCode)
+                }
+            }
+        }
         if (intent.hasExtra("extra_upi_amount")) {
             val amount = intent.getDoubleExtra("extra_upi_amount", 0.0)
             val payee = intent.getStringExtra("extra_upi_payee") ?: "Merchant"
@@ -271,6 +328,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppLockOverlay(
     activity: ComponentActivity,
+    onPromptStateChanged: (Boolean) -> Unit = {},
     onUnlocked: () -> Unit
 ) {
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -278,6 +336,7 @@ private fun AppLockOverlay(
     val legacyKeyguardLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        onPromptStateChanged(false)
         if (result.resultCode == Activity.RESULT_OK) {
             onUnlocked()
         } else {
@@ -290,12 +349,14 @@ private fun AppLockOverlay(
         val keyguardManager = activity.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
         if (keyguardManager?.isDeviceSecure != true) {
             // Device has no PIN/pattern/biometric enrolled; avoid permanently locking user out
+            onPromptStateChanged(false)
             onUnlocked()
             return
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
+                onPromptStateChanged(true)
                 val builder = BiometricPrompt.Builder(activity)
                     .setTitle("Unlock Zenith")
                     .setSubtitle("Verify your identity to open your personal ledger")
@@ -316,6 +377,7 @@ private fun AppLockOverlay(
                             "Verify device credential"
                         )
                         if (intent != null) legacyKeyguardLauncher.launch(intent)
+                        else onPromptStateChanged(false)
                     }
                 }
 
@@ -325,10 +387,12 @@ private fun AppLockOverlay(
                     activity.mainExecutor,
                     object : BiometricPrompt.AuthenticationCallback() {
                         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
+                            onPromptStateChanged(false)
                             onUnlocked()
                         }
 
                         override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                            onPromptStateChanged(false)
                             errorMsg = errString?.toString() ?: "Authentication required"
                         }
 
@@ -339,6 +403,7 @@ private fun AppLockOverlay(
                 )
                 return
             } catch (_: Exception) {
+                onPromptStateChanged(false)
                 // Fall back to KeyguardManager below
             }
         }
@@ -349,8 +414,10 @@ private fun AppLockOverlay(
             "Verify your device credential"
         )
         if (confirmIntent != null) {
+            onPromptStateChanged(true)
             legacyKeyguardLauncher.launch(confirmIntent)
         } else {
+            onPromptStateChanged(false)
             onUnlocked()
         }
     }
@@ -430,13 +497,30 @@ private fun AppLockOverlay(
 fun CashFlowMainApp(
     viewModel: CashFlowViewModel,
     quickAction: String? = null,
-    onQuickActionConsumed: () -> Unit = {}
+    onQuickActionConsumed: () -> Unit = {},
+    isVaultLocked: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val financialContext by viewModel.financialContext.collectAsStateWithLifecycle()
+    val pendingInviteInput by viewModel.pendingInviteInput.collectAsStateWithLifecycle()
+    val isAuthenticated by viewModel.isAuthenticated.collectAsStateWithLifecycle()
     val pendingUpiDetections by viewModel.pendingUpiDetections.collectAsStateWithLifecycle()
     val recurringSuggestions by viewModel.recurringSuggestions.collectAsStateWithLifecycle()
     val syncUiState by viewModel.syncUiState.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
+    var activeFamilySetupTab by remember { mutableStateOf<com.zenith.app.ui.components.FamilySetupTab?>(null) }
+    var showFamilyManageSheet by remember { mutableStateOf(false) }
+    var showFamilyChatSheet by remember { mutableStateOf(false) }
+    var prefilledInviteCode by remember { mutableStateOf("") }
+
+    LaunchedEffect(pendingInviteInput) {
+        val code = pendingInviteInput
+        if (!code.isNullOrBlank()) {
+            prefilledInviteCode = code
+            activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.JOIN
+            viewModel.consumePendingInviteInput()
+        }
+    }
 
     LaunchedEffect(quickAction) {
         when (quickAction) {
@@ -485,28 +569,22 @@ fun CashFlowMainApp(
                 )
             }
         }
-    ) { _ ->
+    ) { innerPadding ->
+        val bottomBarClearance = innerPadding.calculateBottomPadding() + 18.dp
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(brush = ZenithTheme.backgroundBrush)
                 .statusBarsPadding()
         ) {
-            AnimatedContent(
+            val tabStateHolder = rememberSaveableStateHolder()
+            Crossfade(
                 targetState = uiState.selectedTab,
-                transitionSpec = {
-                    val slideOffset = 0.15f
-                    if (targetState > initialState) {
-                        (slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { width -> (width * slideOffset).toInt() } + fadeIn(animationSpec = tween(180)))
-                            .togetherWith(slideOutHorizontally(animationSpec = tween(140)) { width -> (-width * slideOffset).toInt() } + fadeOut(animationSpec = tween(140)))
-                    } else {
-                        (slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { width -> (-width * slideOffset).toInt() } + fadeIn(animationSpec = tween(180)))
-                            .togetherWith(slideOutHorizontally(animationSpec = tween(140)) { width -> (width * slideOffset).toInt() } + fadeOut(animationSpec = tween(140)))
-                    }
-                },
+                animationSpec = tween(90),
                 label = "tab_transition"
             ) { targetTab ->
-                when (targetTab) {
+                tabStateHolder.SaveableStateProvider(targetTab) {
+                    when (targetTab) {
                     0 -> HomeScreen(
                         state = uiState,
                         totalIncome = totalIncome,
@@ -528,7 +606,7 @@ fun CashFlowMainApp(
                                 if (res == SnackbarResult.ActionPerformed) {
                                     viewModel.undoDeleteTransaction(tx)
                                 } else {
-                                    viewModel.commitDeletedTransaction()
+                                    viewModel.commitDeletedTransaction(tx)
                                 }
                             }
                         },
@@ -552,7 +630,19 @@ fun CashFlowMainApp(
                         onReviewPendingDetection = { payment -> viewModel.showDetectedUpiPayment(payment) },
                         onQuickLogPendingDetection = { payment -> viewModel.logPendingUpiDetection(payment) },
                         onDismissPendingDetection = { payment -> viewModel.dismissPendingUpiDetection(payment) },
-                        onDismissAllPendingDetections = { viewModel.dismissAllPendingUpiDetections() }
+                        onDismissAllPendingDetections = { viewModel.dismissAllPendingUpiDetections() },
+                        financialContext = financialContext,
+                        onSelectFinancialMode = { targetMode ->
+                            val switched = viewModel.selectFinancialMode(targetMode)
+                            if (!switched && targetMode == com.zenith.app.domain.FinancialMode.FAMILY) {
+                                activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.CREATE
+                            }
+                        },
+                        onOpenFamilySetup = { activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.CREATE },
+                        onOpenFamilyChat = { showFamilyChatSheet = true },
+                        canModifyTransaction = viewModel::canEditOrDeleteFamilyTransaction,
+                        onUpdateFamilyTransaction = { tx, paidById -> viewModel.updateTransaction(tx, paidById) },
+                        bottomContentPadding = bottomBarClearance
                     )
                     1 -> TransactionsScreen(
                         state = uiState,
@@ -570,13 +660,18 @@ fun CashFlowMainApp(
                                 if (res == SnackbarResult.ActionPerformed) {
                                     viewModel.undoDeleteTransaction(tx)
                                 } else {
-                                    viewModel.commitDeletedTransaction()
+                                    viewModel.commitDeletedTransaction(tx)
                                 }
                             }
                         },
                         onUpdateTransaction = { tx -> viewModel.updateTransaction(tx) },
                         onOpenAddTransaction = { showAddDialog = true },
-                        onOpenVoiceAssistant = { viewModel.openVoiceDialog() }
+                        onOpenVoiceAssistant = { viewModel.openVoiceDialog() },
+                        canModifyTransaction = viewModel::canEditOrDeleteFamilyTransaction,
+                        onUpdateFamilyTransaction = { tx, paidById -> viewModel.updateTransaction(tx, paidById) },
+                        onSelectMemberFilter = { memberId -> viewModel.setFilterMemberId(memberId) },
+                        onSelectLabelFilter = { label -> viewModel.setFilterLabel(label) },
+                        bottomContentPadding = bottomBarClearance
                     )
                     2 -> BudgetsAndGoalsScreen(
                         state = uiState,
@@ -608,23 +703,157 @@ fun CashFlowMainApp(
                             viewModel.acceptRecurringSuggestion(suggestion)
                             android.widget.Toast.makeText(context, "Added ${suggestion.title} to Auto-Pay reminders", android.widget.Toast.LENGTH_SHORT).show()
                         },
-                        onDismissRecurringSuggestion = { suggestion -> viewModel.dismissRecurringSuggestion(suggestion) }
+                        onDismissRecurringSuggestion = { suggestion -> viewModel.dismissRecurringSuggestion(suggestion) },
+                        onOpenFamilyChat = { showFamilyChatSheet = true },
+                        bottomContentPadding = bottomBarClearance
                     )
                     3 -> AnalyticsScreen(
                         state = uiState,
                         totalIncome = totalIncome,
                         totalExpense = totalExpense,
-                        onGenerateAiAdvice = { inc, exp, cat -> viewModel.generateAiCoachAdvice(inc, exp, cat) }
+                        onGenerateAiAdvice = { inc, exp, cat -> viewModel.generateAiCoachAdvice(inc, exp, cat) },
+                        bottomContentPadding = bottomBarClearance
                     )
                     4 -> ProfileScreen(
                         state = uiState,
                         viewModel = viewModel,
                         onCurrencySelect = { curr -> viewModel.setCurrency(curr) },
                         onDeleteScannedItem = { item -> viewModel.deleteScannedItem(item) },
-                        onNavigateToActivity = { viewModel.setTab(1) }
+                        onNavigateToActivity = { viewModel.setTab(1) },
+                        onOpenCreateFamily = {
+                            prefilledInviteCode = ""
+                            activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.CREATE
+                        },
+                        onOpenJoinFamily = {
+                            prefilledInviteCode = ""
+                            activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.JOIN
+                        },
+                        onOpenFamilyManage = { showFamilyManageSheet = true },
+                        onOpenFamilyChat = { showFamilyChatSheet = true },
+                        bottomContentPadding = bottomBarClearance
                     )
                 }
+                }
             }
+        }
+
+        activeFamilySetupTab?.let { startTab ->
+            com.zenith.app.ui.components.FamilySetupModal(
+                initialTab = startTab,
+                initialInviteInput = prefilledInviteCode,
+                currencySymbol = uiState.currencySymbol,
+                currentUserName = viewModel.currentUserName,
+                isAuthenticated = isAuthenticated,
+                onCreateFamily = { name, emoji, budget, idempotencyKey, onComplete ->
+                    viewModel.createFamilyAtomic(name, emoji, budget, idempotencyKey) { res ->
+                        if (res.isSuccess) {
+                            viewModel.setTab(0)
+                        }
+                        onComplete(res)
+                    }
+                },
+                onJoinFamily = { codeOrLink, displayName, emoji, onComplete ->
+                    viewModel.acceptFamilyInvitation(codeOrLink, displayName, emoji) { res ->
+                        if (res.isSuccess) {
+                            viewModel.setTab(0)
+                        }
+                        onComplete(res)
+                    }
+                },
+                onDismiss = {
+                    activeFamilySetupTab = null
+                    prefilledInviteCode = ""
+                },
+                onCreateFamilyWithCustomProfile = { name, emoji, budget, idempotencyKey, familyLabel, creatorName, creatorEmoji, creatorLabel, onComplete ->
+                    viewModel.createFamilyAtomic(
+                        name = name,
+                        avatarEmoji = emoji,
+                        monthlyBudgetLimit = budget,
+                        idempotencyKey = idempotencyKey,
+                        familyLabel = familyLabel,
+                        creatorName = creatorName,
+                        creatorEmoji = creatorEmoji,
+                        creatorLabel = creatorLabel
+                    ) { res ->
+                        if (res.isSuccess) {
+                            viewModel.setTab(0)
+                        }
+                        onComplete(res)
+                    }
+                },
+                onJoinFamilyWithLabel = { codeOrLink, displayName, emoji, memberLabel, onComplete ->
+                    viewModel.acceptFamilyInvitation(
+                        codeOrLink = codeOrLink,
+                        displayName = displayName,
+                        avatarEmoji = emoji,
+                        memberLabel = memberLabel
+                    ) { res ->
+                        if (res.isSuccess) {
+                            viewModel.setTab(0)
+                        }
+                        onComplete(res)
+                    }
+                }
+            )
+        }
+
+        if (showFamilyManageSheet) {
+            com.zenith.app.ui.components.FamilyManageSheet(
+                financialContext = financialContext,
+                onGenerateInvite = { email, role, onComplete ->
+                    viewModel.generateFamilyInvitation(email, role, onComplete)
+                },
+                onUpdateMemberRole = { uid, role, onComplete ->
+                    viewModel.updateFamilyMemberRole(uid, role, onComplete)
+                },
+                onRemoveMember = { uid, onComplete ->
+                    viewModel.removeFamilyMember(uid, onComplete)
+                },
+                onTransferOwnership = { uid, onComplete ->
+                    viewModel.transferFamilyOwnership(uid, onComplete)
+                },
+                onLeaveFamily = { onComplete ->
+                    viewModel.leaveCurrentFamily(onComplete)
+                },
+                onCloseFamily = { onComplete ->
+                    viewModel.closeCurrentFamily(onComplete)
+                },
+                onDisableFamilyFeature = { viewModel.setFamilyFeatureEnabled(false) },
+                onDismiss = { showFamilyManageSheet = false },
+                onUpdateFamilyProfile = { name, emoji, famLabel, onComplete ->
+                    viewModel.updateFamilyProfile(name, emoji, famLabel, onComplete)
+                },
+                onUpdateMemberProfile = { targetUid, displayName, memLabel, memEmoji, onComplete ->
+                    viewModel.updateFamilyMemberProfile(targetUid, displayName, memLabel, memEmoji, onComplete)
+                }
+            )
+        }
+
+        if (showFamilyChatSheet && financialContext.activeFamily != null) {
+            com.zenith.app.ui.components.FamilyChatSheet(
+                family = financialContext.activeFamily!!,
+                members = financialContext.activeMembers,
+                messages = uiState.familyMessages,
+                familyTransactions = uiState.allTransactions,
+                txAttributionByServerId = uiState.txAttributionByServerId,
+                currentUserId = viewModel.currentUserId,
+                currentUserRole = financialContext.membershipRole,
+                currencySymbol = uiState.currencySymbol,
+                isRealtimeConnected = uiState.isFamilyRealtimeConnected,
+                onSendMessage = { body, replyId, txId ->
+                    viewModel.sendFamilyChatMessage(
+                        body = body,
+                        replyToMessageId = replyId,
+                        relatedTransactionId = txId
+                    )
+                },
+                onDeleteMessage = { msg -> viewModel.deleteFamilyChatMessage(msg) },
+                onOpenManageFamily = {
+                    showFamilyChatSheet = false
+                    showFamilyManageSheet = true
+                },
+                onDismiss = { showFamilyChatSheet = false }
+            )
         }
 
         if (showAddDialog) {
@@ -643,6 +872,41 @@ fun CashFlowMainApp(
                         dateMillis = dateMillis
                     )
                     showAddDialog = false
+                },
+                familyMembers = if (financialContext.isFamilyModeActive) financialContext.activeMembers else emptyList(),
+                currentUserId = viewModel.currentUserId,
+                isFamilyMode = financialContext.isFamilyModeActive,
+                onAddWithPaidBy = { title, amount, type, category, dateMillis, note, paymentMethod, paidById ->
+                    viewModel.addTransaction(
+                        title = title,
+                        amount = amount,
+                        type = type,
+                        category = category,
+                        paymentMethod = paymentMethod,
+                        note = note,
+                        dateMillis = dateMillis,
+                        paidByUserId = paidById
+                    )
+                    showAddDialog = false
+                },
+                onAddWithLabel = { title, amount, type, category, dateMillis, note, paymentMethod, paidById, customLabel ->
+                    viewModel.addTransaction(
+                        title = title,
+                        amount = amount,
+                        type = type,
+                        category = category,
+                        paymentMethod = paymentMethod,
+                        note = note,
+                        dateMillis = dateMillis,
+                        paidByUserId = paidById,
+                        customLabel = customLabel
+                    )
+                    showAddDialog = false
+                },
+                onAddCustomCategory = if (!financialContext.isFamilyModeActive || financialContext.membershipRole?.canAdmin() == true) {
+                    { name, colorHex -> viewModel.addCategory(name, colorHex) }
+                } else {
+                    null
                 }
             )
         }
@@ -661,7 +925,8 @@ fun CashFlowMainApp(
                         amount = amount,
                         category = category,
                         upiId = upiId,
-                        upiTransactionId = upiTransactionId
+                        upiTransactionId = upiTransactionId,
+                        scopeToFamily = financialContext.isFamilyModeActive
                     )
                     viewModel.closeUpiDialog()
                 }
@@ -672,13 +937,19 @@ fun CashFlowMainApp(
             UpiQrScanModal(
                 currencySymbol = uiState.currencySymbol,
                 onDismiss = { viewModel.closeUpiScanDialog() },
+                onFamilyInviteQrScanned = { invite ->
+                    viewModel.closeUpiScanDialog()
+                    prefilledInviteCode = invite
+                    activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.JOIN
+                },
                 onSaveTransaction = { title, amount, category, upiId, upiTransactionId ->
                     viewModel.addUpiTransaction(
                         title = title,
                         amount = amount,
                         category = category,
                         upiId = upiId,
-                        upiTransactionId = upiTransactionId
+                        upiTransactionId = upiTransactionId,
+                        scopeToFamily = financialContext.isFamilyModeActive
                     )
                     viewModel.closeUpiScanDialog()
                 }
@@ -689,14 +960,15 @@ fun CashFlowMainApp(
             UpiPaymentDetectedModal(
                 payment = detectedPayment,
                 currencySymbol = uiState.currencySymbol,
-                onDismiss = { viewModel.dismissDetectedUpiPayment() },
+                onDismiss = { viewModel.dismissDetectedUpiPayment(keepPendingForLater = true) },
                 onConfirmSave = { title, amount, category, upiId, upiTransactionId ->
                     viewModel.confirmDetectedUpiPayment(
                         title = title,
                         amount = amount,
                         category = category,
                         upiId = upiId,
-                        upiTransactionId = upiTransactionId
+                        upiTransactionId = upiTransactionId,
+                        scopeToFamily = financialContext.isFamilyModeActive
                     )
                 }
             )

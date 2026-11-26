@@ -3,12 +3,15 @@ package com.zenith.app.data.network
 import android.util.Log
 import com.zenith.app.data.dao.*
 import com.zenith.app.data.models.*
+import com.zenith.app.data.util.IsoDateUtils
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.rpc
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.time.Instant
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.util.UUID
 
 /**
@@ -104,9 +107,9 @@ class SyncEngine(
                 paymentMethod = localTx.paymentMethod,
                 upiId = localTx.upiId,
                 upiTransactionId = localTx.upiTransactionId,
-                transactionDate = Instant.ofEpochMilli(localTx.dateMillis).toString(),
-                createdAt = Instant.ofEpochMilli(localTx.updatedAt).toString(),
-                updatedAt = Instant.ofEpochMilli(localTx.updatedAt).toString(),
+                transactionDate = IsoDateUtils.toIsoString(localTx.dateMillis),
+                createdAt = IsoDateUtils.toIsoString(localTx.updatedAt),
+                updatedAt = IsoDateUtils.toIsoString(localTx.updatedAt),
                 isDeleted = false
             )
             try {
@@ -144,8 +147,8 @@ class SyncEngine(
                 paymentMethod = localTx.paymentMethod,
                 upiId = localTx.upiId,
                 upiTransactionId = localTx.upiTransactionId,
-                transactionDate = Instant.ofEpochMilli(localTx.dateMillis).toString(),
-                updatedAt = Instant.ofEpochMilli(localTx.updatedAt).toString(),
+                transactionDate = IsoDateUtils.toIsoString(localTx.dateMillis),
+                updatedAt = IsoDateUtils.toIsoString(localTx.updatedAt),
                 isDeleted = false
             )
             try {
@@ -162,41 +165,63 @@ class SyncEngine(
         // 3. Push Pending Deletes
         val pendingDeletes = transactionDao.getPendingDeletes()
         for (localTx in pendingDeletes) {
+            if (localTx.syncStatus == "PENDING_UNDO_DELETE") continue
             val serverId = localTx.serverId
             if (serverId != null && isValidUuid(serverId)) {
+                var cloudDeleted = false
                 try {
                     SupabaseClientConfig.supabase.postgrest["transactions"].delete {
-                        filter { eq("id", serverId) }
+                        filter {
+                            eq("id", serverId)
+                            eq("user_id", userId)
+                        }
                     }
-                } catch (e: Exception) {
+                    cloudDeleted = true
+                } catch (_: Exception) {
                     try {
                         SupabaseClientConfig.supabase.postgrest["transactions"].update({
                             set("is_deleted", true)
-                            set("updated_at", Instant.now().toString())
+                            set("updated_at", IsoDateUtils.toIsoString(System.currentTimeMillis()))
                         }) {
-                            filter { eq("id", serverId) }
+                            filter {
+                                eq("id", serverId)
+                                eq("user_id", userId)
+                            }
                         }
-                    } catch (e2: Exception) {
-                        Log.e(tag, "Failed to delete personal transaction on cloud: ${e2.message}")
+                        cloudDeleted = true
+                    } catch (_: Exception) {
+                        try {
+                            SupabaseClientConfig.supabase.postgrest.rpc(
+                                function = "delete_my_personal_transaction",
+                                parameters = buildJsonObject { put("p_tx_id", serverId) }
+                            )
+                            cloudDeleted = true
+                        } catch (e3: Exception) {
+                            Log.e(tag, "Failed to delete personal transaction on cloud: ${e3.message}")
+                            success = false
+                        }
                     }
                 }
-                transactionDao.updateTransaction(
-                    localTx.copy(isDeleted = true, syncStatus = "SYNCED", updatedAt = System.currentTimeMillis())
-                )
+                if (cloudDeleted) {
+                    transactionDao.deleteReceiptItemsForLocalCleanup(localTx.id)
+                    transactionDao.deleteReceiptForTransactionCleanup(localTx.id)
+                    transactionDao.deleteTransactionById(localTx.id)
+                }
             } else {
-                // Purely local record already committed for deletion: clean up local row
+                // Purely local record already committed for deletion: clean up local row and receipts
+                transactionDao.deleteReceiptItemsForLocalCleanup(localTx.id)
+                transactionDao.deleteReceiptForTransactionCleanup(localTx.id)
                 transactionDao.deleteTransactionById(localTx.id)
             }
         }
 
-        // 4. Pull Remote Personal Transactions
+        // 4. Pull Remote Personal Transactions (include is_deleted = true so cross-device deletions sync cleanly)
         try {
             val deletedServerIds = transactionDao.getDeletedServerIds().toSet()
             val remoteTxs = SupabaseClientConfig.supabase.postgrest["transactions"]
                 .select {
                     filter {
                         eq("user_id", userId)
-                        eq("is_deleted", false)
                     }
                 }
                 .decodeList<TransactionDto>()
@@ -243,6 +268,8 @@ class SyncEngine(
 
                 if (dto.isDeleted) {
                     if (existing != null) {
+                        transactionDao.deleteReceiptItemsForLocalCleanup(existing.id)
+                        transactionDao.deleteReceiptForTransactionCleanup(existing.id)
                         transactionDao.deleteTransaction(existing)
                     }
                 } else {
@@ -314,7 +341,7 @@ class SyncEngine(
                 monthlyLimit = localBudget.monthlyLimit,
                 monthYear = localBudget.monthYear,
                 periodType = localBudget.periodType,
-                updatedAt = Instant.ofEpochMilli(localBudget.updatedAt).toString(),
+                updatedAt = IsoDateUtils.toIsoString(localBudget.updatedAt),
                 isDeleted = false
             )
             try {
@@ -343,7 +370,7 @@ class SyncEngine(
                 monthlyLimit = localBudget.monthlyLimit,
                 monthYear = localBudget.monthYear,
                 periodType = localBudget.periodType,
-                updatedAt = Instant.ofEpochMilli(localBudget.updatedAt).toString(),
+                updatedAt = IsoDateUtils.toIsoString(localBudget.updatedAt),
                 isDeleted = false
             )
             try {
@@ -361,19 +388,38 @@ class SyncEngine(
         for (localBudget in pendingDeletes) {
             val serverId = localBudget.serverId
             if (serverId != null && isValidUuid(serverId)) {
+                var cloudDeleted = false
                 try {
-                    SupabaseClientConfig.supabase.postgrest["budgets"].update({
-                        set("is_deleted", true)
-                        set("updated_at", Instant.now().toString())
-                    }) {
-                        filter { eq("id", serverId) }
+                    SupabaseClientConfig.supabase.postgrest["budgets"].delete {
+                        filter {
+                            eq("id", serverId)
+                            eq("user_id", userId)
+                        }
                     }
-                } catch (e: Exception) {
-                    Log.e(tag, "Failed to soft-delete budget: ${e.message}")
-                    success = false
+                    cloudDeleted = true
+                } catch (_: Exception) {
+                    try {
+                        SupabaseClientConfig.supabase.postgrest["budgets"].update({
+                            set("is_deleted", true)
+                            set("updated_at", IsoDateUtils.toIsoString(System.currentTimeMillis()))
+                        }) {
+                            filter {
+                                eq("id", serverId)
+                                eq("user_id", userId)
+                            }
+                        }
+                        cloudDeleted = true
+                    } catch (e: Exception) {
+                        Log.e(tag, "Failed to delete budget on cloud: ${e.message}")
+                        success = false
+                    }
                 }
+                if (cloudDeleted) {
+                    bDao.deleteBudget(localBudget)
+                }
+            } else {
+                bDao.deleteBudget(localBudget)
             }
-            bDao.deleteBudget(localBudget)
         }
 
         try {
@@ -446,10 +492,10 @@ class SyncEngine(
                 title = localGoal.title,
                 targetAmount = localGoal.targetAmount,
                 currentAmount = localGoal.currentAmount,
-                targetDate = Instant.ofEpochMilli(localGoal.targetDateMillis).toString(),
+                targetDate = IsoDateUtils.toIsoString(localGoal.targetDateMillis),
                 iconName = localGoal.iconName,
                 colorHex = localGoal.colorHex,
-                updatedAt = Instant.ofEpochMilli(localGoal.updatedAt).toString(),
+                updatedAt = IsoDateUtils.toIsoString(localGoal.updatedAt),
                 isDeleted = false
             )
             try {
@@ -475,10 +521,10 @@ class SyncEngine(
                 title = localGoal.title,
                 targetAmount = localGoal.targetAmount,
                 currentAmount = localGoal.currentAmount,
-                targetDate = Instant.ofEpochMilli(localGoal.targetDateMillis).toString(),
+                targetDate = IsoDateUtils.toIsoString(localGoal.targetDateMillis),
                 iconName = localGoal.iconName,
                 colorHex = localGoal.colorHex,
-                updatedAt = Instant.ofEpochMilli(localGoal.updatedAt).toString(),
+                updatedAt = IsoDateUtils.toIsoString(localGoal.updatedAt),
                 isDeleted = false
             )
             try {
@@ -496,19 +542,38 @@ class SyncEngine(
         for (localGoal in pendingDeletes) {
             val serverId = localGoal.serverId
             if (serverId != null && isValidUuid(serverId)) {
+                var cloudDeleted = false
                 try {
-                    SupabaseClientConfig.supabase.postgrest["savings_goals"].update({
-                        set("is_deleted", true)
-                        set("updated_at", Instant.now().toString())
-                    }) {
-                        filter { eq("id", serverId) }
+                    SupabaseClientConfig.supabase.postgrest["savings_goals"].delete {
+                        filter {
+                            eq("id", serverId)
+                            eq("user_id", userId)
+                        }
                     }
-                } catch (e: Exception) {
-                    Log.e(tag, "Failed to soft-delete savings goal: ${e.message}")
-                    success = false
+                    cloudDeleted = true
+                } catch (_: Exception) {
+                    try {
+                        SupabaseClientConfig.supabase.postgrest["savings_goals"].update({
+                            set("is_deleted", true)
+                            set("updated_at", IsoDateUtils.toIsoString(System.currentTimeMillis()))
+                        }) {
+                            filter {
+                                eq("id", serverId)
+                                eq("user_id", userId)
+                            }
+                        }
+                        cloudDeleted = true
+                    } catch (e: Exception) {
+                        Log.e(tag, "Failed to delete savings goal on cloud: ${e.message}")
+                        success = false
+                    }
                 }
+                if (cloudDeleted) {
+                    sDao.deleteGoal(localGoal)
+                }
+            } else {
+                sDao.deleteGoal(localGoal)
             }
-            sDao.deleteGoal(localGoal)
         }
 
         try {
@@ -585,14 +650,14 @@ class SyncEngine(
                 paymentMethod = local.paymentMethod,
                 frequency = local.frequency,
                 dueDayOfMonth = local.dueDayOfMonth,
-                nextDueDate = Instant.ofEpochMilli(local.nextDueDateMillis).toString(),
+                nextDueDate = IsoDateUtils.toIsoString(local.nextDueDateMillis),
                 isAutoDebit = local.isAutoDebit,
                 reminderDaysBefore = local.reminderDaysBefore,
                 isPaused = local.isPaused,
-                lastPaidDate = local.lastPaidDateMillis?.let { Instant.ofEpochMilli(it).toString() },
+                lastPaidDate = local.lastPaidDateMillis?.let { IsoDateUtils.toIsoString(it) },
                 notes = local.notes,
                 isDeleted = false,
-                updatedAt = Instant.ofEpochMilli(local.updatedAt).toString()
+                updatedAt = IsoDateUtils.toIsoString(local.updatedAt)
             )
             try {
                 SupabaseClientConfig.supabase.postgrest["auto_pay_reminders"].upsert(dto)
@@ -618,14 +683,14 @@ class SyncEngine(
                 paymentMethod = local.paymentMethod,
                 frequency = local.frequency,
                 dueDayOfMonth = local.dueDayOfMonth,
-                nextDueDate = Instant.ofEpochMilli(local.nextDueDateMillis).toString(),
+                nextDueDate = IsoDateUtils.toIsoString(local.nextDueDateMillis),
                 isAutoDebit = local.isAutoDebit,
                 reminderDaysBefore = local.reminderDaysBefore,
                 isPaused = local.isPaused,
-                lastPaidDate = local.lastPaidDateMillis?.let { Instant.ofEpochMilli(it).toString() },
+                lastPaidDate = local.lastPaidDateMillis?.let { IsoDateUtils.toIsoString(it) },
                 notes = local.notes,
                 isDeleted = false,
-                updatedAt = Instant.ofEpochMilli(local.updatedAt).toString()
+                updatedAt = IsoDateUtils.toIsoString(local.updatedAt)
             )
             try {
                 SupabaseClientConfig.supabase.postgrest["auto_pay_reminders"].upsert(dto)
@@ -642,19 +707,38 @@ class SyncEngine(
         for (local in pendingDeletes) {
             val serverId = local.serverId
             if (serverId != null && isValidUuid(serverId)) {
+                var cloudDeleted = false
                 try {
-                    SupabaseClientConfig.supabase.postgrest["auto_pay_reminders"].update({
-                        set("is_deleted", true)
-                        set("updated_at", Instant.now().toString())
-                    }) {
-                        filter { eq("id", serverId) }
+                    SupabaseClientConfig.supabase.postgrest["auto_pay_reminders"].delete {
+                        filter {
+                            eq("id", serverId)
+                            eq("user_id", userId)
+                        }
                     }
-                } catch (e: Exception) {
-                    Log.e(tag, "Failed to soft-delete auto-pay reminder: ${e.message}")
-                    success = false
+                    cloudDeleted = true
+                } catch (_: Exception) {
+                    try {
+                        SupabaseClientConfig.supabase.postgrest["auto_pay_reminders"].update({
+                            set("is_deleted", true)
+                            set("updated_at", IsoDateUtils.toIsoString(System.currentTimeMillis()))
+                        }) {
+                            filter {
+                                eq("id", serverId)
+                                eq("user_id", userId)
+                            }
+                        }
+                        cloudDeleted = true
+                    } catch (e: Exception) {
+                        Log.e(tag, "Failed to delete auto-pay reminder on cloud: ${e.message}")
+                        success = false
+                    }
                 }
+                if (cloudDeleted) {
+                    aDao.deleteReminder(local)
+                }
+            } else {
+                aDao.deleteReminder(local)
             }
-            aDao.deleteReminder(local)
         }
 
         try {
@@ -724,12 +808,46 @@ class SyncEngine(
         return success
     }
 
-    private fun parseIsoTimestamp(isoString: String?): Long {
-        if (isoString.isNullOrBlank()) return System.currentTimeMillis()
-        return try {
-            Instant.parse(isoString).toEpochMilli()
-        } catch (e: Exception) {
-            System.currentTimeMillis()
+    suspend fun clearCloudPersonalLedger(explicitUserId: String? = null): Boolean = withContext(Dispatchers.IO) {
+        if (!isConfigured) return@withContext true
+        val userId = explicitUserId
+            ?: authService.currentUser.value?.id
+            ?: try { SupabaseClientConfig.supabase.auth.currentUserOrNull()?.id } catch (_: Exception) { null }
+        if (userId.isNullOrBlank() || !isValidUuid(userId)) {
+            return@withContext true
         }
+        syncMutex.withLock {
+            return@withLock try {
+                SupabaseClientConfig.supabase.postgrest.rpc("clear_my_personal_ledger")
+                true
+            } catch (_: Exception) {
+                var ok = true
+                for (table in listOf("transactions", "budgets", "savings_goals", "auto_pay_reminders")) {
+                    try {
+                        SupabaseClientConfig.supabase.postgrest[table].delete {
+                            filter { eq("user_id", userId) }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(tag, "Direct delete failed on $table, retrying soft-delete: ${e.message}")
+                        try {
+                            SupabaseClientConfig.supabase.postgrest[table].update({
+                                set("is_deleted", true)
+                                set("updated_at", IsoDateUtils.toIsoString(System.currentTimeMillis()))
+                            }) {
+                                filter { eq("user_id", userId) }
+                            }
+                        } catch (e2: Exception) {
+                            Log.e(tag, "Cloud clear failed on $table: ${e2.message}")
+                            ok = false
+                        }
+                    }
+                }
+                ok
+            }
+        }
+    }
+
+    private fun parseIsoTimestamp(isoString: String?): Long {
+        return IsoDateUtils.fromIsoString(isoString)
     }
 }

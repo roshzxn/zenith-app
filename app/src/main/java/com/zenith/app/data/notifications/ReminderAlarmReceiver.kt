@@ -104,10 +104,22 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                         val cal = Calendar.getInstance().apply { timeInMillis = reminder.nextDueDateMillis }
                         when (reminder.frequency.uppercase()) {
                             "WEEKLY" -> cal.add(Calendar.WEEK_OF_YEAR, 1)
-                            "QUARTERLY" -> cal.add(Calendar.MONTH, 3)
-                            "YEARLY" -> cal.add(Calendar.YEAR, 1)
+                            "QUARTERLY" -> {
+                                cal.add(Calendar.MONTH, 3)
+                                val maxDay = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+                                cal.set(Calendar.DAY_OF_MONTH, reminder.dueDayOfMonth.coerceIn(1, maxDay))
+                            }
+                            "YEARLY" -> {
+                                cal.add(Calendar.YEAR, 1)
+                                val maxDay = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+                                cal.set(Calendar.DAY_OF_MONTH, reminder.dueDayOfMonth.coerceIn(1, maxDay))
+                            }
                             "ONE_TIME" -> dao.setPaused(reminder.id, true, now)
-                            else -> cal.add(Calendar.MONTH, 1)
+                            else -> {
+                                cal.add(Calendar.MONTH, 1)
+                                val maxDay = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+                                cal.set(Calendar.DAY_OF_MONTH, reminder.dueDayOfMonth.coerceIn(1, maxDay))
+                            }
                         }
                         dao.markAsPaid(reminder.id, cal.timeInMillis, now, now)
 

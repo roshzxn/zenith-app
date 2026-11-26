@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +29,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zenith.app.data.models.TransactionEntity
@@ -67,7 +69,14 @@ fun HomeScreen(
     onReviewPendingDetection: ((ExtractedUpiPayment) -> Unit)? = null,
     onQuickLogPendingDetection: ((ExtractedUpiPayment) -> Unit)? = null,
     onDismissPendingDetection: ((ExtractedUpiPayment) -> Unit)? = null,
-    onDismissAllPendingDetections: (() -> Unit)? = null
+    onDismissAllPendingDetections: (() -> Unit)? = null,
+    financialContext: com.zenith.app.domain.FinancialContext = com.zenith.app.domain.FinancialContext(),
+    onSelectFinancialMode: (com.zenith.app.domain.FinancialMode) -> Unit = {},
+    onOpenFamilySetup: () -> Unit = {},
+    onOpenFamilyChat: () -> Unit = {},
+    canModifyTransaction: (TransactionEntity) -> Boolean = { true },
+    onUpdateFamilyTransaction: ((TransactionEntity, String?) -> Unit)? = null,
+    bottomContentPadding: Dp = 116.dp
 ) {
     var selectedTransactionForDetails by remember { mutableStateOf<TransactionEntity?>(null) }
 
@@ -94,17 +103,6 @@ fun HomeScreen(
             }
         }
     }
-
-    val infiniteTransition = rememberInfiniteTransition(label = "sync_spin_home")
-    val spinAngle by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "spin_home"
-    )
 
     val timeBasedGreeting = remember {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -134,7 +132,7 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 14.dp, bottom = 116.dp)
+        contentPadding = PaddingValues(top = 14.dp, bottom = bottomContentPadding)
     ) {
         // --- 1. MODERN FINTECH HEADER ---
         item {
@@ -281,14 +279,7 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (isCurrentlySyncing) {
-                                Icon(
-                                    imageVector = Icons.Default.Sync,
-                                    contentDescription = "Syncing",
-                                    tint = ZenithTheme.accentCyan,
-                                    modifier = Modifier
-                                        .size(14.dp)
-                                        .rotate(spinAngle)
-                                )
+                                SyncSpinningIcon()
                             } else {
                                 Box(
                                     modifier = Modifier
@@ -336,6 +327,179 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(14.dp))
         }
 
+        if (financialContext.isFamilyEnabled) {
+            item {
+                val isFamilyMode = financialContext.isFamilyModeActive
+                val activeFamily = financialContext.activeFamily
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                        .testTag("home_mode_switcher"),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (!isFamilyMode) ZenithTheme.accentIndigo else ZenithTheme.cardGlassBackground,
+                        border = BorderStroke(
+                            1.dp,
+                            if (!isFamilyMode) ZenithTheme.accentIndigo else ZenithTheme.borderColor
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable { onSelectFinancialMode(com.zenith.app.domain.FinancialMode.PERSONAL) }
+                            .testTag("mode_chip_personal")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                tint = if (!isFamilyMode) Color.White else ZenithTheme.textSecondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Personal",
+                                fontSize = 12.sp,
+                                fontWeight = if (!isFamilyMode) FontWeight.Bold else FontWeight.Medium,
+                                color = if (!isFamilyMode) Color.White else ZenithTheme.textPrimary
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (isFamilyMode) ZenithTheme.solidGreen else ZenithTheme.cardGlassBackground,
+                        border = BorderStroke(
+                            1.dp,
+                            if (isFamilyMode) ZenithTheme.solidGreen else ZenithTheme.borderColor
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable {
+                                if (financialContext.familyMembershipStatus == com.zenith.app.domain.FamilyMembershipStatus.ACTIVE) {
+                                    onSelectFinancialMode(com.zenith.app.domain.FinancialMode.FAMILY)
+                                } else {
+                                    onOpenFamilySetup()
+                                }
+                            }
+                            .testTag("mode_chip_family")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = activeFamily?.avatarEmoji ?: "🏠",
+                                fontSize = 13.sp
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = activeFamily?.name ?: "Family Setup",
+                                fontSize = 12.sp,
+                                fontWeight = if (isFamilyMode) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isFamilyMode) Color.White else ZenithTheme.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    if (isFamilyMode) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = ZenithTheme.cardSurface,
+                            border = BorderStroke(1.dp, ZenithTheme.accentCyan.copy(alpha = 0.4f)),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { onOpenFamilyChat() }
+                                .testTag("btn_home_family_chat")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ChatBubbleOutline,
+                                    contentDescription = "Family Chat",
+                                    tint = ZenithTheme.accentCyan,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                if (state.familyMessages.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = state.familyMessages.size.coerceAtMost(99).toString(),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ZenithTheme.accentCyan
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (isFamilyMode && financialContext.activeMembers.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                            .testTag("home_family_members_strip"),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        items(financialContext.activeMembers, key = { it.userId }) { member ->
+                            val isSelf = member.userId == financialContext.currentUserId
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (isSelf) ZenithTheme.accentGreen.copy(alpha = 0.14f) else ZenithTheme.cardGlassBackground,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isSelf) ZenithTheme.accentGreen.copy(alpha = 0.35f) else ZenithTheme.borderColor
+                                ),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { onNavigateToProfile() }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(text = member.avatarEmoji, fontSize = 13.sp)
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = if (isSelf) "You" else member.displayName.substringBefore(" "),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = ZenithTheme.textPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (member.memberLabel.isNotBlank()) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "• ${member.memberLabel}",
+                                            fontSize = 10.5.sp,
+                                            color = ZenithTheme.accentCyan,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // --- 2. HERO BALANCE CARD ---
         item {
             Card(
@@ -361,13 +525,23 @@ fun HomeScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
                                 Text(
-                                    text = "TOTAL NET BALANCE",
-                                    fontSize = 11.5.sp,
+                                    text = if (financialContext.isFamilyModeActive && financialContext.activeFamily != null) {
+                                        "${financialContext.activeFamily.avatarEmoji} ${financialContext.activeFamily.name.uppercase()} BALANCE"
+                                    } else {
+                                        "TOTAL NET BALANCE"
+                                    },
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.3.sp,
-                                    color = ZenithTheme.accentIndigo
+                                    letterSpacing = 0.4.sp,
+                                    color = ZenithTheme.accentIndigo,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 IconButton(
@@ -384,6 +558,7 @@ fun HomeScreen(
                             }
 
                             if (displayedTransactions.isNotEmpty()) {
+                                Spacer(modifier = Modifier.width(8.dp))
                                 val badgeColor = if (netBalance >= 0) ZenithTheme.accentGreen else ZenithTheme.accentRed
                                 Surface(
                                     color = badgeColor.copy(alpha = 0.14f),
@@ -391,7 +566,7 @@ fun HomeScreen(
                                     border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.35f))
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
@@ -405,7 +580,9 @@ fun HomeScreen(
                                             text = if (netBalance >= 0) "Surplus" else "Deficit",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = badgeColor
+                                            color = badgeColor,
+                                            maxLines = 1,
+                                            softWrap = false
                                         )
                                     }
                                 }
@@ -523,6 +700,67 @@ fun HomeScreen(
                                             fontWeight = FontWeight.Bold,
                                             color = ZenithTheme.accentRed,
                                             modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (financialContext.isFamilyModeActive) {
+                            val sharedLimit = state.budgets.firstOrNull {
+                                it.categoryName.equals("Overall", ignoreCase = true)
+                            }?.monthlyLimit?.takeIf { it > 0.0 }
+                                ?: financialContext.activeFamily?.monthlyBudgetLimit?.takeIf { it > 0.0 }
+                                ?: state.budgets.sumOf { it.monthlyLimit }.takeIf { it > 0.0 }
+                                ?: 0.0
+                            if (sharedLimit > 0.0) {
+                                val remaining = sharedLimit - totalExpense
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = ZenithTheme.cardSurface.copy(alpha = if (ZenithTheme.isDark) 0.72f else 0.90f),
+                                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onNavigateToBudgets() }
+                                        .testTag("home_shared_family_budget_strip")
+                                ) {
+                                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Shared Family Budget",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = ZenithTheme.textSecondary
+                                            )
+                                            val remainingLabel = if (state.isBalanceHidden) {
+                                                "${state.currencySymbol}•••• left"
+                                            } else if (remaining >= 0) {
+                                                "${state.currencySymbol}${String.format(Locale.US, "%,.0f", remaining)} left"
+                                            } else {
+                                                "Over by ${state.currencySymbol}${String.format(Locale.US, "%,.0f", -remaining)}"
+                                            }
+                                            Text(
+                                                text = remainingLabel,
+                                                fontSize = 11.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (remaining >= 0) ZenithTheme.accentCyan else ZenithTheme.accentRed
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        val progress = (totalExpense / sharedLimit).toFloat().coerceIn(0f, 1f)
+                                        LinearProgressIndicator(
+                                            progress = { progress },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(5.dp)
+                                                .clip(RoundedCornerShape(3.dp)),
+                                            color = if (remaining >= 0) ZenithTheme.accentCyan else ZenithTheme.accentRed,
+                                            trackColor = ZenithTheme.borderColor
                                         )
                                     }
                                 }
@@ -970,6 +1208,7 @@ fun HomeScreen(
                     transaction = tx,
                     currencySymbol = state.currencySymbol,
                     isMasked = state.isBalanceHidden,
+                    familyAttribution = tx.serverId?.let { state.txAttributionByServerId[it] },
                     onClick = { selectedTransactionForDetails = it },
                     onLongClick = { selectedTransactionForDetails = it },
                     modifier = Modifier.animateItem()
@@ -979,6 +1218,7 @@ fun HomeScreen(
     }
 
     selectedTransactionForDetails?.let { tx ->
+        val attr = tx.serverId?.let { state.txAttributionByServerId[it] }
         TransactionDetailModal(
             transaction = tx,
             currencySymbol = state.currencySymbol,
@@ -990,9 +1230,42 @@ fun HomeScreen(
             onUpdate = { updated ->
                 onUpdateTransaction?.invoke(updated)
                 selectedTransactionForDetails = null
+            },
+            familyAttribution = attr,
+            canModify = canModifyTransaction(tx),
+            familyMembers = if (financialContext.isFamilyModeActive) financialContext.activeMembers else emptyList(),
+            onUpdateWithPaidBy = { updated, paidById ->
+                if (onUpdateFamilyTransaction != null) {
+                    onUpdateFamilyTransaction.invoke(updated, paidById)
+                } else {
+                    onUpdateTransaction?.invoke(updated)
+                }
+                selectedTransactionForDetails = null
             }
         )
     }
+}
+
+@Composable
+private fun SyncSpinningIcon() {
+    val infiniteTransition = rememberInfiniteTransition(label = "sync_spin_home")
+    val spinAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "spin_home"
+    )
+    Icon(
+        imageVector = Icons.Default.Sync,
+        contentDescription = "Syncing",
+        tint = ZenithTheme.accentCyan,
+        modifier = Modifier
+            .size(14.dp)
+            .rotate(spinAngle)
+    )
 }
 
 @Composable

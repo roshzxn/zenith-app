@@ -53,7 +53,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.zenith.app.data.database.CashFlowDatabase
 import com.zenith.app.data.models.*
+import com.zenith.app.data.repository.FamilyTxAttribution
 import com.zenith.app.data.util.CategoryIconHelper
+import com.zenith.app.domain.FamilyAvatarCatalog
+import com.zenith.app.domain.FamilyMemberInfo
 import com.zenith.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -66,7 +69,11 @@ fun TransactionDetailModal(
     currencySymbol: String,
     onDismiss: () -> Unit,
     onDelete: (TransactionEntity) -> Unit,
-    onUpdate: ((TransactionEntity) -> Unit)? = null
+    onUpdate: ((TransactionEntity) -> Unit)? = null,
+    familyAttribution: FamilyTxAttribution? = null,
+    canModify: Boolean = true,
+    familyMembers: List<FamilyMemberInfo> = emptyList(),
+    onUpdateWithPaidBy: ((TransactionEntity, String?) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val database = remember { CashFlowDatabase.getDatabase(context) }
@@ -85,6 +92,8 @@ fun TransactionDetailModal(
     var editPaymentMethod by remember(transaction) { mutableStateOf(transaction.paymentMethod) }
     var editType by remember(transaction) { mutableStateOf(transaction.type) }
     var editNote by remember(transaction) { mutableStateOf(transaction.note) }
+    var editCustomLabel by remember(transaction) { mutableStateOf(transaction.customLabel) }
+    var editPaidByUserId by remember(transaction, familyAttribution) { mutableStateOf(familyAttribution?.paidByUserId) }
 
     val isExpense = transaction.type == TransactionType.EXPENSE
     val icon = categoryVectorFor(transaction.categoryIconName, transaction.category)
@@ -108,14 +117,18 @@ fun TransactionDetailModal(
     val imageUriToDisplay = receiptState?.imageUri ?: transaction.receiptImageUri
     val hasReceipt = receiptState != null || receiptItemsState.isNotEmpty() || !imageUriToDisplay.isNullOrBlank()
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+    ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = ZenithTheme.cardSurface,
             border = BorderStroke(1.dp, ZenithTheme.borderColor),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 2.dp)
+                .padding(horizontal = 16.dp, vertical = 20.dp)
+                .imePadding()
                 .testTag("transaction_detail_modal")
         ) {
             Column(
@@ -129,16 +142,18 @@ fun TransactionDetailModal(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        val isFamilyEntry = transaction.financeScope == FinanceScope.FAMILY
+                        val badgeColor = if (isFamilyEntry) ZenithTheme.accentCyan else ZenithTheme.accentGreen
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = ZenithTheme.accentGreen.copy(alpha = 0.14f),
-                            border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.35f))
+                            color = badgeColor.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.35f))
                         ) {
                             Text(
-                                text = "PERSONAL LEDGER",
+                                text = if (isFamilyEntry) "FAMILY LEDGER" else "PERSONAL LEDGER",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = ZenithTheme.accentGreen,
+                                color = badgeColor,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 letterSpacing = 1.sp
                             )
@@ -232,13 +247,30 @@ fun TransactionDetailModal(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     DetailItemRow(label = "Category", value = transaction.category, icon = Icons.Default.Category)
+                    if (transaction.customLabel.isNotBlank()) {
+                        DetailItemRow(label = "Label", value = transaction.customLabel, icon = Icons.AutoMirrored.Filled.Label)
+                    }
                     DetailItemRow(label = "Payment Method", value = transaction.paymentMethod, icon = Icons.Default.Payment)
+                    if (familyAttribution != null) {
+                        val enteredDisp = if (familyAttribution.createdByLabel.isNotBlank()) {
+                            "${familyAttribution.createdByName} (${familyAttribution.createdByLabel})"
+                        } else familyAttribution.createdByName
+                        val paidDisp = if (familyAttribution.paidByLabel.isNotBlank()) {
+                            "${familyAttribution.paidByName} (${familyAttribution.paidByLabel})"
+                        } else familyAttribution.paidByName
+                        DetailItemRow(label = "Entered by", value = enteredDisp, icon = Icons.Default.Person)
+                        DetailItemRow(label = "Paid by", value = paidDisp, icon = Icons.Default.AccountCircle)
+                    }
                     DetailItemRow(label = "Type", value = if (isExpense) "Expense (Outflow)" else "Income (Inflow)", icon = if (isExpense) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward)
                     DetailItemRow(label = "Date & Time", value = fullDateFormatted, icon = Icons.Default.CalendarToday)
                     DetailItemRow(
                         label = "Sync Status",
-                        value = if (transaction.syncStatus == "SYNCED") "Cloud Synced" else "On-Device Storage",
-                        icon = Icons.Default.CloudDone
+                        value = when {
+                            transaction.syncStatus == "SYNCED" -> "Cloud Synced"
+                            transaction.financeScope == FinanceScope.FAMILY -> "Pending Cloud Sync (Offline)"
+                            else -> "On-Device Storage"
+                        },
+                        icon = if (transaction.syncStatus == "SYNCED") Icons.Default.CloudDone else Icons.Default.Schedule
                     )
 
                     if (hasReceipt) {
@@ -425,12 +457,21 @@ fun TransactionDetailModal(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
+                    if (!canModify && transaction.financeScope == FinanceScope.FAMILY) {
+                        Text(
+                            text = "View-only: Added by ${familyAttribution?.createdByName ?: "a family member"}. Only the creator or a Family Admin can edit or delete.",
+                            fontSize = 11.sp,
+                            color = ZenithTheme.textSecondary,
+                            modifier = Modifier.padding(bottom = 10.dp)
+                        )
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (onUpdate != null) {
+                        if (canModify && (onUpdate != null || onUpdateWithPaidBy != null)) {
                             OutlinedButton(
                                 onClick = { isEditing = true },
                                 modifier = Modifier
@@ -469,23 +510,25 @@ fun TransactionDetailModal(
                             }
                         }
 
-                        Button(
-                            onClick = { showDeleteConfirm = true },
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 44.dp)
-                                .testTag("btn_delete_modal_tx"),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = ZenithTheme.accentRed.copy(alpha = 0.16f),
-                                contentColor = ZenithTheme.accentRed
-                            ),
-                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                                Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Delete", fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
+                        if (canModify) {
+                            Button(
+                                onClick = { showDeleteConfirm = true },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 44.dp)
+                                    .testTag("btn_delete_modal_tx"),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = ZenithTheme.accentRed.copy(alpha = 0.16f),
+                                    contentColor = ZenithTheme.accentRed
+                                ),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                                    Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Delete", fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
+                                }
                             }
                         }
                     }
@@ -586,6 +629,41 @@ fun TransactionDetailModal(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    if (transaction.financeScope == FinanceScope.FAMILY && familyMembers.isNotEmpty()) {
+                        Text("Paid By", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = ZenithTheme.textSecondary)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(familyMembers, key = { it.userId }) { member ->
+                                val chipName = if (member.memberLabel.isNotBlank()) {
+                                    "${member.avatarEmoji} ${member.displayName} (${member.memberLabel})"
+                                } else {
+                                    "${member.avatarEmoji} ${member.displayName}"
+                                }
+                                FilterChip(
+                                    selected = editPaidByUserId == member.userId,
+                                    onClick = { editPaidByUserId = member.userId },
+                                    label = {
+                                        Text(chipName, fontSize = 11.sp, maxLines = 1, softWrap = false)
+                                    }
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+
+                    OutlinedTextField(
+                        value = editCustomLabel,
+                        onValueChange = { editCustomLabel = it },
+                        label = { Text("Custom Label (Optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     OutlinedTextField(
                         value = editNote,
                         onValueChange = { editNote = it },
@@ -623,9 +701,14 @@ fun TransactionDetailModal(
                                         categoryIconName = CategoryIconHelper.iconNameForCategory(editCategory),
                                         paymentMethod = editPaymentMethod,
                                         note = editNote,
+                                        customLabel = editCustomLabel.trim(),
                                         updatedAt = System.currentTimeMillis()
                                     )
-                                    onUpdate?.invoke(updated)
+                                    if (onUpdateWithPaidBy != null) {
+                                        onUpdateWithPaidBy.invoke(updated, editPaidByUserId)
+                                    } else {
+                                        onUpdate?.invoke(updated)
+                                    }
                                     Toast.makeText(context, "Transaction updated!", Toast.LENGTH_SHORT).show()
                                     isEditing = false
                                     onDismiss()

@@ -22,9 +22,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zenith.app.data.models.TransactionType
+import com.zenith.app.domain.FinancialMode
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.GlassCard
 import com.zenith.app.ui.theme.ZenithTheme
@@ -33,6 +35,7 @@ import java.util.*
 
 enum class AnalyticsTimeRange(val label: String) {
     THIS_MONTH("This Month"),
+    THIS_YEAR("This Year"),
     LAST_7_DAYS("7 Days"),
     LAST_30_DAYS("30 Days"),
     ALL_TIME("All Time")
@@ -43,7 +46,8 @@ fun AnalyticsScreen(
     state: CashFlowUiState,
     totalIncome: Double,
     totalExpense: Double,
-    onGenerateAiAdvice: (Double, Double, String) -> Unit
+    onGenerateAiAdvice: (Double, Double, String) -> Unit,
+    bottomContentPadding: Dp = 144.dp
 ) {
     var selectedTimeRange by remember { mutableStateOf(AnalyticsTimeRange.THIS_MONTH) }
 
@@ -67,6 +71,15 @@ fun AnalyticsScreen(
                 cal.set(Calendar.MILLISECOND, 0)
                 val startOfMonth = cal.timeInMillis
                 state.allTransactions.filter { it.dateMillis >= startOfMonth }
+            }
+            AnalyticsTimeRange.THIS_YEAR -> {
+                cal.set(Calendar.DAY_OF_YEAR, 1)
+                cal.set(Calendar.HOUR_OF_DAY, 0)
+                cal.set(Calendar.MINUTE, 0)
+                cal.set(Calendar.SECOND, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+                val startOfYear = cal.timeInMillis
+                state.allTransactions.filter { it.dateMillis >= startOfYear }
             }
             AnalyticsTimeRange.ALL_TIME -> state.allTransactions
         }
@@ -98,6 +111,19 @@ fun AnalyticsScreen(
             .mapValues { entry -> entry.value.sumOf { it.amount } }
     }
 
+    val memberSpendMap = remember(filteredTransactions, state.txAttributionByServerId, state.activeFamilyMembers) {
+        val totals = linkedMapOf<String, Double>()
+        state.activeFamilyMembers.forEach { totals[it.userId] = 0.0 }
+        filteredTransactions
+            .filter { it.type == TransactionType.EXPENSE }
+            .forEach { tx ->
+                val attr = tx.serverId?.let { state.txAttributionByServerId[it] }
+                val key = attr?.paidByUserId ?: tx.createdByUserId ?: "member"
+                totals[key] = (totals[key] ?: 0.0) + tx.amount
+            }
+        totals
+    }
+
     val topCategory = remember(expensesByCategory) {
         expensesByCategory.maxByOrNull { it.value }?.key ?: "Food & Dining"
     }
@@ -122,8 +148,9 @@ fun AnalyticsScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 144.dp)
+            .padding(horizontal = 16.dp)
+            .testTag("analytics_lazy_column"),
+        contentPadding = PaddingValues(top = 16.dp, bottom = bottomContentPadding)
     ) {
         // --- 1. TITLE HEADER & TIME RANGE SELECTOR ---
         item {
@@ -142,9 +169,13 @@ fun AnalyticsScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "Visual spending breakdown & health metrics",
+                        text = if (state.activeMode == FinancialMode.FAMILY && state.activeFamily != null) {
+                            "${state.activeFamily.avatarEmoji} ${state.activeFamily.name} • Shared spending & member breakdown"
+                        } else {
+                            "Visual spending breakdown & health metrics"
+                        },
                         fontSize = 12.sp,
-                        color = ZenithTheme.textSecondary,
+                        color = if (state.activeMode == FinancialMode.FAMILY) ZenithTheme.accentCyan else ZenithTheme.textSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -725,6 +756,78 @@ fun AnalyticsScreen(
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+
+            if (state.activeMode == FinancialMode.FAMILY && state.activeFamilyMembers.isNotEmpty()) {
+                item(key = "family_member_spending_breakdown") {
+                    GlassCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("member_spending_breakdown_card"),
+                        backgroundColor = ZenithTheme.glassCardBg
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Member Spending Breakdown",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZenithTheme.textPrimary
+                            )
+                            Text(
+                                text = "Total paid per family member this cycle",
+                                fontSize = 11.5.sp,
+                                color = ZenithTheme.textSecondary
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            val denom = rangeExpense.coerceAtLeast(1.0)
+                            state.activeFamilyMembers.forEachIndexed { idx, member ->
+                                val spent = memberSpendMap[member.userId] ?: 0.0
+                                val pct = if (rangeExpense > 0) ((spent / denom) * 100).toInt() else 0
+                                val barColor = palette[idx % palette.size]
+                                val nameWithLabel = if (member.memberLabel.isNotBlank()) {
+                                    "${member.avatarEmoji} ${member.displayName} (${member.memberLabel})"
+                                } else {
+                                    "${member.avatarEmoji} ${member.displayName}"
+                                }
+                                Column(modifier = Modifier.padding(vertical = 5.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = nameWithLabel,
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = ZenithTheme.textPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "${formatMoneyOrMask(spent)} ($pct%)",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = barColor
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    LinearProgressIndicator(
+                                        progress = { (spent / denom).toFloat().coerceIn(0f, 1f) },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(5.dp)
+                                            .clip(RoundedCornerShape(3.dp)),
+                                        color = barColor,
+                                        trackColor = ZenithTheme.cardVariantSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.height(16.dp))
                 }
             }

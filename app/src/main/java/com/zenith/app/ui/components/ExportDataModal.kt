@@ -26,8 +26,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.zenith.app.data.export.*
+import com.zenith.app.data.models.FinanceScope
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
+import com.zenith.app.data.repository.FamilyTxAttribution
 import com.zenith.app.ui.theme.ZenithTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -36,7 +38,10 @@ import kotlinx.coroutines.launch
 fun ExportDataModal(
     transactions: List<TransactionEntity>,
     currencySymbol: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    isFamilyMode: Boolean = false,
+    workspaceName: String = "Personal",
+    txAttributionByServerId: Map<String, FamilyTxAttribution> = emptyMap()
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -53,13 +58,14 @@ fun ExportDataModal(
 
     var isGenerating by remember { mutableStateOf(false) }
     var exportResult by remember { mutableStateOf<ExportResult?>(null) }
+    val activeScopeFilter = if (isFamilyMode) FinanceScope.FAMILY else FinanceScope.PERSONAL
 
-    val filteredCount = remember(transactions, selectedDateFilter, selectedTypeFilter) {
+    val filteredCount = remember(transactions, selectedDateFilter, selectedTypeFilter, activeScopeFilter) {
         val options = ExportOptions(
             format = selectedFormat,
             dateFilter = selectedDateFilter,
             typeFilter = selectedTypeFilter,
-            scopeFilter = null
+            scopeFilter = activeScopeFilter
         )
         ExportImportService.filterTransactions(transactions, options).size
     }
@@ -282,18 +288,31 @@ fun ExportDataModal(
                                     format = selectedFormat,
                                     dateFilter = selectedDateFilter,
                                     typeFilter = selectedTypeFilter,
-                                    scopeFilter = null,
+                                    scopeFilter = activeScopeFilter,
                                     includeCategories = incCategories,
                                     includeNotes = incNotes,
                                     includePaymentMethods = incPaymentMethods,
                                     includeBudgetSummary = incBudgetSummary
                                 )
 
+                                val scopedTransactions = ExportImportService.filterTransactions(transactions, options)
                                 val result = when (selectedFormat) {
-                                    ExportFormat.PDF -> ExportImportService.exportPdf(context, transactions, currencySymbol, options)
-                                    ExportFormat.CSV -> ExportImportService.exportCsv(context, transactions, if (currencySymbol == "₹") "INR" else "USD", options)
-                                    ExportFormat.EXCEL -> ExportImportService.exportExcel(context, transactions, if (currencySymbol == "₹") "INR" else "USD", options)
-                                    ExportFormat.JSON -> ExportImportService.exportJsonBackup(context, transactions, emptyList(), emptyList(), emptyList())
+                                    ExportFormat.PDF -> ExportImportService.exportPdf(
+                                        context, transactions, currencySymbol, options,
+                                        txAttributionByServerId = txAttributionByServerId,
+                                        workspaceName = workspaceName
+                                    )
+                                    ExportFormat.CSV -> ExportImportService.exportCsv(
+                                        context, transactions, if (currencySymbol == "₹") "INR" else "USD", options,
+                                        txAttributionByServerId = txAttributionByServerId,
+                                        workspaceName = workspaceName
+                                    )
+                                    ExportFormat.EXCEL -> ExportImportService.exportExcel(
+                                        context, transactions, if (currencySymbol == "₹") "INR" else "USD", options,
+                                        txAttributionByServerId = txAttributionByServerId,
+                                        workspaceName = workspaceName
+                                    )
+                                    ExportFormat.JSON -> ExportImportService.exportJsonBackup(context, scopedTransactions, emptyList(), emptyList(), emptyList())
                                 }
 
                                 exportResult = result

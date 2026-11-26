@@ -73,7 +73,7 @@ val PastelRose = Color(0xFFFB7185)
 val PastelRoseContainer = Color(0x26FB7185)
 
 val GoalAmber = Color(0xFFF59E0B)                // Warm Sunset Amber
-val LightGoalAmber = Color(0xFFD97706)           // High-contrast amber for light cards
+val LightGoalAmber = Color(0xFFB45309)           // High-contrast accessible amber (>=4.7:1) for light cards
 val GoalAmberContainer = Color(0xFF78350F)
 val GoalAmberOnContainer = Color(0xFFFEF3C7)
 val PastelAmber = Color(0xFFFBBF24)

@@ -14,8 +14,8 @@ android {
     applicationId = "com.zenith.app"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "2.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -32,12 +32,14 @@ android {
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       val uploadKey = file(keystorePath)
+      val allowDebugFallback = (findProperty("zenith.allowDebugReleaseSigning") as? String)?.toBoolean() == true ||
+        System.getenv("ALLOW_DEBUG_RELEASE_SIGNING")?.toBoolean() == true
       if (uploadKey.exists()) {
         storeFile = uploadKey
-        storePassword = System.getenv("STORE_PASSWORD") ?: "android"
-        keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
-        keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
-      } else {
+        storePassword = System.getenv("STORE_PASSWORD") ?: (findProperty("STORE_PASSWORD") as? String ?: "")
+        keyAlias = System.getenv("KEY_ALIAS") ?: (findProperty("KEY_ALIAS") as? String ?: "upload")
+        keyPassword = System.getenv("KEY_PASSWORD") ?: (findProperty("KEY_PASSWORD") as? String ?: "")
+      } else if (allowDebugFallback) {
         val localKeystore = file("${rootDir}/debug.keystore")
         val homeKeystore = file("${System.getProperty("user.home")}/.android/debug.keystore")
         storeFile = if (localKeystore.exists()) localKeystore else homeKeystore
@@ -54,7 +56,10 @@ android {
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+      val releaseSigning = signingConfigs.getByName("release")
+      if (releaseSigning.storeFile != null) {
+        signingConfig = releaseSigning
+      }
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }
@@ -100,6 +105,7 @@ dependencies {
   implementation(libs.androidx.camera.view)
   implementation("com.google.mlkit:barcode-scanning:17.3.0")
   implementation("com.google.mlkit:text-recognition:16.0.1")
+  implementation("com.google.zxing:core:3.5.3")
 
   implementation(libs.androidx.compose.material.icons.core)
   implementation(libs.androidx.compose.material.icons.extended)

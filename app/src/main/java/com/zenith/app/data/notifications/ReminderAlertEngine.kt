@@ -100,8 +100,10 @@ object ReminderAlertEngine {
         nowMillis: Long = System.currentTimeMillis()
     ): Double {
         val nowCal = Calendar.getInstance().apply { timeInMillis = nowMillis }
+        val isOverall = budget.categoryName.equals("Overall", ignoreCase = true) ||
+            budget.categoryName.equals("All Categories", ignoreCase = true)
         return expenses
-            .filter { it.category.equals(budget.categoryName, ignoreCase = true) }
+            .filter { isOverall || it.category.equals(budget.categoryName, ignoreCase = true) }
             .filter { tx ->
                 val txCal = Calendar.getInstance().apply { timeInMillis = tx.dateMillis }
                 when (budget.periodType.uppercase()) {
@@ -158,11 +160,20 @@ object ReminderAlertEngine {
         }
     }
 
-    fun scheduleDailyCheck(context: Context) {
+    fun scheduleDailyCheck(context: Context, forceReschedule: Boolean = false) {
         try {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
             val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
                 action = ReminderAlarmReceiver.ACTION_DAILY_REMINDER_CHECK
+            }
+            if (!forceReschedule) {
+                val existing = PendingIntent.getBroadcast(
+                    context,
+                    4041,
+                    intent,
+                    PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+                )
+                if (existing != null) return
             }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
@@ -170,7 +181,7 @@ object ReminderAlertEngine {
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            // Start next check in ~30 minutes, repeating roughly every 12 hours (inexact/battery-friendly)
+            // Schedule next check in ~30 minutes, repeating roughly every 12 hours (inexact/battery-friendly)
             val firstTrigger = System.currentTimeMillis() + (30L * 60 * 1000)
             alarmManager.setInexactRepeating(
                 AlarmManager.RTC,
@@ -186,7 +197,7 @@ object ReminderAlertEngine {
     private fun postBillReminderNotification(context: Context, candidate: BillAlertCandidate) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val reminder = candidate.reminder
-        val notifId = (20_000 + reminder.id.toInt()) and 0x7FFFFFFF
+        val notifId = 1_000_000 + ((reminder.id.toInt() and 0x0FFFFFFF) * 2)
 
         val dueLabel = when {
             candidate.daysUntilDue < 0 -> "Overdue by ${-candidate.daysUntilDue} day(s)"
@@ -237,7 +248,7 @@ object ReminderAlertEngine {
 
     private fun postBudgetAlertNotification(context: Context, alert: BudgetAlertCandidate) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val notifId = (30_000 + alert.budget.id.toInt()) and 0x7FFFFFFF
+        val notifId = 2_000_000 + (alert.budget.id.toInt() and 0x0FFFFFFF)
         val limitFormatted = String.format(Locale.US, "%,.0f", alert.budget.monthlyLimit)
         val spentFormatted = String.format(Locale.US, "%,.0f", alert.spent)
 

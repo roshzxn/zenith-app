@@ -59,22 +59,15 @@ class CashFlowRepository(
     suspend fun getItemsForTransactionDirect(transactionId: Long): List<ReceiptItemEntity> = receiptDao.getItemsForTransactionDirect(transactionId)
 
     suspend fun saveReceiptWithItems(receipt: ReceiptEntity, items: List<ReceiptItemEntity>): Long {
-        val receiptId = receiptDao.insertReceipt(receipt)
-        val itemsWithId = items.map { it.copy(receiptId = receiptId, transactionId = receipt.transactionId) }
-        receiptDao.insertReceiptItems(itemsWithId)
-        return receiptId
+        return receiptDao.insertReceiptWithItems(receipt, items)
     }
 
     suspend fun updateReceiptWithItems(receipt: ReceiptEntity, items: List<ReceiptItemEntity>) {
-        receiptDao.updateReceipt(receipt)
-        receiptDao.deleteReceiptItemsByTransactionId(receipt.transactionId)
-        val itemsWithId = items.map { it.copy(receiptId = receipt.id, transactionId = receipt.transactionId) }
-        receiptDao.insertReceiptItems(itemsWithId)
+        receiptDao.replaceReceiptWithItems(receipt, items)
     }
 
     suspend fun deleteReceiptByTransactionId(transactionId: Long) {
-        receiptDao.deleteReceiptItemsByTransactionId(transactionId)
-        receiptDao.deleteReceiptByTransactionId(transactionId)
+        receiptDao.deleteReceiptAndItemsByTransactionId(transactionId)
     }
 
     // Transaction scoping
@@ -132,9 +125,15 @@ class CashFlowRepository(
                 )
                 val keep = sorted.first()
                 val duplicates = sorted.drop(1).filter { dup ->
-                    kotlin.math.abs(dup.dateMillis - keep.dateMillis) <= 60_000L
+                    val sameWindow = kotlin.math.abs(dup.dateMillis - keep.dateMillis) <= 15_000L
+                    val utrConflict = !dup.upiTransactionId.isNullOrBlank() &&
+                        !keep.upiTransactionId.isNullOrBlank() &&
+                        !dup.upiTransactionId.equals(keep.upiTransactionId, ignoreCase = true)
+                    val sameServerOrUnsynced = dup.syncStatus != "SYNCED" || (!dup.serverId.isNullOrBlank() && dup.serverId == keep.serverId)
+                    sameWindow && !utrConflict && sameServerOrUnsynced
                 }
                 for (dup in duplicates) {
+                    deleteReceiptByTransactionId(dup.id)
                     transactionDao.deleteTransactionById(dup.id)
                 }
             }
@@ -152,7 +151,15 @@ class CashFlowRepository(
      * and any linked receipt/items regardless of whether it was already synced or purely local.
      */
     suspend fun softDeleteForUndo(transaction: TransactionEntity) {
-        transactionDao.markTransactionDeleted(transaction.id)
+        transactionDao.markTransactionPendingUndoDelete(transaction.id)
+    }
+
+    suspend fun commitPendingUndoDeletes() {
+        transactionDao.commitAllPendingUndoDeletes()
+    }
+
+    suspend fun commitPendingUndoDelete(id: Long) {
+        transactionDao.commitPendingUndoDelete(id)
     }
 
     suspend fun deleteTransaction(transaction: TransactionEntity) {
@@ -165,7 +172,39 @@ class CashFlowRepository(
     }
 
     suspend fun restoreTransaction(transaction: TransactionEntity) {
-        transactionDao.restoreTransaction(transaction.id)
+        val sid = transaction.serverId
+        val existsById = transaction.id > 0 && transactionDao.getTransactionById(transaction.id) != null
+        val existsByServerId = !sid.isNullOrBlank() && transactionDao.getTransactionByServerId(sid) != null
+        if (existsById) {
+            transactionDao.restoreTransaction(transaction.id)
+        } else if (existsByServerId && !sid.isNullOrBlank()) {
+            transactionDao.restoreTransactionByServerId(sid)
+        } else {
+            // Re-insert cleanly if background sync already removed local tombstone during brief race
+            transactionDao.insertTransaction(
+                transaction.copy(
+                    id = 0,
+                    isDeleted = false,
+                    syncStatus = if (sid.isNullOrBlank()) "PENDING_CREATE" else "PENDING_UPDATE",
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    suspend fun markAllPersonalCloudDataPendingDelete() {
+        val now = System.currentTimeMillis()
+        transactionDao.deleteLocalOnlyPersonalTransactions()
+        transactionDao.markAllPersonalTransactionsPendingDelete(now)
+        budgetDao.deleteLocalOnlyPersonalBudgets()
+        budgetDao.markAllPersonalBudgetsPendingDelete(now)
+        savingsGoalDao.deleteLocalOnlyPersonalGoals()
+        savingsGoalDao.markAllPersonalGoalsPendingDelete(now)
+        autoPayReminderDao?.deleteLocalOnlyPersonalReminders()
+        autoPayReminderDao?.markAllPersonalRemindersPendingDelete(now)
+        scannedItemDao.deleteAllScannedItems()
+        receiptDao.deleteAllReceiptItems()
+        receiptDao.deleteAllReceipts()
     }
 
     suspend fun reassignPersonalTransactionsToUser(newUserId: String): Int {

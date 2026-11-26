@@ -12,6 +12,7 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -21,8 +22,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.zenith.app.data.models.FinanceScope
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
+import com.zenith.app.data.repository.FamilyTxAttribution
 import com.zenith.app.data.util.CategoryIconHelper
 import com.zenith.app.ui.theme.*
 import java.text.SimpleDateFormat
@@ -35,12 +38,13 @@ fun TransactionItemCard(
     currencySymbol: String,
     modifier: Modifier = Modifier,
     isMasked: Boolean = false,
+    familyAttribution: FamilyTxAttribution? = null,
     onClick: ((TransactionEntity) -> Unit)? = null,
     onLongClick: ((TransactionEntity) -> Unit)? = null
 ) {
     val isExpense = transaction.type == TransactionType.EXPENSE
     val icon = categoryVectorFor(transaction.categoryIconName, transaction.category)
-    val formattedDate = rememberFormattedDate(transaction.dateMillis)
+    val formattedDate = remember(transaction.dateMillis) { formatTransactionDate(transaction.dateMillis) }
     val hasReceiptAttached = !transaction.receiptImageUri.isNullOrBlank() || transaction.note.contains("Receipt", ignoreCase = true)
 
     val typeColor = if (isExpense) ZenithTheme.accentRed else ZenithTheme.accentGreen
@@ -153,6 +157,46 @@ fun TransactionItemCard(
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
+
+                    if (transaction.customLabel.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = ZenithTheme.accentIndigo.copy(alpha = containerAlpha),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ZenithTheme.accentIndigo.copy(alpha = 0.3f))
+                        ) {
+                            Text(
+                                text = transaction.customLabel,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = ZenithTheme.accentIndigo,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+
+                if (familyAttribution != null) {
+                    val paidSuffix = if (familyAttribution.paidByLabel.isNotBlank()) " (${familyAttribution.paidByLabel})" else ""
+                    val creatorSuffix = if (familyAttribution.createdByLabel.isNotBlank()) " (${familyAttribution.createdByLabel})" else ""
+                    val paidLabel = if (
+                        familyAttribution.createdByName.isNotBlank() &&
+                        familyAttribution.createdByName != familyAttribution.paidByName
+                    ) {
+                        "Paid by ${familyAttribution.paidByName}$paidSuffix • Added by ${familyAttribution.createdByName}$creatorSuffix"
+                    } else {
+                        "Paid by ${familyAttribution.paidByName}$paidSuffix"
+                    }
+                    Text(
+                        text = paidLabel,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = ZenithTheme.accentCyan,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
                 }
             }
 
@@ -180,11 +224,19 @@ fun TransactionItemCard(
                     if (transaction.syncStatus != "SYNCED") {
                         Box(
                             modifier = Modifier
-                                .padding(end = 5.dp)
+                                .padding(end = 4.dp)
                                 .size(6.dp)
                                 .clip(CircleShape)
                                 .background(ZenithTheme.accentAmber)
                         )
+                        if (transaction.financeScope == FinanceScope.FAMILY) {
+                            Text(
+                                text = "Pending • ",
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = ZenithTheme.accentAmber
+                            )
+                        }
                     }
                     Text(
                         text = formattedDate,
@@ -199,7 +251,11 @@ fun TransactionItemCard(
     }
 }
 
-private fun rememberFormattedDate(millis: Long): String {
+private val SHORT_DATE_FORMAT = ThreadLocal.withInitial {
+    SimpleDateFormat("dd MMM", Locale.getDefault())
+}
+
+private fun formatTransactionDate(millis: Long): String {
     val date = Date(millis)
     val now = Calendar.getInstance()
     val txCal = Calendar.getInstance().apply { time = date }
@@ -211,7 +267,7 @@ private fun rememberFormattedDate(millis: Long): String {
         now.get(Calendar.YEAR) == txCal.get(Calendar.YEAR) &&
                 now.get(Calendar.DAY_OF_YEAR) - txCal.get(Calendar.DAY_OF_YEAR) == 1 -> "Yesterday"
 
-        else -> SimpleDateFormat("dd MMM", Locale.getDefault()).format(date)
+        else -> SHORT_DATE_FORMAT.get()?.format(date) ?: ""
     }
 }
 

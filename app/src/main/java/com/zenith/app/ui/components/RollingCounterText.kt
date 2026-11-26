@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,9 +64,10 @@ fun RollingCounterText(
     val fullText = "$signStr$currencySymbol$formattedNumber"
 
     BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.CenterStart) {
+        val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
         val effectiveFontSize = if (constraints.hasBoundedWidth && maxWidth.value > 0f && fullText.isNotEmpty()) {
-            // ~0.62dp per sp character estimate for tabular glyphs inside constrained cards
-            val maxAllowedSp = (maxWidth.value / (fullText.length * 0.62f)).coerceAtLeast(10f)
+            // Account for OS accessibility fontScale because Compose scales .sp automatically
+            val maxAllowedSp = (maxWidth.value / (fullText.length * 0.62f * fontScale)).coerceAtLeast(9f)
             minOf(fontSize.value, maxAllowedSp).sp
         } else {
             fontSize
