@@ -1,14 +1,60 @@
-# Zenith — Personal Expense & UPI Finance Tracker
+# Zenith v2.0 — Personal & Family Expense Tracker
 
-Zenith is a modern Android personal finance and expense tracking application (`com.zenith.app`) built with **Kotlin**, **Jetpack Compose (Material 3)**, **Room**, **Supabase**, **CameraX + ML Kit**, and **Gemini AI**. It combines an offline-first personal ledger with direct UPI app redirection, on-device UPI payment auto-detection, receipt OCR, voice expense logging, budgets, savings goals, and multi-format reporting.
+Zenith is a modern Android personal & shared-family finance application (`com.zenith.app`) built with **Kotlin**, **Jetpack Compose (Material 3)**, **Room**, **Supabase**, **CameraX + ML Kit**, **ZXing**, and **Gemini AI**. It combines an offline-first personal ledger and shared multi-member family workspace with direct UPI app redirection, on-device UPI payment auto-detection, QR invite joining, real-time family chat, receipt OCR, voice logging, budgets, savings goals, and multi-format reporting.
+
+> **Latest Release:** [`Zenith v2.0`](https://github.com/roshzxn/zenith-app/releases/tag/v2.0) (`Zenith-v2.0.apk`)
+
+---
+
+## Screenshots
+
+### Personal Finance & Adaptive Themes
+
+<table>
+  <tr>
+    <td align="center"><b>Home Dashboard (Dark)</b></td>
+    <td align="center"><b>Crisp Light Theme</b></td>
+    <td align="center"><b>Transaction Breakdown</b></td>
+    <td align="center"><b>Budgets, Goals & Auto-Pay</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/home_personal_dark.png" width="210" alt="Personal Home Dashboard Dark" /></td>
+    <td><img src="docs/screenshots/home_light_theme.png" width="210" alt="Crisp Light Theme" /></td>
+    <td><img src="docs/screenshots/transaction_detail.png" width="210" alt="Transaction Detail Modal" /></td>
+    <td><img src="docs/screenshots/personal_budgets_goals.png" width="210" alt="Budgets Savings Goals and Auto-Pay" /></td>
+  </tr>
+</table>
+
+### Shared Family Mode & Collaboration (v2.0)
+
+<table>
+  <tr>
+    <td align="center"><b>Family Dashboard</b></td>
+    <td align="center"><b>Family Group Chat</b></td>
+    <td align="center"><b>Shared Family Budgets</b></td>
+    <td align="center"><b>Manage Family & Roles</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/family_dashboard.png" width="210" alt="Shared Family Dashboard" /></td>
+    <td><img src="docs/screenshots/family_chat.png" width="210" alt="Family Group Chat" /></td>
+    <td><img src="docs/screenshots/family_budgets.png" width="210" alt="Shared Family Budgets Tab" /></td>
+    <td><img src="docs/screenshots/family_manage.png" width="210" alt="Manage Family Members and Roles" /></td>
+  </tr>
+</table>
 
 ---
 
 ## Key Features
 
 ### Personal Ledger & Activity Explorer
-- **Home Dashboard**: Live net balance ticker with rolling digit odometer (`RollingCounterText`), income/spent cards, privacy balance masking, and quick entry shortcuts (`Scan QR`, `UPI Pay`, `Receipt`, `Voice Entry`).
+- **Home Dashboard**: Live net balance ticker with rolling digit odometer (`RollingCounterText`), income/spent cards, privacy balance masking, and quick entry shortcuts (`Scan QR`, `UPI Pay`, `Receipt`, `Voice Entry`), plus a Home Screen summary widget (`ZenithSummaryWidgetProvider`).
 - **Unified Activity Feed**: Single smooth-scrolling feed with instant keyword search, transaction type toggles, date-range filters (`All Time`, `Today`, `This Week`, `This Month`), category chips, daily grouped cards, detailed modal editor (`TransactionDetailModal`), and Undo delete support.
+
+### Shared Family Expense Tracking (`v2.0`)
+- **Workspace Switcher & Strict Isolation**: Toggle seamlessly between `Personal` and `Family` ledgers right from Home (`FamilyRepository`, `FinancialContext`), keeping Personal Savings Goals and Auto-Pay isolated from shared family expenses.
+- **Invite QR Codes & Role-Based Controls**: Generate shareable `zenith://join` QR invites (`FamilyQrComponents`), scan to join instantly, assign `OWNER` / `ADMIN` / `MEMBER` permissions, and customize family labels, member tags, and avatars (`FamilyManagementModals`).
+- **Real-Time Family Chat (`FamilyChatSheet`)**: Full-screen edge-to-edge group chat with keyboard/IME handling, transaction attachment picker, live message sync, and quick budget requests from the Budgets tab.
+- **Shared Family Budgets (`BudgetsAndGoalsScreen`)**: Role-gated shared spending limits with live monthly family spend tracking, per-member spend breakdown chips, and double-counting protection across `Overall` + category caps.
 
 ### UPI Payments & On-Device Auto-Tracking
 - **Redirect & Note Workflow (`UPIPaySheet`, `UpiPaymentFlow`)**: Launch any installed UPI app (**Google Pay, PhonePe, Paytm, BHIM, CRED, Amazon Pay, WhatsApp Pay, MobiKwik, Navi, Freecharge, super.money**), automatically copy recipient UPI ID/mobile details to the clipboard, and prompt with pre-filled confirmation on return.
@@ -38,9 +84,9 @@ Zenith is a modern Android personal finance and expense tracking application (`c
 | **UI** | Jetpack Compose (`BOM 2024.09.00`), Material 3, Navigation Compose |
 | **Local Storage** | Room `2.7.0` (`CashFlowDatabase`), SharedPreferences |
 | **Cloud Backend** | Supabase (`postgrest-kt`, `auth-kt`, `realtime-kt` `3.0.1`), Ktor `3.0.0` |
-| **Camera & ML** | AndroidX CameraX `1.5.0`, ML Kit Barcode Scanning `17.3.0` & Text Recognition `16.0.1` |
+| **Camera & ML** | AndroidX CameraX `1.5.0`, ML Kit Barcode Scanning `17.3.0` & Text Recognition `16.0.1`, ZXing `3.5.3` |
 | **AI Integration** | Gemini API (`GeminiAiService`) |
-| **Testing** | JUnit 4, Robolectric `4.16.1`, Compose UI Test, Kotlinx Coroutines Test `1.10.2` |
+| **Testing** | JUnit 4, Robolectric `4.16.1`, Compose UI Test, Kotlinx Coroutines Test `1.10.2` (162 unit tests) |
 
 - **Android SDK**: `minSdk = 24`, `targetSdk = 36`, `compileSdk = 36`
 
@@ -51,27 +97,30 @@ Zenith is a modern Android personal finance and expense tracking application (`c
 ```text
 zenith-app/
 ├── app/src/main/
-│   ├── AndroidManifest.xml                  # Permissions, <queries> UPI visibility, services & receivers
+│   ├── AndroidManifest.xml                  # Permissions, deep links (zenith://join), UPI visibility, services & widget
 │   └── java/com/zenith/app/
-│       ├── MainActivity.kt                  # App shell, navigation, auth lock, modals
+│       ├── MainActivity.kt                  # App shell, Crossfade + saved tab state, auth lock, modals
 │       ├── ZenithApplication.kt
 │       ├── data/
 │       │   ├── ai/GeminiAiService.kt        # Voice, OCR & financial coaching prompts
-│       │   ├── dao/                         # Room DAOs (CashFlowDao, AutoPayReminderDao, UserProfileDao)
-│       │   ├── database/CashFlowDatabase.kt # Room v16 schema, migrations & category seeding
+│       │   ├── dao/                         # CashFlowDao, FamilyDao, AutoPayReminderDao, UserProfileDao
+│       │   ├── database/CashFlowDatabase.kt # Room schema, migrations & category seeding
 │       │   ├── export/ExportImportService.kt# PDF, Excel, CSV & JSON import/export engine
-│       │   ├── models/                      # TransactionEntity, BudgetEntity, SavingsGoalEntity, etc.
-│       │   ├── network/                     # SupabaseAuthService, SyncEngine, SessionManager
-│       │   ├── repository/                  # CashFlowRepository, UserProfileRepository
+│       │   ├── models/                      # TransactionEntity, Family*Entity, BudgetEntity, SavingsGoalEntity
+│       │   ├── network/                     # SupabaseAuthService, FamilySupabaseClient, Realtime, SyncEngine
+│       │   ├── repository/                  # CashFlowRepository, FamilyRepository, ScopedMappers
 │       │   ├── upi/                         # UpiService, UpiPaymentBus, NotificationListener & Parser
 │       │   └── util/                        # CategoryIconHelper, DateTimeUtils
-│       └── ui/
-│           ├── components/                  # UPIPaySheet, UpiPaymentFlow, UpiQrScanModal, Modals, Cards
-│           ├── screens/                     # Home, Transactions (Activity), Budgets, Analytics, Profile, Auth
-│           ├── theme/                       # Color tokens, 3-mode ZenithTheme, Typography
-│           └── viewmodel/CashFlowViewModel.kt
-├── app/src/test/java/com/zenith/app/        # Unit & Robolectric Compose test suites
-├── supabase/schema.sql                      # PostgreSQL schema, triggers, RLS policies & realtime config
+│       ├── domain/                          # FinancialContext, FamilyRole, workspace isolation models
+│       ├── ui/
+│       │   ├── components/                  # FamilyChatSheet, FamilyManagementModals, FamilyQrComponents, UPIPaySheet
+│       │   ├── screens/                     # Home, Transactions (Activity), Budgets, Analytics, Profile, Auth
+│       │   ├── theme/                       # Color tokens, 3-mode ZenithTheme, Typography
+│       │   └── viewmodel/CashFlowViewModel.kt
+│       └── widget/ZenithSummaryWidgetProvider.kt
+├── app/src/test/java/com/zenith/app/        # 162 unit & Robolectric Compose tests
+├── docs/screenshots/                        # Curated app screenshots for README showcase
+├── supabase/                                # schema.sql & migrations (002_family_mode, 003_delete_and_clear_fix)
 ├── build.gradle.kts / settings.gradle.kts
 └── .env.example                             # Environment variables template
 ```
