@@ -387,44 +387,6 @@ fun UPIPaySheet(
                     Text("Redirect to Any UPI App & Note", fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Secondary flow: Merchant / UPI URI intent (requires valid @vpa & purpose)
-                OutlinedButton(
-                    onClick = {
-                        val candidateInfo = UpiPaymentInfo(
-                            payeeAddress = trimmedVpa,
-                            payeeName = payeeNameText.trim(),
-                            amount = amountText.trim(),
-                            note = purpose.trim()
-                        )
-                        val validation = UpiService.validatePaymentInfo(candidateInfo)
-                        if (!validation.isValid) {
-                            Toast.makeText(context, validation.errorMessage ?: "Invalid payment request.", Toast.LENGTH_SHORT).show()
-                            return@OutlinedButton
-                        }
-                        if (purpose.isBlank()) {
-                            Toast.makeText(context, "Enter a purpose or note.", Toast.LENGTH_SHORT).show()
-                            return@OutlinedButton
-                        }
-                        payRequest = UpiPayRequest(
-                            amount = amount,
-                            purpose = purpose.trim(),
-                            vpa = trimmedVpa,
-                            payeeName = payeeNameText.trim().takeIf { it.isNotBlank() },
-                            launchDirectly = false
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth().height(44.dp).testTag("btn_pay_via_upi"),
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
-                    enabled = isValid
-                ) {
-                    Icon(Icons.Default.Payment, contentDescription = null, modifier = Modifier.size(16.dp), tint = ZenithTheme.accentIndigo)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Send Merchant UPI Link (Requires Verified ID)", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = ZenithTheme.textPrimary)
-                }
-
                 Spacer(modifier = Modifier.height(6.dp))
 
                 Text(

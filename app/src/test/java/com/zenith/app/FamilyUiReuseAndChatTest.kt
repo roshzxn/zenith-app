@@ -236,6 +236,9 @@ class FamilyUiReuseAndChatTest {
         composeTestRule.onNodeWithTag("chat_reply_m1").performClick()
         composeTestRule.onNodeWithText("Replying to Mother").assertExists()
 
+        // Floating composer is visible and accepts input + expense share
+        composeTestRule.onNodeWithTag("family_chat_floating_composer").assertIsDisplayed()
+
         // Attach a shared family expense
         composeTestRule.onNodeWithTag("family_chat_attach_expense").performClick()
         composeTestRule.onNodeWithText("Farm Produce", substring = true).performClick()
@@ -252,5 +255,148 @@ class FamilyUiReuseAndChatTest {
         composeTestRule.onNodeWithTag("chat_bubble_m2").performScrollTo().performClick()
         composeTestRule.onNodeWithTag("chat_delete_m2").performScrollTo().performClick()
         assertEquals("m2", deletedMsgId)
+    }
+
+    @Test
+    fun testFamilyChatGroupsConsecutiveSendersAndSupportsContextualLongPressAndSearch() {
+        val famId = UUID.randomUUID().toString()
+        val motherId = UUID.randomUUID().toString()
+        val fatherId = UUID.randomUUID().toString()
+        val now = 1_760_000_000_000L
+
+        val fam = FamilyInfo(famId, "Sharma Family", "🏡", motherId)
+        val members = listOf(
+            FamilyMemberInfo(UUID.randomUUID().toString(), famId, motherId, "Mother", "👩", role = FamilyRole.OWNER),
+            FamilyMemberInfo(UUID.randomUUID().toString(), famId, fatherId, "Father", "👨", role = FamilyRole.MEMBER)
+        )
+        val messages = listOf(
+            FamilyMessageEntity(
+                id = "m1",
+                familyId = famId,
+                senderUserId = motherId,
+                senderName = "Mother",
+                senderAvatar = "👩",
+                body = "Morning groceries",
+                createdAtMillis = now,
+                clientMsgId = "c1",
+                syncStatus = "SYNCED"
+            ),
+            FamilyMessageEntity(
+                id = "m2",
+                familyId = famId,
+                senderUserId = motherId,
+                senderName = "Mother",
+                senderAvatar = "👩",
+                body = "Also got milk",
+                createdAtMillis = now + 60_000L,
+                clientMsgId = "c2",
+                syncStatus = "SYNCED"
+            ),
+            FamilyMessageEntity(
+                id = "m3",
+                familyId = famId,
+                senderUserId = fatherId,
+                senderName = "Father",
+                senderAvatar = "👨",
+                body = "Got it thanks",
+                createdAtMillis = now + 120_000L,
+                clientMsgId = "c3",
+                syncStatus = "PENDING_CREATE"
+            )
+        )
+        var deletedMsgId: String? = null
+
+        composeTestRule.setContent {
+            CashFlowTheme {
+                FamilyChatSheet(
+                    family = fam,
+                    members = members,
+                    messages = messages,
+                    familyTransactions = emptyList(),
+                    txAttributionByServerId = emptyMap(),
+                    currentUserId = fatherId,
+                    currentUserRole = FamilyRole.MEMBER,
+                    currencySymbol = "₹",
+                    isRealtimeConnected = true,
+                    onSendMessage = { _, _, _ -> },
+                    onDeleteMessage = { msg -> deletedMsgId = msg.id },
+                    onOpenManageFamily = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        // Consecutive incoming messages from Mother share a single sender header
+        composeTestRule.onAllNodesWithText("Mother").assertCountEquals(1)
+        composeTestRule.onNodeWithText("Morning groceries").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Also got milk").assertIsDisplayed()
+
+        // Long-press Father's message opens contextual header bar with Reply/Copy/Delete
+        composeTestRule.onNodeWithTag("chat_bubble_m3").performTouchInput { longClick() }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("1 selected").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ctx_chat_reply").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ctx_chat_copy").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ctx_chat_delete").assertIsDisplayed()
+
+        // Contextual reply sets quote target in composer dock
+        composeTestRule.onNodeWithTag("ctx_chat_reply").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Replying to Father").assertIsDisplayed()
+
+        // Long-press again and delete via contextual header action
+        composeTestRule.onNodeWithTag("chat_bubble_m3").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("chat_bubble_m3").performTouchInput { longClick() }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("ctx_chat_delete").performClick()
+        assertEquals("m3", deletedMsgId)
+
+        // Inline search filters feed cleanly
+        composeTestRule.onNodeWithTag("btn_chat_search").performClick()
+        composeTestRule.onNodeWithTag("family_chat_search_input").performTextInput("milk")
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Also got milk").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Morning groceries").assertDoesNotExist()
+    }
+
+    @Test
+    fun testFamilyChatQuickEmojiAndOfflineStatusBanner() {
+        val famId = UUID.randomUUID().toString()
+        val fatherId = UUID.randomUUID().toString()
+        val fam = FamilyInfo(famId, "Sharma Family", "🏡", fatherId)
+        val members = listOf(
+            FamilyMemberInfo(UUID.randomUUID().toString(), famId, fatherId, "Father", "👨", role = FamilyRole.OWNER)
+        )
+        var sentBody: String? = null
+
+        composeTestRule.setContent {
+            CashFlowTheme {
+                FamilyChatSheet(
+                    family = fam,
+                    members = members,
+                    messages = emptyList(),
+                    familyTransactions = emptyList(),
+                    txAttributionByServerId = emptyMap(),
+                    currentUserId = fatherId,
+                    currentUserRole = FamilyRole.OWNER,
+                    currencySymbol = "₹",
+                    isRealtimeConnected = false,
+                    onSendMessage = { body, _, _ -> sentBody = body },
+                    onDeleteMessage = {},
+                    onOpenManageFamily = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Cloud sync active • Messages queue offline automatically").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("family_chat_emoji_btn").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("👍").performClick()
+        composeTestRule.onNodeWithTag("family_chat_send_btn").performClick()
+        assertEquals("👍", sentBody)
     }
 }

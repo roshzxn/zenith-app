@@ -164,4 +164,30 @@ class FamilySetupAndAdminTest {
         assertNull("UPI QR must not be treated as a family invite", parseFamilyInviteQrPayload("upi://pay?pa=merchant@okaxis&pn=Coffee"))
         assertNull("BharatQR must not be treated as a family invite", parseFamilyInviteQrPayload("00020101021126370014in.gov.npci.upi"))
     }
+
+    @Test
+    fun testScannedQrQuickJoinBannerAndCachedManageQrRenderImmediately() {
+        var joinedCode = ""
+        composeTestRule.setContent {
+            CashFlowTheme {
+                FamilySetupModal(
+                    initialTab = FamilySetupTab.JOIN,
+                    initialInviteInput = "FAM-27AD09",
+                    currencySymbol = "₹",
+                    currentUserName = "Sandeep",
+                    isAuthenticated = true,
+                    onCreateFamily = { _, _, _, _, _ -> },
+                    onJoinFamily = { code, _, _, onComplete ->
+                        joinedCode = code
+                        onComplete(Result.success("f1"))
+                    },
+                    onDismiss = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("family_qr_scanned_ready_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("btn_quick_join_scanned_qr").performClick()
+        assertEquals("FAM-27AD09", joinedCode)
+    }
 }

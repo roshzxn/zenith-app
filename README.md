@@ -47,18 +47,17 @@ Zenith is a modern Android personal & shared-family finance application (`com.ze
 ## Key Features
 
 ### Personal Ledger & Activity Explorer
-- **Home Dashboard**: Live net balance ticker with rolling digit odometer (`RollingCounterText`), income/spent cards, privacy balance masking, and quick entry shortcuts (`Scan QR`, `UPI Pay`, `Receipt`, `Voice Entry`), plus a Home Screen summary widget (`ZenithSummaryWidgetProvider`).
+- **Home Dashboard**: Live net balance ticker with rolling digit odometer (`RollingCounterText`), income/spent cards, privacy balance masking, and quick entry shortcuts (`Scan & Pay`, `UPI Pay`, `Receipt`, `Voice Entry`), plus a Home Screen summary widget (`ZenithSummaryWidgetProvider`).
 - **Unified Activity Feed**: Single smooth-scrolling feed with instant keyword search, transaction type toggles, date-range filters (`All Time`, `Today`, `This Week`, `This Month`), category chips, daily grouped cards, detailed modal editor (`TransactionDetailModal`), and Undo delete support.
 
 ### Shared Family Expense Tracking (`v2.0`)
 - **Workspace Switcher & Strict Isolation**: Toggle seamlessly between `Personal` and `Family` ledgers right from Home (`FamilyRepository`, `FinancialContext`), keeping Personal Savings Goals and Auto-Pay isolated from shared family expenses.
-- **Invite QR Codes & Role-Based Controls**: Generate shareable `zenith://join` QR invites (`FamilyQrComponents`), scan to join instantly, assign `OWNER` / `ADMIN` / `MEMBER` permissions, and customize family labels, member tags, and avatars (`FamilyManagementModals`).
-- **Real-Time Family Chat (`FamilyChatSheet`)**: Full-screen edge-to-edge group chat with keyboard/IME handling, transaction attachment picker, live message sync, and quick budget requests from the Budgets tab.
+- **1-Tap Invite QR Codes, Gallery Scan & Role Controls**: Generate and cache shareable `zenith://join` QR invites (`FamilyQrComponents`), scan from live camera or gallery photos via ML Kit (`FamilyInviteQrScannerDialog`) to join with a 1-tap banner, assign `OWNER` / `ADMIN` / `MEMBER` permissions, and customize family labels, member tags, and avatars (`FamilyManagementModals`).
+- **Real-Time Family Chat (`FamilyChatSheet`)**: Edge-to-edge group chat with a floating frosted-glass capsule composer that tracks keyboard/navigation insets cleanly, transaction attachment picker, live message sync, and quick budget requests from the Budgets tab.
 - **Shared Family Budgets (`BudgetsAndGoalsScreen`)**: Role-gated shared spending limits with live monthly family spend tracking, per-member spend breakdown chips, and double-counting protection across `Overall` + category caps.
 
 ### UPI Payments & On-Device Auto-Tracking
-- **Redirect & Note Workflow (`UPIPaySheet`, `UpiPaymentFlow`)**: Launch any installed UPI app (**Google Pay, PhonePe, Paytm, BHIM, CRED, Amazon Pay, WhatsApp Pay, MobiKwik, Navi, Freecharge, super.money**), automatically copy recipient UPI ID/mobile details to the clipboard, and prompt with pre-filled confirmation on return.
-- **Multi-Format QR Scanning (`UpiQrScanModal`)**: Scans **standard `upi://pay` links**, **EMVCo / BharatQR** soundbox codes, and **web-wrapped UPI URLs** via CameraX + ML Kit while preserving merchant metadata (`mc`, `tr`, `tn`, `mode`, `orgid`) and raw cryptographic signatures (`sign=`).
+- **Direct UPI App Redirect (`UpiQrScanModal`, `UPIPaySheet`)**: Tapping **Scan & Pay** immediately opens your saved default UPI app or Android's system `upi://pay` chooser (Google Pay, PhonePe, Paytm, BHIM, CRED, Amazon Pay, WhatsApp Pay, MobiKwik, Navi, Freecharge, super.money), copies recipient details when paying directly, and auto-prompts a confirmation/log sheet upon returning to Zenith (`ON_RESUME`).
 - **On-Device Notification Listener (`UpiNotificationListenerService`)**: Parses debit/credit alerts 100% on-device across major Indian UPI apps and banking apps to extract amount, payee name, VPA, and 12-digit UTR with 1-tap notification shade logging and automatic deduplication (`UpiPaymentBus`, `NotificationExpenseActionReceiver`).
 - **Strict State & Security Validation (`UpiService`)**: Separates `SUCCESSFUL`, `PENDING`, `FAILED` (including bank/PSP security declines), `CANCELLED`, and `INITIATED` outcomes so declined, failed, or cancelled attempts cannot be saved as settled expenses. Includes a [`UpiGatewayVerifier`](app/src/main/java/com/zenith/app/data/upi/UpiService.kt) contract so gateway orders require authenticated server-side / webhook verification before settlement.
 
@@ -70,7 +69,7 @@ Zenith is a modern Android personal & shared-family finance application (`com.ze
 ### Planning, Security & Backups
 - **Budgets, Savings Goals & Auto-Pay (`BudgetsAndGoalsScreen`)**: Monthly/weekly/custom category limits, progress tracking, goal fund deposits, and recurring bill/subscription reminders (`AutoPayReminderDao`).
 - **Adaptive 3-Mode Theme**: **Crisp Light**, **Obsidian Navy Dark**, and **OLED Pure Black (`#000000`)** with accessible contrast tokens (`Color.kt`, `Theme.kt`).
-- **Cloud Sync & Offline Vault**: Full guest offline mode via Room (`v16`), plus Supabase Auth, Postgrest sync, and Realtime updates (`SyncEngine`, `supabase/schema.sql`).
+- **Cloud Sync & Offline Vault**: Full guest offline mode via Room (`v19`), plus Supabase Auth, Postgrest sync, and Realtime updates (`SyncEngine`, `supabase/schema.sql`).
 - **Data Export & Restore (`ExportImportService`)**: Export filtered reports to **PDF, Excel, CSV, or JSON**, import statements, and restore full JSON vault snapshots (`BackupRestoreModal`).
 - **Biometric / PIN App Lock**: Optional device authentication gate (`USE_BIOMETRIC`).
 
@@ -86,7 +85,7 @@ Zenith is a modern Android personal & shared-family finance application (`com.ze
 | **Cloud Backend** | Supabase (`postgrest-kt`, `auth-kt`, `realtime-kt` `3.0.1`), Ktor `3.0.0` |
 | **Camera & ML** | AndroidX CameraX `1.5.0`, ML Kit Barcode Scanning `17.3.0` & Text Recognition `16.0.1`, ZXing `3.5.3` |
 | **AI Integration** | Gemini API (`GeminiAiService`) |
-| **Testing** | JUnit 4, Robolectric `4.16.1`, Compose UI Test, Kotlinx Coroutines Test `1.10.2` (162 unit tests) |
+| **Testing** | JUnit 4, Robolectric `4.16.1`, Compose UI Test, Kotlinx Coroutines Test `1.10.2` (166 unit tests) |
 
 - **Android SDK**: `minSdk = 24`, `targetSdk = 36`, `compileSdk = 36`
 
@@ -118,7 +117,7 @@ zenith-app/
 │       │   ├── theme/                       # Color tokens, 3-mode ZenithTheme, Typography
 │       │   └── viewmodel/CashFlowViewModel.kt
 │       └── widget/ZenithSummaryWidgetProvider.kt
-├── app/src/test/java/com/zenith/app/        # 162 unit & Robolectric Compose tests
+├── app/src/test/java/com/zenith/app/        # 166 unit & Robolectric Compose tests
 ├── docs/screenshots/                        # Curated app screenshots for README showcase
 ├── supabase/                                # schema.sql & migrations (002_family_mode, 003_delete_and_clear_fix)
 ├── build.gradle.kts / settings.gradle.kts

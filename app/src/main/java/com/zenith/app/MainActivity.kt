@@ -511,6 +511,11 @@ fun CashFlowMainApp(
     var activeFamilySetupTab by remember { mutableStateOf<com.zenith.app.ui.components.FamilySetupTab?>(null) }
     var showFamilyManageSheet by remember { mutableStateOf(false) }
     var showFamilyChatSheet by remember { mutableStateOf(false) }
+    var showFamilyQuickQrScanner by remember { mutableStateOf(false) }
+    var showFamilyInviteQrDialog by remember { mutableStateOf(false) }
+    var quickInviteInfo by remember { mutableStateOf<com.zenith.app.domain.FamilyInvitationInfo?>(null) }
+    var quickInviteLoading by remember { mutableStateOf(false) }
+    var quickInviteError by remember { mutableStateOf<String?>(null) }
     var prefilledInviteCode by remember { mutableStateOf("") }
 
     LaunchedEffect(pendingInviteInput) {
@@ -543,17 +548,20 @@ fun CashFlowMainApp(
     val totalExpense = remember(uiState.allTransactions) { viewModel.getTotalExpense(uiState.allTransactions) }
     val netBalance = remember(uiState.allTransactions) { viewModel.getNetBalance(uiState.allTransactions) }
 
-    Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(brush = ZenithTheme.backgroundBrush),
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(brush = ZenithTheme.backgroundBrush),
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            ZenithFloatingNavigationBar(
-                selectedTab = uiState.selectedTab,
-                onTabSelected = { index -> viewModel.setTab(index) }
-            )
+            if (!showFamilyChatSheet) {
+                ZenithFloatingNavigationBar(
+                    selectedTab = uiState.selectedTab,
+                    onTabSelected = { index -> viewModel.setTab(index) }
+                )
+            }
         },
         snackbarHost = {
             SnackbarHost(
@@ -640,6 +648,21 @@ fun CashFlowMainApp(
                         },
                         onOpenFamilySetup = { activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.CREATE },
                         onOpenFamilyChat = { showFamilyChatSheet = true },
+                        onOpenScanFamilyQr = { showFamilyQuickQrScanner = true },
+                        onOpenFamilyInviteQr = {
+                            val famId = financialContext.activeFamily?.id
+                            quickInviteInfo = famId?.let { viewModel.getCachedFamilyInvitation(it) }
+                            quickInviteError = null
+                            showFamilyInviteQrDialog = true
+                            if (quickInviteInfo == null) {
+                                quickInviteLoading = true
+                                viewModel.getOrCreateQuickFamilyInvitation { res ->
+                                    quickInviteLoading = false
+                                    res.onSuccess { quickInviteInfo = it }
+                                        .onFailure { quickInviteError = it.message ?: "Unable to generate Family QR." }
+                                }
+                            }
+                        },
                         canModifyTransaction = viewModel::canEditOrDeleteFamilyTransaction,
                         onUpdateFamilyTransaction = { tx, paidById -> viewModel.updateTransaction(tx, paidById) },
                         bottomContentPadding = bottomBarClearance
@@ -728,13 +751,29 @@ fun CashFlowMainApp(
                             prefilledInviteCode = ""
                             activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.JOIN
                         },
+                        onOpenScanFamilyQr = { showFamilyQuickQrScanner = true },
                         onOpenFamilyManage = { showFamilyManageSheet = true },
                         onOpenFamilyChat = { showFamilyChatSheet = true },
+                        onOpenFamilyInviteQr = {
+                            val famId = financialContext.activeFamily?.id
+                            quickInviteInfo = famId?.let { viewModel.getCachedFamilyInvitation(it) }
+                            quickInviteError = null
+                            showFamilyInviteQrDialog = true
+                            if (quickInviteInfo == null) {
+                                quickInviteLoading = true
+                                viewModel.getOrCreateQuickFamilyInvitation { res ->
+                                    quickInviteLoading = false
+                                    res.onSuccess { quickInviteInfo = it }
+                                        .onFailure { quickInviteError = it.message ?: "Unable to generate Family QR." }
+                                }
+                            }
+                        },
                         bottomContentPadding = bottomBarClearance
                     )
                 }
                 }
             }
+        }
         }
 
         activeFamilySetupTab?.let { startTab ->
@@ -825,12 +864,44 @@ fun CashFlowMainApp(
                 },
                 onUpdateMemberProfile = { targetUid, displayName, memLabel, memEmoji, onComplete ->
                     viewModel.updateFamilyMemberProfile(targetUid, displayName, memLabel, memEmoji, onComplete)
-                }
+                },
+                initialInvite = financialContext.activeFamily?.id?.let { viewModel.getCachedFamilyInvitation(it) }
+            )
+        }
+
+        if (showFamilyQuickQrScanner) {
+            com.zenith.app.ui.components.FamilyInviteQrScannerDialog(
+                onInviteScanned = { invite ->
+                    showFamilyQuickQrScanner = false
+                    prefilledInviteCode = invite
+                    activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.JOIN
+                },
+                onDismiss = { showFamilyQuickQrScanner = false }
+            )
+        }
+
+        if (showFamilyInviteQrDialog && financialContext.activeFamily != null) {
+            com.zenith.app.ui.components.FamilyInviteQrShareDialog(
+                family = financialContext.activeFamily!!,
+                invite = quickInviteInfo,
+                isLoading = quickInviteLoading,
+                errorMessage = quickInviteError,
+                onGenerateNew = {
+                    quickInviteLoading = true
+                    quickInviteError = null
+                    viewModel.generateFamilyInvitation("", com.zenith.app.domain.FamilyRole.MEMBER) { res ->
+                        quickInviteLoading = false
+                        res.onSuccess { quickInviteInfo = it }
+                            .onFailure { quickInviteError = it.message ?: "Unable to generate Family QR." }
+                    }
+                },
+                onDismiss = { showFamilyInviteQrDialog = false }
             )
         }
 
         if (showFamilyChatSheet && financialContext.activeFamily != null) {
-            com.zenith.app.ui.components.FamilyChatSheet(
+            androidx.activity.compose.BackHandler { showFamilyChatSheet = false }
+            com.zenith.app.ui.components.FamilyChatContent(
                 family = financialContext.activeFamily!!,
                 members = financialContext.activeMembers,
                 messages = uiState.familyMessages,
@@ -937,11 +1008,6 @@ fun CashFlowMainApp(
             UpiQrScanModal(
                 currencySymbol = uiState.currencySymbol,
                 onDismiss = { viewModel.closeUpiScanDialog() },
-                onFamilyInviteQrScanned = { invite ->
-                    viewModel.closeUpiScanDialog()
-                    prefilledInviteCode = invite
-                    activeFamilySetupTab = com.zenith.app.ui.components.FamilySetupTab.JOIN
-                },
                 onSaveTransaction = { title, amount, category, upiId, upiTransactionId ->
                     viewModel.addUpiTransaction(
                         title = title,

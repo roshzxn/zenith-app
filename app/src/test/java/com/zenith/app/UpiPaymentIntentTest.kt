@@ -145,6 +145,22 @@ class UpiPaymentIntentTest {
     }
 
     @Test
+    fun testBuildUpiScannerIntentGenericChooserEvenWithMultipleAppsInstalledAndDefaultPref() {
+        val context = RuntimeEnvironment.getApplication()
+        registerFakeUpiHandler(UpiService.GOOGLE_PAY_PACKAGE, "Google Pay")
+        registerFakeUpiHandler(UpiService.PHONEPE_PACKAGE, "PhonePe")
+
+        val chooserIntent = UpiService.buildUpiScannerIntent(context, null)
+        assertEquals(Intent.ACTION_CHOOSER, chooserIntent.action)
+
+        UpiService.setDefaultUpiAppPackage(context, UpiService.GOOGLE_PAY_PACKAGE)
+        assertEquals(UpiService.GOOGLE_PAY_PACKAGE, UpiService.getDefaultUpiAppPackage(context))
+
+        UpiService.setDefaultUpiAppPackage(context, null)
+        assertNull(UpiService.getDefaultUpiAppPackage(context))
+    }
+
+    @Test
     fun testAppInstallationHelpersDoNotCrash() {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         assertFalse(UpiService.isGooglePayInstalled(context))

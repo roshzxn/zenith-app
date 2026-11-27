@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -27,8 +28,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,16 +41,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.zenith.app.data.upi.UpiPaymentBus
-import com.zenith.app.data.upi.UpiPaymentInfo
 import com.zenith.app.data.upi.UpiService
-import com.zenith.app.ui.theme.LightCyanAccent
-import com.zenith.app.ui.theme.LightIncomeGreen
 import com.zenith.app.ui.theme.ZenithTheme
 import java.util.Locale
 
 enum class UpiModalStep {
-    CAMERA_SCAN,
-    QR_PAY_CONFIRM,
     REDIRECT_CHOOSER,
     ENTER_EXPENSE
 }
@@ -56,7 +54,6 @@ enum class UpiModalStep {
 fun UpiQrScanModal(
     currencySymbol: String = "₹",
     onDismiss: () -> Unit,
-    onFamilyInviteQrScanned: ((String) -> Unit)? = null,
     onSaveTransaction: (
         title: String,
         amount: Double,
@@ -67,22 +64,20 @@ fun UpiQrScanModal(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val focusManager = LocalFocusManager.current
 
-    var modalStep by remember { mutableStateOf(UpiModalStep.CAMERA_SCAN) }
+    var modalStep by remember { mutableStateOf(UpiModalStep.REDIRECT_CHOOSER) }
     var awaitingUpiReturn by remember { mutableStateOf(false) }
+    var autoRedirectAttempted by remember { mutableStateOf(false) }
     val modalOpenedAt = remember { System.currentTimeMillis() }
 
-    // Parsed QR & pay states
-    var scannedInfo by remember { mutableStateOf<UpiPaymentInfo?>(null) }
-    var qrErrorMsg by remember { mutableStateOf<String?>(null) }
-    var payRequest by remember { mutableStateOf<UpiPayRequest?>(null) }
-
-    // Transaction form states (used for both QR_PAY_CONFIRM and ENTER_EXPENSE)
+    // Transaction form states (ENTER_EXPENSE after returning from UPI app or Direct Entry)
     var enteredTitle by remember { mutableStateOf("UPI Payment") }
     var enteredAmount by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("Food & Dining") }
     var detectedUtr by remember { mutableStateOf<String?>(null) }
     var amountError by remember { mutableStateOf<String?>(null) }
+    var defaultUpiPackage by remember { mutableStateOf(UpiService.getDefaultUpiAppPackage(context)) }
 
     val categories = remember {
         listOf(
@@ -103,7 +98,7 @@ fun UpiQrScanModal(
     val isPaytmInstalled = remember { UpiService.isPaytmInstalled(context) }
     val isBhimInstalled = remember { UpiService.isBhimInstalled(context) }
 
-    // Listen for app resume after opening an external UPI scanner -> transition to manual entry
+    // Listen for app resume after opening an external UPI app -> transition to expense logging
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && awaitingUpiReturn) {
@@ -122,7 +117,7 @@ fun UpiQrScanModal(
         UpiPaymentBus.detectedPayments.collect { payment ->
             if (payment.isDebit &&
                 payment.timestamp >= modalOpenedAt - 5_000L &&
-                (awaitingUpiReturn || modalStep == UpiModalStep.REDIRECT_CHOOSER)
+                (awaitingUpiReturn || modalStep == UpiModalStep.REDIRECT_CHOOSER || modalStep == UpiModalStep.ENTER_EXPENSE)
             ) {
                 if (enteredAmount.isBlank()) {
                     enteredAmount = String.format(Locale.US, "%.2f", payment.amount)
@@ -151,24 +146,17 @@ fun UpiQrScanModal(
         }
     }
 
-    fun handleQrDecoded(rawPayload: String) {
-        val familyInvite = parseFamilyInviteQrPayload(rawPayload)
-        if (familyInvite != null && onFamilyInviteQrScanned != null) {
-            qrErrorMsg = null
-            onFamilyInviteQrScanned(familyInvite)
-            return
-        }
-        val parsed = UpiService.parseQrPayload(rawPayload)
-        if (parsed != null && UpiService.isValidVpa(parsed.payeeAddress)) {
-            qrErrorMsg = null
-            scannedInfo = parsed
-            enteredTitle = parsed.payeeName.ifBlank { parsed.payeeAddress }
-            enteredAmount = if (parsed.isDynamic) parsed.amount else ""
-            amountError = null
-            selectedCategory = suggestCategoryForMerchant("${parsed.payeeName} ${parsed.note}") ?: "Food & Dining"
-            modalStep = UpiModalStep.QR_PAY_CONFIRM
-        } else {
-            qrErrorMsg = "Scanned QR does not contain a valid UPI ID. Aim at a UPI QR or pick an app below."
+    // Immediately redirect to default UPI app (or Android's default-apps chooser if UPI apps are installed)
+    LaunchedEffect(Unit) {
+        if (!autoRedirectAttempted) {
+            autoRedirectAttempted = true
+            val autoTarget = defaultUpiPackage
+                ?: installedUpiApps.singleOrNull()?.packageName
+            if (!autoTarget.isNullOrBlank()) {
+                launchUpiApp(autoTarget)
+            } else if (installedUpiApps.isNotEmpty()) {
+                launchUpiApp(null)
+            }
         }
     }
 
@@ -205,24 +193,21 @@ fun UpiQrScanModal(
                                 .clip(CircleShape)
                                 .background(
                                     when (modalStep) {
-                                        UpiModalStep.CAMERA_SCAN, UpiModalStep.REDIRECT_CHOOSER ->
-                                            ZenithTheme.accentCyan.copy(alpha = 0.18f)
-                                        UpiModalStep.QR_PAY_CONFIRM, UpiModalStep.ENTER_EXPENSE ->
-                                            ZenithTheme.accentGreen.copy(alpha = 0.18f)
+                                        UpiModalStep.REDIRECT_CHOOSER -> ZenithTheme.accentCyan.copy(alpha = 0.18f)
+                                        UpiModalStep.ENTER_EXPENSE -> ZenithTheme.accentGreen.copy(alpha = 0.18f)
                                     }
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = when (modalStep) {
-                                    UpiModalStep.CAMERA_SCAN -> Icons.Default.QrCodeScanner
-                                    UpiModalStep.REDIRECT_CHOOSER -> Icons.Default.Payment
-                                    UpiModalStep.QR_PAY_CONFIRM, UpiModalStep.ENTER_EXPENSE -> Icons.Default.CheckCircle
+                                    UpiModalStep.REDIRECT_CHOOSER -> Icons.AutoMirrored.Filled.OpenInNew
+                                    UpiModalStep.ENTER_EXPENSE -> Icons.Default.CheckCircle
                                 },
                                 contentDescription = null,
                                 tint = when (modalStep) {
-                                    UpiModalStep.CAMERA_SCAN, UpiModalStep.REDIRECT_CHOOSER -> ZenithTheme.accentCyan
-                                    UpiModalStep.QR_PAY_CONFIRM, UpiModalStep.ENTER_EXPENSE -> ZenithTheme.accentGreen
+                                    UpiModalStep.REDIRECT_CHOOSER -> ZenithTheme.accentCyan
+                                    UpiModalStep.ENTER_EXPENSE -> ZenithTheme.accentGreen
                                 },
                                 modifier = Modifier.size(22.dp)
                             )
@@ -231,9 +216,7 @@ fun UpiQrScanModal(
                         Column {
                             Text(
                                 text = when (modalStep) {
-                                    UpiModalStep.CAMERA_SCAN -> "Scan UPI QR"
-                                    UpiModalStep.QR_PAY_CONFIRM -> "Confirm UPI Payee"
-                                    UpiModalStep.REDIRECT_CHOOSER -> "Choose UPI App"
+                                    UpiModalStep.REDIRECT_CHOOSER -> "Open UPI App Scanner"
                                     UpiModalStep.ENTER_EXPENSE -> "Enter Expense Details"
                                 },
                                 fontSize = 17.sp,
@@ -242,9 +225,7 @@ fun UpiQrScanModal(
                             )
                             Text(
                                 text = when (modalStep) {
-                                    UpiModalStep.CAMERA_SCAN -> "Scan any BharatQR / UPI code instantly"
-                                    UpiModalStep.QR_PAY_CONFIRM -> "Review amount and pay via your UPI app"
-                                    UpiModalStep.REDIRECT_CHOOSER -> "Redirect to your UPI app, then log here"
+                                    UpiModalStep.REDIRECT_CHOOSER -> "Redirects to your UPI app directly, then log here"
                                     UpiModalStep.ENTER_EXPENSE -> "Record your completed UPI transaction"
                                 },
                                 fontSize = 11.5.sp,
@@ -274,238 +255,10 @@ fun UpiQrScanModal(
                     label = "upi_step_transition"
                 ) { currentStep ->
                     when (currentStep) {
-                        UpiModalStep.CAMERA_SCAN -> {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(210.dp)
-                                        .clip(RoundedCornerShape(18.dp))
-                                ) {
-                                    QrCameraView(
-                                        modifier = Modifier.fillMaxSize(),
-                                        onQrScanned = { rawPayload -> handleQrDecoded(rawPayload) }
-                                    )
-                                }
-
-                                if (!qrErrorMsg.isNullOrBlank()) {
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = ZenithTheme.accentAmber.copy(alpha = 0.14f),
-                                        border = BorderStroke(1.dp, ZenithTheme.accentAmber.copy(alpha = 0.4f)),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            text = qrErrorMsg!!,
-                                            fontSize = 11.5.sp,
-                                            color = ZenithTheme.accentAmber,
-                                            modifier = Modifier.padding(10.dp)
-                                        )
-                                    }
-                                }
-
-                                Button(
-                                    onClick = { modalStep = UpiModalStep.REDIRECT_CHOOSER },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(48.dp)
-                                        .testTag("btn_launch_upi_chooser"),
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = ZenithTheme.solidIndigo,
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Icon(Icons.Default.Payment, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Choose UPI App to Pay & Note", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                }
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = { modalStep = UpiModalStep.REDIRECT_CHOOSER },
-                                        modifier = Modifier.weight(1f).height(42.dp),
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = BorderStroke(1.dp, ZenithTheme.borderColor)
-                                    ) {
-                                        Text("Pick App", fontSize = 12.sp, color = ZenithTheme.textPrimary)
-                                    }
-
-                                    OutlinedButton(
-                                        onClick = { modalStep = UpiModalStep.ENTER_EXPENSE },
-                                        modifier = Modifier
-                                            .weight(1.3f)
-                                            .height(42.dp)
-                                            .testTag("btn_enter_upi_directly"),
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = BorderStroke(1.dp, ZenithTheme.borderColor)
-                                    ) {
-                                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp), tint = ZenithTheme.accentCyan)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Enter Directly", fontSize = 12.sp, color = ZenithTheme.textPrimary)
-                                    }
-                                }
-                            }
-                        }
-
-                        UpiModalStep.QR_PAY_CONFIRM -> {
-                            val info = scannedInfo
-                            Column {
-                                Surface(
-                                    color = ZenithTheme.accentCyan.copy(alpha = 0.12f),
-                                    shape = RoundedCornerShape(14.dp),
-                                    border = BorderStroke(1.dp, ZenithTheme.accentCyan.copy(alpha = 0.35f)),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(modifier = Modifier.padding(14.dp)) {
-                                        Text(
-                                            text = "QR PAYEE DETECTED",
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            letterSpacing = 1.sp,
-                                            color = ZenithTheme.accentCyan
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = enteredTitle.ifBlank { info?.payeeAddress ?: "UPI Merchant" },
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = ZenithTheme.textPrimary
-                                        )
-                                        if (info != null && info.payeeAddress.isNotBlank()) {
-                                            Text(
-                                                text = info.payeeAddress,
-                                                fontSize = 12.sp,
-                                                color = ZenithTheme.textSecondary
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(14.dp))
-
-                                OutlinedTextField(
-                                    value = enteredAmount,
-                                    onValueChange = {
-                                        enteredAmount = it
-                                        amountError = null
-                                    },
-                                    label = { Text("Amount ($currencySymbol)") },
-                                    placeholder = { Text("0.00") },
-                                    singleLine = true,
-                                    isError = amountError != null,
-                                    supportingText = amountError?.let { { Text(it, color = ZenithTheme.accentRed) } },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("upi_expense_amount_input"),
-                                    shape = RoundedCornerShape(14.dp)
-                                )
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                OutlinedTextField(
-                                    value = enteredTitle,
-                                    onValueChange = { enteredTitle = it },
-                                    label = { Text("Title / Payee") },
-                                    singleLine = true,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("upi_expense_title_input"),
-                                    shape = RoundedCornerShape(14.dp)
-                                )
-
-                                Spacer(modifier = Modifier.height(12.dp))
-
-                                UpiCategoryChipsRow(
-                                    categories = categories,
-                                    selectedCategory = selectedCategory,
-                                    onSelect = { selectedCategory = it }
-                                )
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                Button(
-                                    onClick = {
-                                        val amt = enteredAmount.toDoubleOrNull()
-                                        if (amt == null || amt <= 0.0) {
-                                            amountError = "Please enter a valid amount"
-                                            return@Button
-                                        }
-                                        val finalTitle = enteredTitle.trim().ifBlank { info?.payeeAddress ?: "UPI Payment" }
-                                        payRequest = UpiPayRequest(
-                                            amount = amt,
-                                            purpose = finalTitle,
-                                            vpa = info?.payeeAddress.orEmpty(),
-                                            payeeName = info?.payeeName,
-                                            rawQrUri = info?.rawUri,
-                                            merchantCode = info?.merchantCode,
-                                            originalTxnRef = info?.txnRef?.takeIf { it.isNotBlank() },
-                                            flowType = if (info?.isVerifiedMerchantFormat == true) {
-                                                com.zenith.app.data.upi.PaymentFlowType.MERCHANT_QR_INTENT
-                                            } else {
-                                                com.zenith.app.data.upi.PaymentFlowType.P2P_INTENT
-                                            }
-                                        )
-                                    },
-                                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = ZenithTheme.solidIndigo,
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Icon(Icons.Default.Payment, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Pay via UPI App", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    TextButton(
-                                        onClick = { modalStep = UpiModalStep.CAMERA_SCAN },
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("Rescan QR", fontSize = 12.sp, color = ZenithTheme.textSecondary)
-                                    }
-
-                                    TextButton(
-                                        onClick = {
-                                            val amt = enteredAmount.toDoubleOrNull()
-                                            if (amt == null || amt <= 0.0) {
-                                                amountError = "Please enter a valid amount"
-                                                return@TextButton
-                                            }
-                                            val finalTitle = enteredTitle.trim().ifBlank { "UPI Payment" }
-                                            onSaveTransaction(
-                                                finalTitle,
-                                                amt,
-                                                selectedCategory,
-                                                info?.payeeAddress?.ifBlank { null },
-                                                null
-                                            )
-                                            Toast.makeText(context, "Saved $currencySymbol$amt for $finalTitle", Toast.LENGTH_SHORT).show()
-                                            onDismiss()
-                                        },
-                                        modifier = Modifier.weight(1f).testTag("btn_save_upi_expense")
-                                    ) {
-                                        Text("Log Directly", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.accentGreen)
-                                    }
-                                }
-                            }
-                        }
-
                         UpiModalStep.REDIRECT_CHOOSER -> {
                             Column {
                                 Button(
-                                    onClick = { launchUpiApp(null) },
+                                    onClick = { launchUpiApp(defaultUpiPackage) },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(52.dp)
@@ -517,13 +270,18 @@ fun UpiQrScanModal(
                                     )
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Payment,
+                                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                                         contentDescription = null,
                                         modifier = Modifier.size(20.dp)
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Open Default UPI App",
+                                        text = if (defaultUpiPackage != null) {
+                                            val defLabel = installedUpiApps.firstOrNull { it.packageName == defaultUpiPackage }?.label ?: "Default UPI App"
+                                            "Open $defLabel"
+                                        } else {
+                                            "Open Default UPI App"
+                                        },
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 14.sp
                                     )
@@ -532,10 +290,10 @@ fun UpiQrScanModal(
                                 Spacer(modifier = Modifier.height(16.dp))
 
                                 Text(
-                                    text = "OR CHOOSE INSTALLED APP",
-                                    fontSize = 11.sp,
+                                    text = "INSTALLED UPI APPS (TAP TO OPEN OR SET DEFAULT)",
+                                    fontSize = 10.5.sp,
                                     fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp,
+                                    letterSpacing = 0.8.sp,
                                     color = ZenithTheme.textSecondary
                                 )
 
@@ -545,24 +303,45 @@ fun UpiQrScanModal(
                                     UpiAppRedirectTile(
                                         appName = "Google Pay",
                                         badge = if (isGPayInstalled) "Installed" else "Available",
+                                        isDefault = defaultUpiPackage == UpiService.GOOGLE_PAY_PACKAGE,
+                                        canSetDefault = isGPayInstalled,
                                         icon = Icons.Default.Payment,
                                         accentColor = Color(0xFF4285F4),
+                                        onToggleDefault = {
+                                            val next = if (defaultUpiPackage == UpiService.GOOGLE_PAY_PACKAGE) null else UpiService.GOOGLE_PAY_PACKAGE
+                                            UpiService.setDefaultUpiAppPackage(context, next)
+                                            defaultUpiPackage = next
+                                        },
                                         onClick = { launchUpiApp(UpiService.GOOGLE_PAY_PACKAGE) }
                                     )
 
                                     UpiAppRedirectTile(
                                         appName = "PhonePe",
                                         badge = if (isPhonePeInstalled) "Installed" else "Available",
+                                        isDefault = defaultUpiPackage == UpiService.PHONEPE_PACKAGE,
+                                        canSetDefault = isPhonePeInstalled,
                                         icon = Icons.Default.AccountBalanceWallet,
                                         accentColor = Color(0xFF5F259F),
+                                        onToggleDefault = {
+                                            val next = if (defaultUpiPackage == UpiService.PHONEPE_PACKAGE) null else UpiService.PHONEPE_PACKAGE
+                                            UpiService.setDefaultUpiAppPackage(context, next)
+                                            defaultUpiPackage = next
+                                        },
                                         onClick = { launchUpiApp(UpiService.PHONEPE_PACKAGE) }
                                     )
 
                                     UpiAppRedirectTile(
                                         appName = "Paytm",
                                         badge = if (isPaytmInstalled) "Installed" else "Available",
+                                        isDefault = defaultUpiPackage == UpiService.PAYTM_PACKAGE,
+                                        canSetDefault = isPaytmInstalled,
                                         icon = Icons.Default.AccountBalanceWallet,
                                         accentColor = Color(0xFF00BAF2),
+                                        onToggleDefault = {
+                                            val next = if (defaultUpiPackage == UpiService.PAYTM_PACKAGE) null else UpiService.PAYTM_PACKAGE
+                                            UpiService.setDefaultUpiAppPackage(context, next)
+                                            defaultUpiPackage = next
+                                        },
                                         onClick = { launchUpiApp(UpiService.PAYTM_PACKAGE) }
                                     )
 
@@ -570,8 +349,15 @@ fun UpiQrScanModal(
                                         UpiAppRedirectTile(
                                             appName = "BHIM UPI",
                                             badge = "Installed",
+                                            isDefault = defaultUpiPackage == UpiService.BHIM_PACKAGE,
+                                            canSetDefault = true,
                                             icon = Icons.Default.AccountBalance,
                                             accentColor = Color(0xFF00897B),
+                                            onToggleDefault = {
+                                                val next = if (defaultUpiPackage == UpiService.BHIM_PACKAGE) null else UpiService.BHIM_PACKAGE
+                                                UpiService.setDefaultUpiAppPackage(context, next)
+                                                defaultUpiPackage = next
+                                            },
                                             onClick = { launchUpiApp(UpiService.BHIM_PACKAGE) }
                                         )
                                     }
@@ -587,8 +373,15 @@ fun UpiQrScanModal(
                                         UpiAppRedirectTile(
                                             appName = customApp.label,
                                             badge = "Installed",
+                                            isDefault = defaultUpiPackage == customApp.packageName,
+                                            canSetDefault = true,
                                             icon = Icons.AutoMirrored.Filled.OpenInNew,
                                             accentColor = ZenithTheme.accentIndigo,
+                                            onToggleDefault = {
+                                                val next = if (defaultUpiPackage == customApp.packageName) null else customApp.packageName
+                                                UpiService.setDefaultUpiAppPackage(context, next)
+                                                defaultUpiPackage = next
+                                            },
                                             onClick = { launchUpiApp(customApp.packageName) }
                                         )
                                     }
@@ -596,26 +389,18 @@ fun UpiQrScanModal(
 
                                 Spacer(modifier = Modifier.height(14.dp))
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                OutlinedButton(
+                                    onClick = { modalStep = UpiModalStep.ENTER_EXPENSE },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(44.dp)
+                                        .testTag("btn_enter_upi_directly"),
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = BorderStroke(1.dp, ZenithTheme.borderColor)
                                 ) {
-                                    OutlinedButton(
-                                        onClick = { modalStep = UpiModalStep.CAMERA_SCAN },
-                                        modifier = Modifier.weight(1f).height(44.dp),
-                                        shape = RoundedCornerShape(14.dp),
-                                        border = BorderStroke(1.dp, ZenithTheme.borderColor)
-                                    ) {
-                                        Text("Back to Camera", fontSize = 12.sp, color = ZenithTheme.textSecondary)
-                                    }
-                                    OutlinedButton(
-                                        onClick = { modalStep = UpiModalStep.ENTER_EXPENSE },
-                                        modifier = Modifier.weight(1.2f).height(44.dp),
-                                        shape = RoundedCornerShape(14.dp),
-                                        border = BorderStroke(1.dp, ZenithTheme.borderColor)
-                                    ) {
-                                        Text("Enter Directly", fontSize = 12.sp, color = ZenithTheme.textPrimary)
-                                    }
+                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp), tint = ZenithTheme.accentCyan)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Enter Expense Directly", fontSize = 12.sp, color = ZenithTheme.textPrimary)
                                 }
                             }
                         }
@@ -640,7 +425,7 @@ fun UpiQrScanModal(
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Text(
-                                            text = "Payment complete? Log the expense below to keep your personal ledger accurate.",
+                                            text = "Payment complete? Log the expense below to keep your ledger accurate.",
                                             fontSize = 11.5.sp,
                                             color = ZenithTheme.textPrimary
                                         )
@@ -660,7 +445,7 @@ fun UpiQrScanModal(
                                     singleLine = true,
                                     isError = amountError != null,
                                     supportingText = amountError?.let { { Text(it, color = ZenithTheme.accentRed) } },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .testTag("upi_expense_amount_input"),
@@ -675,6 +460,8 @@ fun UpiQrScanModal(
                                     label = { Text("Title / Payee") },
                                     placeholder = { Text("e.g. Lunch, Grocery, Chai") },
                                     singleLine = true,
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .testTag("upi_expense_title_input"),
@@ -693,6 +480,7 @@ fun UpiQrScanModal(
 
                                 Button(
                                     onClick = {
+                                        focusManager.clearFocus()
                                         val amt = enteredAmount.toDoubleOrNull()
                                         if (amt == null || amt <= 0.0) {
                                             amountError = "Please enter a valid amount"
@@ -703,7 +491,7 @@ fun UpiQrScanModal(
                                             finalTitle,
                                             amt,
                                             selectedCategory,
-                                            scannedInfo?.payeeAddress?.ifBlank { null },
+                                            null,
                                             detectedUtr
                                         )
                                         Toast.makeText(context, "Saved $currencySymbol$amt for $finalTitle", Toast.LENGTH_SHORT).show()
@@ -730,28 +518,6 @@ fun UpiQrScanModal(
             }
         }
     }
-
-    UpiPaymentFlow(
-        payRequest = payRequest,
-        currencySymbol = currencySymbol,
-        onSaveConfirmed = { upiTransactionId ->
-            val req = payRequest
-            if (req != null) {
-                onSaveTransaction(
-                    req.purpose.trim().ifBlank { "UPI Payment" },
-                    req.amount,
-                    selectedCategory,
-                    req.vpa.trim().ifBlank { null },
-                    upiTransactionId
-                )
-                payRequest = null
-                onDismiss()
-            }
-        },
-        onDismiss = {
-            payRequest = null
-        }
-    )
 }
 
 @Composable
@@ -795,12 +561,18 @@ fun UpiAppRedirectTile(
     badge: String,
     icon: ImageVector,
     accentColor: Color,
+    isDefault: Boolean = false,
+    canSetDefault: Boolean = false,
+    onToggleDefault: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = ZenithTheme.cardVariantSurface.copy(alpha = 0.72f),
-        border = BorderStroke(1.dp, ZenithTheme.borderColor),
+        border = BorderStroke(
+            1.dp,
+            if (isDefault) ZenithTheme.accentGreen.copy(alpha = 0.65f) else ZenithTheme.borderColor
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
@@ -811,7 +583,7 @@ fun UpiAppRedirectTile(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                 Box(
                     modifier = Modifier
                         .size(34.dp)
@@ -835,7 +607,7 @@ fun UpiAppRedirectTile(
                         color = ZenithTheme.textPrimary
                     )
                     Text(
-                        text = "Tap to open and pay",
+                        text = "Tap to open scanner & pay",
                         fontSize = 10.5.sp,
                         color = ZenithTheme.textSecondary
                     )
@@ -843,19 +615,42 @@ fun UpiAppRedirectTile(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = accentColor.copy(alpha = 0.15f)
-                ) {
-                    Text(
-                        text = badge,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = accentColor,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
+                if (canSetDefault && onToggleDefault != null) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isDefault) ZenithTheme.accentGreen.copy(alpha = 0.18f) else ZenithTheme.cardSurface,
+                        border = BorderStroke(
+                            1.dp,
+                            if (isDefault) ZenithTheme.accentGreen.copy(alpha = 0.5f) else ZenithTheme.borderColor
+                        ),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onToggleDefault() }
+                    ) {
+                        Text(
+                            text = if (isDefault) "✓ Default" else "Set Default",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isDefault) ZenithTheme.accentGreen else ZenithTheme.textSecondary,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = accentColor.copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            text = badge,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = accentColor,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
                 }
-                Spacer(modifier = Modifier.width(6.dp))
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                     contentDescription = null,

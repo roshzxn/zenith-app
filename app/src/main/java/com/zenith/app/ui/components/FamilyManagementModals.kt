@@ -105,6 +105,7 @@ fun FamilySetupModal(
     var createIdempotencyKey by remember { mutableStateOf(UUID.randomUUID().toString()) }
 
     var inviteInput by remember(initialInviteInput) { mutableStateOf(initialInviteInput) }
+    var isQrScannedReady by remember(initialInviteInput) { mutableStateOf(initialInviteInput.isNotBlank()) }
     var joinDisplayName by remember(currentUserName) { mutableStateOf(currentUserName) }
     var joinMemberLabel by remember { mutableStateOf("") }
     var selectedMemberEmoji by remember { mutableStateOf(FamilyAvatarCatalog.MEMBER_EMOJIS.first()) }
@@ -435,10 +436,43 @@ fun FamilySetupModal(
                         }
                     }
                 } else {
+                    val submitJoin = {
+                        if (!isSubmitting) {
+                            val cleanInvite = inviteInput.trim()
+                            if (cleanInvite.isBlank()) {
+                                errorMessage = "Enter a valid invitation code or invite link."
+                            } else if (!isAuthenticated) {
+                                errorMessage = "Please sign in before joining a family."
+                            } else {
+                                isSubmitting = true
+                                errorMessage = null
+                                if (onJoinFamilyWithLabel != null) {
+                                    onJoinFamilyWithLabel.invoke(
+                                        cleanInvite,
+                                        joinDisplayName.trim(),
+                                        selectedMemberEmoji.trim().ifBlank { "🙂" },
+                                        joinMemberLabel.trim()
+                                    ) { res ->
+                                        isSubmitting = false
+                                        res.onSuccess { onDismiss() }
+                                            .onFailure { err -> errorMessage = err.message ?: "Unable to accept invitation." }
+                                    }
+                                } else {
+                                    onJoinFamily(cleanInvite, joinDisplayName.trim(), selectedMemberEmoji.trim().ifBlank { "🙂" }) { res ->
+                                        isSubmitting = false
+                                        res.onSuccess { onDismiss() }
+                                            .onFailure { err -> errorMessage = err.message ?: "Unable to accept invitation." }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = inviteInput,
                         onValueChange = {
                             inviteInput = it
+                            if (it.isBlank()) isQrScannedReady = false
                             errorMessage = null
                         },
                         label = { Text("Invitation Code or Link") },
@@ -475,11 +509,50 @@ fun FamilySetupModal(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Scan Invite QR Code",
+                            text = "Scan Invite QR (Camera or Gallery)",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = ZenithTheme.accentCyan
                         )
+                    }
+
+                    if (isQrScannedReady && inviteInput.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = ZenithTheme.accentGreen.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.4f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("family_qr_scanned_ready_banner")
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "✓ Invite QR Scanned — Ready to Join",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ZenithTheme.accentGreen
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = submitJoin,
+                                    enabled = !isSubmitting,
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(42.dp)
+                                        .testTag("btn_quick_join_scanned_qr")
+                                ) {
+                                    Text(
+                                        text = if (isSubmitting) "Joining..." else "Join Family Now",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
@@ -518,38 +591,7 @@ fun FamilySetupModal(
                     }
 
                     Button(
-                        onClick = {
-                            if (isSubmitting) return@Button
-                            val cleanInvite = inviteInput.trim()
-                            if (cleanInvite.isBlank()) {
-                                errorMessage = "Enter a valid invitation code or invite link."
-                                return@Button
-                            }
-                            if (!isAuthenticated) {
-                                errorMessage = "Please sign in before joining a family."
-                                return@Button
-                            }
-                            isSubmitting = true
-                            errorMessage = null
-                            if (onJoinFamilyWithLabel != null) {
-                                onJoinFamilyWithLabel.invoke(
-                                    cleanInvite,
-                                    joinDisplayName.trim(),
-                                    selectedMemberEmoji.trim().ifBlank { "🙂" },
-                                    joinMemberLabel.trim()
-                                ) { res ->
-                                    isSubmitting = false
-                                    res.onSuccess { onDismiss() }
-                                        .onFailure { err -> errorMessage = err.message ?: "Unable to accept invitation." }
-                                }
-                            } else {
-                                onJoinFamily(cleanInvite, joinDisplayName.trim(), selectedMemberEmoji.trim().ifBlank { "🙂" }) { res ->
-                                    isSubmitting = false
-                                    res.onSuccess { onDismiss() }
-                                        .onFailure { err -> errorMessage = err.message ?: "Unable to accept invitation." }
-                                }
-                            }
-                        },
+                        onClick = submitJoin,
                         enabled = !isSubmitting,
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidIndigo),
@@ -575,6 +617,7 @@ fun FamilySetupModal(
         FamilyInviteQrScannerDialog(
             onInviteScanned = { scanned ->
                 inviteInput = scanned
+                isQrScannedReady = true
                 errorMessage = null
                 showQrScanner = false
             },
@@ -716,7 +759,8 @@ fun FamilyManageSheet(
     onDisableFamilyFeature: () -> Unit,
     onDismiss: () -> Unit,
     onUpdateFamilyProfile: ((name: String, avatarEmoji: String, familyLabel: String, onComplete: (Result<Boolean>) -> Unit) -> Unit)? = null,
-    onUpdateMemberProfile: ((targetUserId: String, displayName: String, memberLabel: String, avatarEmoji: String?, onComplete: (Result<Boolean>) -> Unit) -> Unit)? = null
+    onUpdateMemberProfile: ((targetUserId: String, displayName: String, memberLabel: String, avatarEmoji: String?, onComplete: (Result<Boolean>) -> Unit) -> Unit)? = null,
+    initialInvite: FamilyInvitationInfo? = null
 ) {
     val context = LocalContext.current
     val family = financialContext.activeFamily ?: return
@@ -727,7 +771,7 @@ fun FamilyManageSheet(
 
     var invitedEmail by remember { mutableStateOf("") }
     var inviteRole by remember { mutableStateOf(FamilyRole.MEMBER) }
-    var latestInvite by remember { mutableStateOf<FamilyInvitationInfo?>(null) }
+    var latestInvite by remember(family.id, initialInvite) { mutableStateOf(initialInvite) }
     var isBusy by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
     var showOwnerLeaveGuard by remember { mutableStateOf(false) }
@@ -886,70 +930,15 @@ fun FamilyManageSheet(
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Generate Invitation Code", fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (latestInvite == null) "Generate Invitation Code & QR" else "Refresh Invite Code & QR",
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
 
                             latestInvite?.let { inv ->
-                                val joinUrl = "zenith://join?token=${inv.inviteToken}"
-                                val qrBitmap = remember(joinUrl) { generateFamilyInviteQrBitmap(joinUrl, 440) }
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Text("Code: ${inv.inviteCode}", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = ZenithTheme.accentGreen)
-                                if (qrBitmap != null) {
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Surface(
-                                            shape = RoundedCornerShape(16.dp),
-                                            color = Color.White,
-                                            border = BorderStroke(1.dp, ZenithTheme.borderColor),
-                                            modifier = Modifier.testTag("family_invite_qr_image")
-                                        ) {
-                                            Image(
-                                                bitmap = qrBitmap.asImageBitmap(),
-                                                contentDescription = "Family Invite QR Code",
-                                                modifier = Modifier
-                                                    .size(164.dp)
-                                                    .padding(10.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Text(
-                                            text = "Scan with Zenith QR to join ${family.name}",
-                                            fontSize = 11.sp,
-                                            color = ZenithTheme.textSecondary
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            cm.setPrimaryClip(ClipData.newPlainText("Zenith Invite", inv.inviteCode))
-                                            Toast.makeText(context, "Copied ${inv.inviteCode}", Toast.LENGTH_SHORT).show()
-                                        },
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("Copy Code", fontSize = 11.sp)
-                                    }
-                                    OutlinedButton(
-                                        onClick = {
-                                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                                type = "text/plain"
-                                                putExtra(
-                                                    Intent.EXTRA_TEXT,
-                                                    "Join ${family.name} ${family.avatarEmoji} on Zenith! Code: ${inv.inviteCode} or Link: $joinUrl"
-                                                )
-                                            }
-                                            context.startActivity(Intent.createChooser(shareIntent, "Share Family Invite"))
-                                        },
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("Share Link", fontSize = 11.sp)
-                                    }
-                                }
+                                Spacer(modifier = Modifier.height(12.dp))
+                                FamilyInviteQrCard(family = family, invite = inv)
                             }
                         }
                     }

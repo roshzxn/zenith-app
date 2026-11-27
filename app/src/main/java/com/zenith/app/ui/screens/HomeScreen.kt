@@ -74,6 +74,8 @@ fun HomeScreen(
     onSelectFinancialMode: (com.zenith.app.domain.FinancialMode) -> Unit = {},
     onOpenFamilySetup: () -> Unit = {},
     onOpenFamilyChat: () -> Unit = {},
+    onOpenScanFamilyQr: () -> Unit = {},
+    onOpenFamilyInviteQr: () -> Unit = {},
     canModifyTransaction: (TransactionEntity) -> Boolean = { true },
     onUpdateFamilyTransaction: ((TransactionEntity, String?) -> Unit)? = null,
     bottomContentPadding: Dp = 116.dp
@@ -414,6 +416,30 @@ fun HomeScreen(
                     }
 
                     if (isFamilyMode) {
+                        if (financialContext.membershipRole?.canAdmin() == true) {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = ZenithTheme.cardSurface,
+                                border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.45f)),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .clickable { onOpenFamilyInviteQr() }
+                                    .testTag("btn_home_family_invite_qr")
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.QrCode2,
+                                        contentDescription = "Family Invite QR",
+                                        tint = ZenithTheme.accentGreen,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+
                         Surface(
                             shape = RoundedCornerShape(20.dp),
                             color = ZenithTheme.cardSurface,
@@ -442,6 +468,28 @@ fun HomeScreen(
                                         color = ZenithTheme.accentCyan
                                     )
                                 }
+                            }
+                        }
+                    } else if (financialContext.familyMembershipStatus != com.zenith.app.domain.FamilyMembershipStatus.ACTIVE) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = ZenithTheme.cardSurface,
+                            border = BorderStroke(1.dp, ZenithTheme.accentCyan.copy(alpha = 0.45f)),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { onOpenScanFamilyQr() }
+                                .testTag("btn_home_scan_family_qr")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.QrCodeScanner,
+                                    contentDescription = "Scan Family QR",
+                                    tint = ZenithTheme.accentCyan,
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                     }
@@ -782,7 +830,7 @@ fun HomeScreen(
             ) {
                 QuickActionCard(
                     icon = Icons.Default.QrCodeScanner,
-                    label = "Scan QR",
+                    label = "Scan & Pay",
                     accentColor = ZenithTheme.accentCyan,
                     containerColor = ZenithTheme.accentCyan.copy(alpha = 0.14f),
                     testTag = "btn_scan_upi_qr",

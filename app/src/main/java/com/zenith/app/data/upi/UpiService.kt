@@ -1282,15 +1282,44 @@ object UpiService {
             }
         }
 
-        // Generic fallback: launch the first installed UPI app or fallback safely
+        // Target package explicitly provided? Try package scanner deep link / launch intent.
+        // Generic (null) -> show Android UPI app chooser across installed UPI apps.
+        if (targetPackage == null) {
+            val genericIntent = Intent(Intent.ACTION_VIEW, Uri.parse("upi://pay"))
+            return Intent.createChooser(genericIntent, "Open UPI App")
+        }
+
+        // Direct fallback if launcher exists for requested package
         val installed = installedUpiApps(context)
-        val firstApp = installed.firstOrNull()
+        val firstApp = installed.firstOrNull { it.packageName == targetPackage }
         if (firstApp != null) {
             pm.getLaunchIntentForPackage(firstApp.packageName)?.let { return it }
         }
 
         val genericIntent = Intent(Intent.ACTION_VIEW, Uri.parse("upi://pay"))
         return Intent.createChooser(genericIntent, "Open UPI App")
+    }
+
+    private const val UPI_PREFS_NAME = "zenith_upi_prefs"
+    private const val KEY_DEFAULT_UPI_PACKAGE = "default_upi_package"
+
+    fun getDefaultUpiAppPackage(context: Context): String? {
+        val pkg = context.getSharedPreferences(UPI_PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_DEFAULT_UPI_PACKAGE, null)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        return if (isPackageInstalled(context, pkg)) pkg else null
+    }
+
+    fun setDefaultUpiAppPackage(context: Context, packageName: String?) {
+        context.getSharedPreferences(UPI_PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .apply {
+                if (packageName.isNullOrBlank()) remove(KEY_DEFAULT_UPI_PACKAGE)
+                else putString(KEY_DEFAULT_UPI_PACKAGE, packageName.trim())
+            }
+            .apply()
     }
 
     // ------------------------------------------------------------

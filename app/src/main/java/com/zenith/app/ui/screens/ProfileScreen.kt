@@ -58,8 +58,10 @@ fun ProfileScreen(
     onNavigateToActivity: () -> Unit = {},
     onOpenCreateFamily: () -> Unit = {},
     onOpenJoinFamily: () -> Unit = {},
+    onOpenScanFamilyQr: () -> Unit = {},
     onOpenFamilyManage: () -> Unit = {},
     onOpenFamilyChat: () -> Unit = {},
+    onOpenFamilyInviteQr: () -> Unit = {},
     bottomContentPadding: Dp = 144.dp
 ) {
     val context = LocalContext.current
@@ -372,7 +374,22 @@ fun ProfileScreen(
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.weight(1f)
                                 ) {
-                                    Text("Manage Family", fontSize = 12.sp)
+                                    Text("Manage Family", fontSize = 12.sp, maxLines = 1)
+                                }
+                                if (financialContext.membershipRole?.canAdmin() == true) {
+                                    OutlinedButton(
+                                        onClick = onOpenFamilyInviteQr,
+                                        shape = RoundedCornerShape(12.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp),
+                                        modifier = Modifier.testTag("btn_profile_family_invite_qr")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.QrCode2,
+                                            contentDescription = "Invite QR",
+                                            tint = ZenithTheme.accentCyan,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                                 Button(
                                     onClick = onOpenFamilyChat,
@@ -380,7 +397,7 @@ fun ProfileScreen(
                                     colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidIndigo),
                                     modifier = Modifier.weight(1f)
                                 ) {
-                                    Text("Family Chat", fontSize = 12.sp, color = Color.White)
+                                    Text("Family Chat", fontSize = 12.sp, color = Color.White, maxLines = 1)
                                 }
                             }
                         }
@@ -394,7 +411,7 @@ fun ProfileScreen(
                                 )
                             }
                             Text(
-                                text = "You don't belong to a family yet. Create a new family or join with an invitation.",
+                                text = "You don't belong to a family yet. Create a new family, scan a QR code, or enter an invite code.",
                                 fontSize = 12.sp,
                                 color = ZenithTheme.textSecondary
                             )
@@ -411,7 +428,7 @@ fun ProfileScreen(
                                         .weight(1f)
                                         .testTag("btn_profile_create_family")
                                 ) {
-                                    Text("Create Family", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                    Text("Create", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                                 }
                                 OutlinedButton(
                                     onClick = onOpenJoinFamily,
@@ -420,7 +437,20 @@ fun ProfileScreen(
                                         .weight(1f)
                                         .testTag("btn_profile_join_family")
                                 ) {
-                                    Text("Join Family", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("Join Code", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                                OutlinedButton(
+                                    onClick = onOpenScanFamilyQr,
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp),
+                                    modifier = Modifier.testTag("btn_profile_scan_family_qr")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.QrCodeScanner,
+                                        contentDescription = "Scan Family QR",
+                                        tint = ZenithTheme.accentCyan,
+                                        modifier = Modifier.size(16.dp)
+                                    )
                                 }
                             }
                         }

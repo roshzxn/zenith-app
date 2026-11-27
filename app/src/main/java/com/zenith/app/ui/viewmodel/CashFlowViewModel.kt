@@ -847,6 +847,41 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private fun cacheFamilyInvitation(invite: FamilyInvitationInfo) {
+        prefs.edit()
+            .putString("cached_inv_id_${invite.familyId}", invite.id)
+            .putString("cached_inv_code_${invite.familyId}", invite.inviteCode)
+            .putString("cached_inv_token_${invite.familyId}", invite.inviteToken)
+            .putString("cached_inv_role_${invite.familyId}", invite.role.name)
+            .apply()
+    }
+
+    fun getCachedFamilyInvitation(familyId: String): FamilyInvitationInfo? {
+        val code = prefs.getString("cached_inv_code_$familyId", null)?.trim().orEmpty()
+        val token = prefs.getString("cached_inv_token_$familyId", null)?.trim().orEmpty()
+        if (code.isBlank() || token.isBlank()) return null
+        val id = prefs.getString("cached_inv_id_$familyId", null) ?: code
+        val role = prefs.getString("cached_inv_role_$familyId", null)
+            ?.let { FamilyRole.fromString(it) } ?: FamilyRole.MEMBER
+        return FamilyInvitationInfo(
+            id = id,
+            familyId = familyId,
+            inviteCode = code,
+            inviteToken = token,
+            role = role
+        )
+    }
+
+    fun getOrCreateQuickFamilyInvitation(onComplete: (Result<FamilyInvitationInfo>) -> Unit) {
+        val famId = _financialContext.value.activeFamilyId
+            ?: return onComplete(Result.failure(IllegalStateException("No active family selected.")))
+        getCachedFamilyInvitation(famId)?.let { cached ->
+            onComplete(Result.success(cached))
+            return
+        }
+        generateFamilyInvitation("", FamilyRole.MEMBER, onComplete)
+    }
+
     fun generateFamilyInvitation(
         invitedEmail: String,
         role: FamilyRole,
@@ -856,6 +891,7 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             val famId = _financialContext.value.activeFamilyId
                 ?: return@launch onComplete(Result.failure(IllegalStateException("No active family selected.")))
             val res = FamilySupabaseClient.createFamilyInvitation(famId, invitedEmail, role)
+            res.onSuccess { cacheFamilyInvitation(it) }
             onComplete(res)
         }
     }

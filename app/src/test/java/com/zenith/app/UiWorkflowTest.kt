@@ -173,6 +173,7 @@ class UiWorkflowTest {
         }
 
         composeTestRule.onNodeWithTag("upi_qr_scan_modal").assertExists()
+        composeTestRule.onNodeWithTag("btn_launch_upi_chooser").assertExists()
         composeTestRule.onNodeWithTag("btn_enter_upi_directly").performScrollTo().performClick()
         composeTestRule.mainClock.advanceTimeBy(500)
         composeTestRule.waitForIdle()
