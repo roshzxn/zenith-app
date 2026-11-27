@@ -61,7 +61,9 @@ data class FamilyInvitationInfo(
     val invitedEmail: String = "",
     val role: FamilyRole = FamilyRole.MEMBER,
     val status: String = "PENDING",
-    val expiresAt: String? = null
+    val expiresAt: String? = null,
+    val maxUses: Int = 5,
+    val usesCount: Int = 0
 )
 
 /**

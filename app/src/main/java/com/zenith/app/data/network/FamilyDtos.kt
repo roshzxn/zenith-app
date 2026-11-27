@@ -62,6 +62,7 @@ data class FamilyBudgetDto(
     @SerialName("monthly_limit") val monthlyLimit: Double = 0.0,
     @SerialName("month_year") val monthYear: String = "2026-07",
     @SerialName("period_type") val periodType: String = "MONTHLY",
+    @SerialName("custom_period_name") val customPeriodName: String = "",
     @SerialName("updated_by") val updatedBy: String? = null,
     @SerialName("is_deleted") val isDeleted: Boolean = false,
     @SerialName("created_at") val createdAt: String? = null,

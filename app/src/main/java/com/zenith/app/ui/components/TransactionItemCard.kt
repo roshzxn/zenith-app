@@ -26,6 +26,7 @@ import com.zenith.app.data.models.FinanceScope
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.data.repository.FamilyTxAttribution
+import com.zenith.app.data.util.AmountFormatter
 import com.zenith.app.data.util.CategoryIconHelper
 import com.zenith.app.ui.theme.*
 import java.text.SimpleDateFormat
@@ -49,15 +50,16 @@ fun TransactionItemCard(
 
     val typeColor = if (isExpense) ZenithTheme.accentRed else ZenithTheme.accentGreen
     val containerAlpha = if (ZenithTheme.isDark) 0.16f else 0.11f
+    val isCompact = ZenithTheme.cardDensity == ZenithCardDensity.COMPACT
 
     Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(if (isCompact) 16.dp else 20.dp),
         color = ZenithTheme.cardGlassBackground,
         border = androidx.compose.foundation.BorderStroke(1.dp, ZenithTheme.borderColor),
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .clip(RoundedCornerShape(20.dp))
+            .padding(vertical = if (isCompact) 3.dp else 4.dp)
+            .clip(RoundedCornerShape(if (isCompact) 16.dp else 20.dp))
             .combinedClickable(
                 onClick = { onClick?.invoke(transaction) },
                 onLongClick = { onLongClick?.invoke(transaction) }
@@ -67,7 +69,7 @@ fun TransactionItemCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = if (isCompact) 12.dp else 14.dp, vertical = if (isCompact) 9.dp else 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Category Icon Badge
@@ -211,7 +213,8 @@ fun TransactionItemCard(
                     text = if (isMasked) {
                         "${if (isExpense) "-" else "+"}$currencySymbol••••"
                     } else {
-                        "${if (isExpense) "-" else "+"}$currencySymbol${String.format(Locale.US, "%,.2f", transaction.amount)}"
+                        val fmtAmt = AmountFormatter.formatNumber(transaction.amount, 2, ZenithTheme.numberFormat)
+                        "${if (isExpense) "-" else "+"}$currencySymbol$fmtAmt"
                     },
                     fontSize = 15.sp,
                     fontWeight = FontWeight.ExtraBold,

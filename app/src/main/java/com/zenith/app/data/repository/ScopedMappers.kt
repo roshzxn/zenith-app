@@ -98,7 +98,7 @@ object ScopedMappers {
             monthlyLimit = entity.monthlyLimit,
             monthYear = entity.monthYear,
             periodType = entity.periodType,
-            customPeriodName = "",
+            customPeriodName = entity.customPeriodName,
             financeScope = FinanceScope.FAMILY,
             familyId = entity.familyId,
             serverId = entity.id,

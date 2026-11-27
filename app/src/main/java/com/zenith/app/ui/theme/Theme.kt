@@ -8,6 +8,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import com.zenith.app.data.util.NumberFormatStyle
 
 enum class ZenithThemeMode {
     LIGHT,
@@ -15,7 +16,94 @@ enum class ZenithThemeMode {
     OLED_BLACK
 }
 
+enum class ZenithAccentPreset(
+    val displayName: String,
+    val darkAccent: Color,
+    val lightAccent: Color,
+    val solidFill: Color,
+    val swatchColor: Color
+) {
+    INDIGO(
+        displayName = "Indigo",
+        darkAccent = PastelIndigo,
+        lightAccent = LightIndigoPrimary,
+        solidFill = Color(0xFF4F46E5),
+        swatchColor = Color(0xFF6366F1)
+    ),
+    EMERALD(
+        displayName = "Emerald",
+        darkAccent = PastelGreen,
+        lightAccent = LightIncomeGreen,
+        solidFill = Color(0xFF047857),
+        swatchColor = Color(0xFF10B981)
+    ),
+    ROSHZEN(
+        displayName = "RoshZen",
+        darkAccent = Color(0xFFC084FC),
+        lightAccent = Color(0xFF7C3AED),
+        solidFill = Color(0xFF6D28D9),
+        swatchColor = Color(0xFF9333EA)
+    ),
+    CYAN(
+        displayName = "Cyan",
+        darkAccent = PastelCyan,
+        lightAccent = LightCyanAccent,
+        solidFill = Color(0xFF0E7490),
+        swatchColor = Color(0xFF06B6D4)
+    ),
+    AMBER(
+        displayName = "Gold",
+        darkAccent = PastelAmber,
+        lightAccent = LightGoalAmber,
+        solidFill = Color(0xFFB45309),
+        swatchColor = Color(0xFFF59E0B)
+    );
+
+    companion object {
+        fun fromName(raw: String?): ZenithAccentPreset {
+            return entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: INDIGO
+        }
+    }
+}
+
+enum class ZenithMotionSpec(val label: String) {
+    FLUID("Fluid"),
+    CRISP("Crisp"),
+    REDUCED("Minimal");
+
+    fun durationMs(baseMs: Int): Int {
+        return when (this) {
+            FLUID -> baseMs
+            CRISP -> (baseMs * 0.65f).toInt().coerceAtLeast(60)
+            REDUCED -> 1
+        }
+    }
+
+    val isReduced: Boolean get() = this == REDUCED
+
+    companion object {
+        fun fromName(raw: String?): ZenithMotionSpec {
+            return entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: FLUID
+        }
+    }
+}
+
+enum class ZenithCardDensity(val label: String) {
+    COMFORTABLE("Cozy"),
+    COMPACT("Compact");
+
+    companion object {
+        fun fromName(raw: String?): ZenithCardDensity {
+            return entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: COMFORTABLE
+        }
+    }
+}
+
 val LocalThemeMode = compositionLocalOf { ZenithThemeMode.OBSIDIAN_NAVY }
+val LocalAccentPreset = compositionLocalOf { ZenithAccentPreset.INDIGO }
+val LocalMotionSpec = compositionLocalOf { ZenithMotionSpec.FLUID }
+val LocalCardDensity = compositionLocalOf { ZenithCardDensity.COMFORTABLE }
+val LocalNumberFormatStyle = compositionLocalOf { NumberFormatStyle.INTERNATIONAL }
 
 private val LightColorScheme =
     lightColorScheme(
@@ -75,6 +163,22 @@ object ZenithTheme {
     val mode: ZenithThemeMode
         @Composable
         get() = LocalThemeMode.current
+
+    val accentPreset: ZenithAccentPreset
+        @Composable
+        get() = LocalAccentPreset.current
+
+    val motionSpec: ZenithMotionSpec
+        @Composable
+        get() = LocalMotionSpec.current
+
+    val cardDensity: ZenithCardDensity
+        @Composable
+        get() = LocalCardDensity.current
+
+    val numberFormat: NumberFormatStyle
+        @Composable
+        get() = LocalNumberFormatStyle.current
 
     val isDark: Boolean
         @Composable
@@ -162,7 +266,11 @@ object ZenithTheme {
 
     val accentIndigo: Color
         @Composable
-        get() = if (LocalThemeMode.current == ZenithThemeMode.LIGHT) LightIndigoPrimary else PastelIndigo
+        get() = if (LocalThemeMode.current == ZenithThemeMode.LIGHT) {
+            LocalAccentPreset.current.lightAccent
+        } else {
+            LocalAccentPreset.current.darkAccent
+        }
 
     val accentCyan: Color
         @Composable
@@ -199,7 +307,7 @@ object ZenithTheme {
 
     val solidIndigo: Color
         @Composable
-        get() = LightIndigoPrimary // Indigo 600 (6.29:1 with white text)
+        get() = LocalAccentPreset.current.solidFill
 
     val solidRed: Color
         @Composable
@@ -254,6 +362,10 @@ object ZenithTheme {
 fun CashFlowTheme(
     isDarkMode: Boolean = true,
     isOledBlack: Boolean = false,
+    accentPreset: ZenithAccentPreset = ZenithAccentPreset.INDIGO,
+    motionSpec: ZenithMotionSpec = ZenithMotionSpec.FLUID,
+    cardDensity: ZenithCardDensity = ZenithCardDensity.COMFORTABLE,
+    numberFormatStyle: NumberFormatStyle = NumberFormatStyle.INTERNATIONAL,
     content: @Composable () -> Unit,
 ) {
     val themeMode = when {
@@ -261,13 +373,22 @@ fun CashFlowTheme(
         isOledBlack -> ZenithThemeMode.OLED_BLACK
         else -> ZenithThemeMode.OBSIDIAN_NAVY
     }
-    val colorScheme = when (themeMode) {
+    val baseScheme = when (themeMode) {
         ZenithThemeMode.LIGHT -> LightColorScheme
         ZenithThemeMode.OLED_BLACK -> OledColorScheme
         ZenithThemeMode.OBSIDIAN_NAVY -> DarkColorScheme
     }
+    val colorScheme = baseScheme.copy(
+        primary = if (themeMode == ZenithThemeMode.LIGHT) accentPreset.lightAccent else accentPreset.swatchColor
+    )
 
-    CompositionLocalProvider(LocalThemeMode provides themeMode) {
+    CompositionLocalProvider(
+        LocalThemeMode provides themeMode,
+        LocalAccentPreset provides accentPreset,
+        LocalMotionSpec provides motionSpec,
+        LocalCardDensity provides cardDensity,
+        LocalNumberFormatStyle provides numberFormatStyle
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = Typography,

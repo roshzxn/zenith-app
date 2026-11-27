@@ -13,6 +13,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        try {
+            db.execSQL("ALTER TABLE `family_budgets` ADD COLUMN `customPeriodName` TEXT NOT NULL DEFAULT ''")
+        } catch (_: Exception) {
+        }
+        db.execSQL("DROP TABLE IF EXISTS `ledger_transactions`")
+        db.execSQL("DROP TABLE IF EXISTS `family_vaults`")
+        db.execSQL("DROP TABLE IF EXISTS `family_vault_members`")
+    }
+}
+
 val MIGRATION_18_19 = object : Migration(18, 19) {
     override fun migrate(db: SupportSQLiteDatabase) {
         val indexStatements = listOf(
@@ -463,8 +475,8 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         FamilyBudgetEntity::class,
         FamilyMessageEntity::class
     ],
-    version = 19,
-    exportSchema = false
+    version = 20,
+    exportSchema = true
 )
 abstract class CashFlowDatabase : RoomDatabase() {
     abstract fun transactionDao(): TransactionDao
@@ -492,7 +504,8 @@ abstract class CashFlowDatabase : RoomDatabase() {
                         MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                         MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
-                        MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19
+                        MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+                        MIGRATION_19_20
                     )
                     .fallbackToDestructiveMigration(false)
                     .addCallback(DatabaseCallback(context.applicationContext))

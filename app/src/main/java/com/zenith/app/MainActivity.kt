@@ -11,6 +11,7 @@ import android.hardware.biometrics.BiometricPrompt
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -53,10 +54,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.data.upi.UpiNotificationListenerService
 import com.zenith.app.ui.components.AddTransactionDialog
 import com.zenith.app.ui.components.ReceiptScanModal
+import com.zenith.app.ui.components.TransactionDetailModal
 import com.zenith.app.ui.components.UPIPaySheet
 import com.zenith.app.ui.components.UpiPaymentDetectedModal
 import com.zenith.app.ui.components.UpiQrScanModal
@@ -89,6 +92,20 @@ class MainActivity : ComponentActivity() {
             val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
             val isOledBlack by viewModel.isOledBlack.collectAsStateWithLifecycle()
             val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
+            val accentPreset by viewModel.accentPreset.collectAsStateWithLifecycle()
+            val motionSpec by viewModel.motionSpec.collectAsStateWithLifecycle()
+            val cardDensity by viewModel.cardDensity.collectAsStateWithLifecycle()
+            val numberFormatStyle by viewModel.numberFormatStyle.collectAsStateWithLifecycle()
+            val recentsPrivacyEnabled by viewModel.recentsPrivacyEnabled.collectAsStateWithLifecycle()
+
+            DisposableEffect(isAppLockEnabled, recentsPrivacyEnabled) {
+                if (isAppLockEnabled || recentsPrivacyEnabled) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+                onDispose {}
+            }
 
             // Dynamically adapt system status/navigation bars across Light, Obsidian, and OLED modes
             DisposableEffect(isDarkMode, isOledBlack) {
@@ -114,7 +131,14 @@ class MainActivity : ComponentActivity() {
                 onDispose {}
             }
 
-            CashFlowTheme(isDarkMode = isDarkMode, isOledBlack = isOledBlack) {
+            CashFlowTheme(
+                isDarkMode = isDarkMode,
+                isOledBlack = isOledBlack,
+                accentPreset = accentPreset,
+                motionSpec = motionSpec,
+                cardDensity = cardDensity,
+                numberFormatStyle = numberFormatStyle
+            ) {
                 val isAuthenticated by viewModel.isAuthenticated.collectAsStateWithLifecycle()
                 val uiState by viewModel.uiState.collectAsStateWithLifecycle()
                 var currentScreen by remember(isAuthenticated) {
@@ -517,6 +541,7 @@ fun CashFlowMainApp(
     var quickInviteLoading by remember { mutableStateOf(false) }
     var quickInviteError by remember { mutableStateOf<String?>(null) }
     var prefilledInviteCode by remember { mutableStateOf("") }
+    var selectedChatSharedTransaction by remember { mutableStateOf<TransactionEntity?>(null) }
 
     LaunchedEffect(pendingInviteInput) {
         val code = pendingInviteInput
@@ -586,9 +611,15 @@ fun CashFlowMainApp(
                 .statusBarsPadding()
         ) {
             val tabStateHolder = rememberSaveableStateHolder()
-            Crossfade(
+            val motionSpec = ZenithTheme.motionSpec
+            AnimatedContent(
                 targetState = uiState.selectedTab,
-                animationSpec = tween(90),
+                transitionSpec = {
+                    val dur = motionSpec.durationMs(210)
+                    val direction = if (targetState >= initialState) 1 else -1
+                    (slideInHorizontally(tween(dur)) { direction * it / 18 } + fadeIn(tween(dur)))
+                        .togetherWith(slideOutHorizontally(tween(dur)) { -direction * it / 24 } + fadeOut(tween((dur * 0.75f).toInt().coerceAtLeast(1))))
+                },
                 label = "tab_transition"
             ) { targetTab ->
                 tabStateHolder.SaveableStateProvider(targetTab) {
@@ -663,6 +694,7 @@ fun CashFlowMainApp(
                                 }
                             }
                         },
+                        onOpenFamilyManage = { showFamilyManageSheet = true },
                         canModifyTransaction = viewModel::canEditOrDeleteFamilyTransaction,
                         onUpdateFamilyTransaction = { tx, paidById -> viewModel.updateTransaction(tx, paidById) },
                         bottomContentPadding = bottomBarClearance
@@ -899,31 +931,73 @@ fun CashFlowMainApp(
             )
         }
 
-        if (showFamilyChatSheet && financialContext.activeFamily != null) {
-            androidx.activity.compose.BackHandler { showFamilyChatSheet = false }
-            com.zenith.app.ui.components.FamilyChatContent(
-                family = financialContext.activeFamily!!,
-                members = financialContext.activeMembers,
-                messages = uiState.familyMessages,
-                familyTransactions = uiState.allTransactions,
-                txAttributionByServerId = uiState.txAttributionByServerId,
-                currentUserId = viewModel.currentUserId,
-                currentUserRole = financialContext.membershipRole,
-                currencySymbol = uiState.currencySymbol,
-                isRealtimeConnected = uiState.isFamilyRealtimeConnected,
-                onSendMessage = { body, replyId, txId ->
-                    viewModel.sendFamilyChatMessage(
-                        body = body,
-                        replyToMessageId = replyId,
-                        relatedTransactionId = txId
-                    )
-                },
-                onDeleteMessage = { msg -> viewModel.deleteFamilyChatMessage(msg) },
-                onOpenManageFamily = {
+        AnimatedVisibility(
+            visible = showFamilyChatSheet && financialContext.activeFamily != null,
+            enter = slideInVertically(tween(ZenithTheme.motionSpec.durationMs(240))) { it / 5 } +
+                fadeIn(tween(ZenithTheme.motionSpec.durationMs(220))),
+            exit = slideOutVertically(tween(ZenithTheme.motionSpec.durationMs(190))) { it / 6 } +
+                fadeOut(tween(ZenithTheme.motionSpec.durationMs(170)))
+        ) {
+            financialContext.activeFamily?.let { activeFamily ->
+                androidx.activity.compose.BackHandler {
+                    selectedChatSharedTransaction = null
                     showFamilyChatSheet = false
-                    showFamilyManageSheet = true
+                }
+                com.zenith.app.ui.components.FamilyChatContent(
+                    family = activeFamily,
+                    members = financialContext.activeMembers,
+                    messages = uiState.familyMessages,
+                    familyTransactions = uiState.allTransactions,
+                    txAttributionByServerId = uiState.txAttributionByServerId,
+                    currentUserId = viewModel.currentUserId,
+                    currentUserRole = financialContext.membershipRole,
+                    currencySymbol = uiState.currencySymbol,
+                    isRealtimeConnected = uiState.isFamilyRealtimeConnected,
+                    onSendMessage = { body, replyId, txId ->
+                        viewModel.sendFamilyChatMessage(
+                            body = body,
+                            replyToMessageId = replyId,
+                            relatedTransactionId = txId
+                        )
+                    },
+                    onDeleteMessage = { msg -> viewModel.deleteFamilyChatMessage(msg) },
+                    onOpenManageFamily = {
+                        showFamilyChatSheet = false
+                        showFamilyManageSheet = true
+                    },
+                    onDismiss = {
+                        selectedChatSharedTransaction = null
+                        showFamilyChatSheet = false
+                    },
+                    onViewSharedTransaction = { sharedTx ->
+                        selectedChatSharedTransaction = sharedTx
+                    }
+                )
+            }
+        }
+
+        selectedChatSharedTransaction?.let { chatTx ->
+            val attr = chatTx.serverId?.let { uiState.txAttributionByServerId[it] }
+            TransactionDetailModal(
+                transaction = chatTx,
+                currencySymbol = uiState.currencySymbol,
+                onDismiss = { selectedChatSharedTransaction = null },
+                onDelete = { tx ->
+                    viewModel.deleteTransactionWithReceipt(tx)
+                    viewModel.commitDeletedTransaction(tx)
+                    selectedChatSharedTransaction = null
                 },
-                onDismiss = { showFamilyChatSheet = false }
+                onUpdate = { updated ->
+                    viewModel.updateTransaction(updated)
+                    selectedChatSharedTransaction = null
+                },
+                familyAttribution = attr,
+                canModify = viewModel.canEditOrDeleteFamilyTransaction(chatTx),
+                familyMembers = if (financialContext.isFamilyModeActive) financialContext.activeMembers else emptyList(),
+                onUpdateWithPaidBy = { updated, paidById ->
+                    viewModel.updateTransaction(updated, paidById)
+                    selectedChatSharedTransaction = null
+                }
             )
         }
 

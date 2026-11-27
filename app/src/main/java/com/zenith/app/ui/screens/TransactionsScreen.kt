@@ -451,7 +451,7 @@ fun TransactionsScreen(
                                     text = if (state.isBalanceHidden) {
                                         "Spent: -${state.currencySymbol}••••"
                                     } else {
-                                        "Spent: -${state.currencySymbol}${String.format(Locale.US, "%,.0f", dayExpense)}"
+                                        "Spent: -${state.currencySymbol}${com.zenith.app.data.util.AmountFormatter.formatNumber(dayExpense, 0, ZenithTheme.numberFormat)}"
                                     },
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
@@ -511,7 +511,7 @@ fun TransactionsScreen(
             title = { Text("Delete Transaction", color = ZenithTheme.textPrimary) },
             text = {
                 Text(
-                    "Are you sure you want to delete '${tx.title}' (${state.currencySymbol}${String.format(Locale.US, "%.2f", tx.amount)})?",
+                    "Are you sure you want to delete '${tx.title}' (${state.currencySymbol}${com.zenith.app.data.util.AmountFormatter.formatNumber(tx.amount, 2, ZenithTheme.numberFormat)})?",
                     color = ZenithTheme.textSecondary
                 )
             },

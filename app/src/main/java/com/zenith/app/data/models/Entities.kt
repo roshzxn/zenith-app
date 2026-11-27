@@ -324,6 +324,7 @@ data class FamilyBudgetEntity(
     val monthlyLimit: Double,
     val monthYear: String = "2026-07",
     val periodType: String = "MONTHLY",
+    val customPeriodName: String = "",
     val updatedBy: String? = null,
     val syncStatus: String = "PENDING_CREATE",
     val isDeleted: Boolean = false,

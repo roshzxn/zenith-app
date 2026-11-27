@@ -1,8 +1,13 @@
 package com.zenith.app.ui.components
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -10,9 +15,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -23,6 +32,35 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zenith.app.ui.theme.*
+
+/**
+ * Adds tactile spring press-scale feedback while respecting the user's [ZenithMotionSpec].
+ */
+fun Modifier.pressScaleClickable(
+    enabled: Boolean = true,
+    pressedScale: Float = 0.97f,
+    onClick: () -> Unit
+): Modifier = composed {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val reducedMotion = ZenithTheme.motionSpec.isReduced
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled && !reducedMotion) pressedScale else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "press_scale"
+    )
+    this
+        .scale(scale)
+        .clickable(
+            enabled = enabled,
+            interactionSource = interactionSource,
+            indication = ripple(bounded = true),
+            onClick = onClick
+        )
+}
 
 @Composable
 fun GlassCard(
@@ -180,6 +218,8 @@ fun ZenithLogo(
     modifier: Modifier = Modifier,
     size: Dp = 32.dp
 ) {
+    val primaryTint = ZenithTheme.accentPreset.swatchColor
+    val secondaryTint = ZenithTheme.accentCyan
     Box(
         modifier = modifier
             .size(size)
@@ -187,8 +227,8 @@ fun ZenithLogo(
             .background(
                 Brush.linearGradient(
                     colors = listOf(
-                        Color(0xFF6366F1), // Electric Indigo
-                        Color(0xFF06B6D4)  // Cyan
+                        primaryTint,
+                        secondaryTint
                     )
                 )
             )

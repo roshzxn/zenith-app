@@ -183,7 +183,8 @@ class FamilyRepository(private val familyDao: FamilyDao) {
         monthlyLimit: Double,
         monthYear: String,
         periodType: String,
-        updatedBy: String
+        updatedBy: String,
+        customPeriodName: String = ""
     ) = withContext(Dispatchers.IO) {
         val existing = familyDao.getFamilyBudgetById(id)
         val status = if (existing == null || existing.syncStatus == "PENDING_CREATE") {
@@ -200,6 +201,7 @@ class FamilyRepository(private val familyDao: FamilyDao) {
                 monthlyLimit = monthlyLimit,
                 monthYear = monthYear,
                 periodType = periodType,
+                customPeriodName = customPeriodName.trim(),
                 updatedBy = updatedBy,
                 syncStatus = status,
                 isDeleted = false,
@@ -384,6 +386,7 @@ class FamilyRepository(private val familyDao: FamilyDao) {
                     monthlyLimit = budget.monthlyLimit,
                     monthYear = budget.monthYear,
                     periodType = budget.periodType,
+                    customPeriodName = budget.customPeriodName,
                     updatedBy = budget.updatedBy,
                     isDeleted = false,
                     updatedAt = epochMillisToIso(budget.updatedAt)
@@ -563,6 +566,7 @@ class FamilyRepository(private val familyDao: FamilyDao) {
                 monthlyLimit = dto.monthlyLimit,
                 monthYear = dto.monthYear.ifBlank { "2026-07" },
                 periodType = dto.periodType.ifBlank { "MONTHLY" },
+                customPeriodName = dto.customPeriodName,
                 updatedBy = dto.updatedBy,
                 syncStatus = "SYNCED",
                 isDeleted = dto.isDeleted,

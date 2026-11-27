@@ -115,6 +115,15 @@ fun FamilyInviteQrCard(
             fontWeight = FontWeight.ExtraBold,
             color = ZenithTheme.accentGreen
         )
+        if (invite.maxUses > 1 && invite.invitedEmail.isBlank()) {
+            val remaining = (invite.maxUses - invite.usesCount).coerceAtLeast(0)
+            Text(
+                text = "$remaining of ${invite.maxUses} joins remaining",
+                fontSize = 11.sp,
+                color = ZenithTheme.textSecondary,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
         if (qrBitmap != null) {
             Spacer(modifier = Modifier.height(10.dp))
             Surface(

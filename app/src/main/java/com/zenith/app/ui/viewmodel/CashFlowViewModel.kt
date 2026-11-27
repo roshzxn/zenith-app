@@ -30,7 +30,9 @@ import com.zenith.app.data.upi.RecurringPatternDetector
 import com.zenith.app.data.upi.RecurringSuggestion
 import com.zenith.app.data.upi.UpiNotificationListenerService
 import com.zenith.app.data.upi.UpiPaymentBus
+import com.zenith.app.data.upi.UpiService
 import com.zenith.app.data.util.CategoryIconHelper
+import com.zenith.app.data.util.NumberFormatStyle
 import com.zenith.app.domain.FamilyInfo
 import com.zenith.app.domain.FamilyInvitationInfo
 import com.zenith.app.domain.FamilyMemberInfo
@@ -38,6 +40,9 @@ import com.zenith.app.domain.FamilyMembershipStatus
 import com.zenith.app.domain.FamilyRole
 import com.zenith.app.domain.FinancialContext
 import com.zenith.app.domain.FinancialMode
+import com.zenith.app.ui.theme.ZenithAccentPreset
+import com.zenith.app.ui.theme.ZenithCardDensity
+import com.zenith.app.ui.theme.ZenithMotionSpec
 import com.zenith.app.widget.ZenithSummaryWidgetProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -133,7 +138,9 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     private val _filterMemberId = MutableStateFlow<String?>(null)
     private val _filterLabel = MutableStateFlow<String?>(null)
     private val _currencySymbol = MutableStateFlow(prefs.getString("currency_symbol", "₹") ?: "₹")
-    private val _selectedTab = MutableStateFlow(0)
+    private val _defaultStartTab = MutableStateFlow(prefs.getInt("default_start_tab", 0).coerceIn(0, 3))
+    val defaultStartTab: StateFlow<Int> = _defaultStartTab.asStateFlow()
+    private val _selectedTab = MutableStateFlow(prefs.getInt("default_start_tab", 0).coerceIn(0, 3))
 
     private val _voiceDialogShowing = MutableStateFlow(false)
     private val _voiceProcessing = MutableStateFlow(false)
@@ -200,7 +207,41 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     private val _isAppLockEnabled = MutableStateFlow(prefs.getBoolean("app_lock_enabled", false))
     val isAppLockEnabled: StateFlow<Boolean> = _isAppLockEnabled.asStateFlow()
 
-    private val _isBalanceHidden = MutableStateFlow(prefs.getBoolean("is_balance_hidden", false))
+    private val _accentPreset = MutableStateFlow(
+        ZenithAccentPreset.fromName(prefs.getString("accent_preset", ZenithAccentPreset.INDIGO.name))
+    )
+    val accentPreset: StateFlow<ZenithAccentPreset> = _accentPreset.asStateFlow()
+
+    private val _motionSpec = MutableStateFlow(
+        ZenithMotionSpec.fromName(prefs.getString("motion_spec", ZenithMotionSpec.FLUID.name))
+    )
+    val motionSpec: StateFlow<ZenithMotionSpec> = _motionSpec.asStateFlow()
+
+    private val _cardDensity = MutableStateFlow(
+        ZenithCardDensity.fromName(prefs.getString("card_density", ZenithCardDensity.COMFORTABLE.name))
+    )
+    val cardDensity: StateFlow<ZenithCardDensity> = _cardDensity.asStateFlow()
+
+    private val _numberFormatStyle = MutableStateFlow(
+        NumberFormatStyle.fromName(prefs.getString("number_format_style", NumberFormatStyle.INTERNATIONAL.name))
+    )
+    val numberFormatStyle: StateFlow<NumberFormatStyle> = _numberFormatStyle.asStateFlow()
+
+    private val _maskBalancesOnLaunch = MutableStateFlow(prefs.getBoolean("mask_balances_on_launch", false))
+    val maskBalancesOnLaunch: StateFlow<Boolean> = _maskBalancesOnLaunch.asStateFlow()
+
+    private val _recentsPrivacyEnabled = MutableStateFlow(prefs.getBoolean("recents_privacy_enabled", false))
+    val recentsPrivacyEnabled: StateFlow<Boolean> = _recentsPrivacyEnabled.asStateFlow()
+
+    private val _budgetAlertThresholdPct = MutableStateFlow(prefs.getInt("budget_alert_threshold_pct", 85).coerceIn(50, 100))
+    val budgetAlertThresholdPct: StateFlow<Int> = _budgetAlertThresholdPct.asStateFlow()
+
+    private val _defaultUpiAppPackage = MutableStateFlow(UpiService.getDefaultUpiAppPackage(application))
+    val defaultUpiAppPackage: StateFlow<String?> = _defaultUpiAppPackage.asStateFlow()
+
+    private val _isBalanceHidden = MutableStateFlow(
+        prefs.getBoolean("is_balance_hidden", false) || prefs.getBoolean("mask_balances_on_launch", false)
+    )
     val isBalanceHidden: StateFlow<Boolean> = _isBalanceHidden.asStateFlow()
 
     fun toggleBalanceHidden() {
@@ -853,6 +894,9 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             .putString("cached_inv_code_${invite.familyId}", invite.inviteCode)
             .putString("cached_inv_token_${invite.familyId}", invite.inviteToken)
             .putString("cached_inv_role_${invite.familyId}", invite.role.name)
+            .putInt("cached_inv_max_uses_${invite.familyId}", invite.maxUses)
+            .putInt("cached_inv_uses_${invite.familyId}", invite.usesCount)
+            .putLong("cached_inv_cached_at_${invite.familyId}", System.currentTimeMillis())
             .apply()
     }
 
@@ -860,6 +904,13 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         val code = prefs.getString("cached_inv_code_$familyId", null)?.trim().orEmpty()
         val token = prefs.getString("cached_inv_token_$familyId", null)?.trim().orEmpty()
         if (code.isBlank() || token.isBlank()) return null
+        val cachedAt = prefs.getLong("cached_inv_cached_at_$familyId", 0L)
+        val isStale = cachedAt > 0L && (System.currentTimeMillis() - cachedAt) > (6L * 24 * 60 * 60 * 1000)
+        val maxUses = prefs.getInt("cached_inv_max_uses_$familyId", 5).coerceAtLeast(1)
+        val usesCount = prefs.getInt("cached_inv_uses_$familyId", 0).coerceAtLeast(0)
+        if (isStale || usesCount >= maxUses) {
+            return null
+        }
         val id = prefs.getString("cached_inv_id_$familyId", null) ?: code
         val role = prefs.getString("cached_inv_role_$familyId", null)
             ?.let { FamilyRole.fromString(it) } ?: FamilyRole.MEMBER
@@ -868,7 +919,9 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             familyId = familyId,
             inviteCode = code,
             inviteToken = token,
-            role = role
+            role = role,
+            maxUses = maxUses,
+            usesCount = usesCount
         )
     }
 
@@ -1031,6 +1084,61 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     fun setAppLockEnabled(enabled: Boolean) {
         _isAppLockEnabled.value = enabled
         prefs.edit().putBoolean("app_lock_enabled", enabled).apply()
+    }
+
+    fun setAccentPreset(preset: ZenithAccentPreset) {
+        _accentPreset.value = preset
+        prefs.edit().putString("accent_preset", preset.name).apply()
+    }
+
+    fun setMotionSpec(spec: ZenithMotionSpec) {
+        _motionSpec.value = spec
+        prefs.edit().putString("motion_spec", spec.name).apply()
+    }
+
+    fun setCardDensity(density: ZenithCardDensity) {
+        _cardDensity.value = density
+        prefs.edit().putString("card_density", density.name).apply()
+    }
+
+    fun setNumberFormatStyle(style: NumberFormatStyle) {
+        _numberFormatStyle.value = style
+        prefs.edit().putString("number_format_style", style.name).apply()
+    }
+
+    fun setDefaultStartTab(tabIndex: Int) {
+        val safe = tabIndex.coerceIn(0, 3)
+        _defaultStartTab.value = safe
+        prefs.edit().putInt("default_start_tab", safe).apply()
+    }
+
+    fun setMaskBalancesOnLaunch(enabled: Boolean) {
+        _maskBalancesOnLaunch.value = enabled
+        prefs.edit().putBoolean("mask_balances_on_launch", enabled).apply()
+        if (enabled && !_isBalanceHidden.value) {
+            _isBalanceHidden.value = true
+            prefs.edit().putBoolean("is_balance_hidden", true).apply()
+        }
+    }
+
+    fun setRecentsPrivacyEnabled(enabled: Boolean) {
+        _recentsPrivacyEnabled.value = enabled
+        prefs.edit().putBoolean("recents_privacy_enabled", enabled).apply()
+    }
+
+    fun setBudgetAlertThresholdPct(thresholdPct: Int) {
+        val safe = thresholdPct.coerceIn(50, 100)
+        _budgetAlertThresholdPct.value = safe
+        prefs.edit().putInt("budget_alert_threshold_pct", safe).apply()
+    }
+
+    fun setDefaultUpiAppPackage(packageName: String?) {
+        UpiService.setDefaultUpiAppPackage(getApplication(), packageName)
+        _defaultUpiAppPackage.value = packageName?.takeIf { it.isNotBlank() }
+    }
+
+    fun refreshDefaultUpiAppPreference() {
+        _defaultUpiAppPackage.value = UpiService.getDefaultUpiAppPackage(getApplication())
     }
 
     fun setUpiAutoDetectionEnabled(enabled: Boolean) {
@@ -1545,39 +1653,65 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             }
             familyRealtimeManager.disconnect()
             authService.signOut()
-            prefs.edit()
-                .putBoolean("is_authenticated", false)
-                .putBoolean("is_guest_mode", false)
-                .remove("user_email")
-                .remove("user_name")
-                .remove("user_supabase_id")
-                .remove("last_authenticated_user_id")
-                .remove("currency_symbol")
-                .apply()
-            _isAuthenticated.value = false
-            _isGuestMode.value = false
-            _activeUserEmail.value = null
-            _activeUserName.value = null
-            _userSupabaseId.value = null
-            _currencySymbol.value = "₹"
-            _selectedTab.value = 0
-            _voiceDialogShowing.value = false
-            _upiDialogShowing.value = false
-            _upiScanDialogShowing.value = false
-            _receiptDialogShowing.value = false
-            _detectedUpiPayment.value = null
-            _parsedVoice.value = null
-            _parsedReceipt.value = null
-            clearScopedTransientState()
-            _syncUiState.value = SyncUiState.Idle
-            _financialContext.value = FinancialContext(
-                mode = FinancialMode.PERSONAL,
-                isFamilyEnabled = false,
-                currentUserId = "local_user_1",
-                familyMembershipStatus = FamilyMembershipStatus.DISABLED
-            )
-            clearLocalUserCache()
+            resetSessionStateAfterSignOut()
         }
+    }
+
+    fun deleteAccount(onResult: (AuthResult) -> Unit) {
+        viewModelScope.launch {
+            familyRealtimeManager.disconnect()
+            val result = authService.deleteAccount()
+            if (result.success) {
+                resetSessionStateAfterSignOut(clearAllCustomPrefs = true)
+            } else {
+                // Reconnect family workspace if deletion was blocked (e.g. multi-member owner guard)
+                refreshFamilyMembership()
+            }
+            onResult(result)
+        }
+    }
+
+    private suspend fun resetSessionStateAfterSignOut(clearAllCustomPrefs: Boolean = false) {
+        val editor = prefs.edit()
+            .putBoolean("is_authenticated", false)
+            .putBoolean("is_guest_mode", false)
+            .remove("user_email")
+            .remove("user_name")
+            .remove("user_supabase_id")
+            .remove("last_authenticated_user_id")
+            .remove("currency_symbol")
+            .remove("dismissed_recurring_keys")
+        prefs.all.keys
+            .filter { it.startsWith("cached_inv_") }
+            .forEach { editor.remove(it) }
+        if (clearAllCustomPrefs) {
+            editor.remove("selected_family_id")
+        }
+        editor.apply()
+        _dismissedRecurringKeys.value = emptySet()
+        _isAuthenticated.value = false
+        _isGuestMode.value = false
+        _activeUserEmail.value = null
+        _activeUserName.value = null
+        _userSupabaseId.value = null
+        _currencySymbol.value = "₹"
+        _selectedTab.value = _defaultStartTab.value.coerceIn(0, 3)
+        _voiceDialogShowing.value = false
+        _upiDialogShowing.value = false
+        _upiScanDialogShowing.value = false
+        _receiptDialogShowing.value = false
+        _detectedUpiPayment.value = null
+        _parsedVoice.value = null
+        _parsedReceipt.value = null
+        clearScopedTransientState()
+        _syncUiState.value = SyncUiState.Idle
+        _financialContext.value = FinancialContext(
+            mode = FinancialMode.PERSONAL,
+            isFamilyEnabled = false,
+            currentUserId = "local_user_1",
+            familyMembershipStatus = FamilyMembershipStatus.DISABLED
+        )
+        clearLocalUserCache()
     }
 
     fun syncNow(onComplete: ((Boolean) -> Unit)? = null) {
@@ -2055,7 +2189,8 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                     monthlyLimit = limit,
                     monthYear = targetMonth,
                     periodType = periodType,
-                    updatedBy = currentUserId
+                    updatedBy = currentUserId,
+                    customPeriodName = customPeriodName
                 )
                 if (categoryName.equals("Overall", ignoreCase = true)) {
                     familyRepository.updateLocalMonthlyBudgetLimit(famId, limit)
@@ -2112,7 +2247,8 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                     monthlyLimit = budget.monthlyLimit,
                     monthYear = budget.monthYear,
                     periodType = budget.periodType,
-                    updatedBy = currentUserId
+                    updatedBy = currentUserId,
+                    customPeriodName = budget.customPeriodName
                 )
                 triggerFamilyBackgroundSync()
                 return@launch

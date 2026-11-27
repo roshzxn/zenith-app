@@ -141,9 +141,10 @@ fun AnalyticsScreen(
         )
     }
 
+    val numberFormat = ZenithTheme.numberFormat
     fun formatMoneyOrMask(amount: Double, prefix: String = ""): String =
         if (state.isBalanceHidden) "$prefix${state.currencySymbol}••••"
-        else "$prefix${state.currencySymbol}${String.format(Locale.US, "%,.0f", amount)}"
+        else "$prefix${state.currencySymbol}${com.zenith.app.data.util.AmountFormatter.formatNumber(amount, 0, numberFormat)}"
 
     LazyColumn(
         modifier = Modifier

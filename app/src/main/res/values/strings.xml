@@ -11,8 +11,8 @@
     <string name="shortcut_add_long">Add Expense or Income</string>
     <string name="shortcut_upi_short">UPI Pay</string>
     <string name="shortcut_upi_long">Pay &amp; Auto-Track UPI</string>
-    <string name="shortcut_qr_short">Scan QR</string>
-    <string name="shortcut_qr_long">Scan &amp; Pay UPI QR</string>
+    <string name="shortcut_qr_short">Scan &amp; Pay</string>
+    <string name="shortcut_qr_long">Pay via UPI App</string>
     <string name="shortcut_voice_short">Voice AI</string>
     <string name="shortcut_voice_long">Log Expense by Voice</string>
 </resources>

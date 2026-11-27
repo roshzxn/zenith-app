@@ -52,8 +52,12 @@ import com.zenith.app.ui.viewmodel.CashFlowUiState
 import java.text.SimpleDateFormat
 import java.util.*
 
-private val BUDGET_MONTH_FMT = ThreadLocal.withInitial { SimpleDateFormat("yyyy-MM", Locale.US) }
-private val BUDGET_YEAR_FMT = ThreadLocal.withInitial { SimpleDateFormat("yyyy", Locale.US) }
+private val BUDGET_MONTH_FMT = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM", Locale.US)
+}
+private val BUDGET_YEAR_FMT = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy", Locale.US)
+}
 
 internal data class BudgetOverviewTotals(
     val totalBudgeted: Double,
@@ -307,9 +311,10 @@ fun BudgetsAndGoalsScreen(
         }
     }
 
+    val numberFormat = ZenithTheme.numberFormat
     fun formatMoneyOrMask(amount: Double, decimals: Int = 2): String =
         if (state.isBalanceHidden) "${state.currencySymbol}••••"
-        else "${state.currencySymbol}${String.format(Locale.US, "%,.${decimals}f", amount)}"
+        else "${state.currencySymbol}${com.zenith.app.data.util.AmountFormatter.formatNumber(amount, decimals, numberFormat)}"
 
     LazyColumn(
         modifier = Modifier

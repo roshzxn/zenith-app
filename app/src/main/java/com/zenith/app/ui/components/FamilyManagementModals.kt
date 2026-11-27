@@ -5,6 +5,17 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -180,12 +191,22 @@ fun FamilySetupModal(
                         FamilySetupTab.JOIN to "Join via Invite"
                     ).forEach { (tab, label) ->
                         val selected = activeTab == tab
+                        val pillBg by animateColorAsState(
+                            targetValue = if (selected) ZenithTheme.solidGreen else Color.Transparent,
+                            animationSpec = tween(ZenithTheme.motionSpec.durationMs(180)),
+                            label = "setup_tab_bg"
+                        )
+                        val pillText by animateColorAsState(
+                            targetValue = if (selected) Color.White else ZenithTheme.textSecondary,
+                            animationSpec = tween(ZenithTheme.motionSpec.durationMs(180)),
+                            label = "setup_tab_txt"
+                        )
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(38.dp)
                                 .clip(RoundedCornerShape(9.dp))
-                                .background(if (selected) ZenithTheme.solidGreen else Color.Transparent)
+                                .background(pillBg)
                                 .clickable(enabled = !isSubmitting) {
                                     activeTab = tab
                                     errorMessage = null
@@ -197,7 +218,7 @@ fun FamilySetupModal(
                                 text = label,
                                 fontSize = 12.sp,
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (selected) Color.White else ZenithTheme.textSecondary
+                                color = pillText
                             )
                         }
                     }
@@ -223,7 +244,22 @@ fun FamilySetupModal(
                     }
                 }
 
-                if (activeTab == FamilySetupTab.CREATE) {
+                val setupMotionSpec = ZenithTheme.motionSpec
+                AnimatedContent(
+                    targetState = activeTab,
+                    transitionSpec = {
+                        val animDur = setupMotionSpec.durationMs(220)
+                        val dir = if (targetState == FamilySetupTab.JOIN) 1 else -1
+                        (slideInHorizontally(tween(animDur)) { dir * it / 5 } + fadeIn(tween(animDur)))
+                            .togetherWith(slideOutHorizontally(tween(animDur)) { -dir * it / 5 } + fadeOut(tween(animDur)))
+                    },
+                    modifier = Modifier.animateContentSize(
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy)
+                    ),
+                    label = "family_setup_tab_content"
+                ) { currentTab ->
+                Column(modifier = Modifier.fillMaxWidth()) {
+                if (currentTab == FamilySetupTab.CREATE) {
                     Text(
                         text = "Family Avatar Emoji",
                         fontSize = 12.sp,
@@ -608,6 +644,8 @@ fun FamilySetupModal(
                             Text("Join Family", color = Color.White, fontWeight = FontWeight.Bold)
                         }
                     }
+                }
+                }
                 }
             }
         }

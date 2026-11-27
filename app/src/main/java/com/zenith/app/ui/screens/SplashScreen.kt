@@ -65,8 +65,8 @@ fun SplashScreen(
             ),
             SplashFeature(
                 icon = Icons.Default.QrCodeScanner,
-                title = "UPI Auto-Track & Budgets",
-                description = "Pay via UPI QR, auto-capture payment notifications securely on-device, and manage budgets and goals.",
+                title = "Auto-Track & Quick Budgets",
+                description = "Auto-capture UPI & bank payment alerts on-device, stay on top of bills, and manage spending limits.",
                 badge = "SMART AUTOMATION",
                 accentColor = Color(0xFF10B981) // Emerald
             ),
@@ -76,6 +76,13 @@ fun SplashScreen(
                 description = "Speak your expenses naturally in English or regional languages. Zenith AI extracts the title, category, and amount.",
                 badge = "MULTILINGUAL AI",
                 accentColor = Color(0xFFF59E0B) // Amber
+            ),
+            SplashFeature(
+                icon = Icons.Default.Group,
+                title = "Shared Family Ledger & QR",
+                description = "Switch between Personal and Family ledgers, share expenses in live chat, and invite members with instant QR codes.",
+                badge = "FAMILY TRACKER",
+                accentColor = Color(0xFF9333EA) // RoshZen Violet
             )
         )
     }

@@ -3,8 +3,10 @@ package com.zenith.app.ui.components
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
@@ -114,22 +116,63 @@ fun ZenithFloatingNavigationBar(
                 ZenithNavTab.entries.forEachIndexed { index, tab ->
                     val isSelected = selectedTab == index
                     val interactionSource = remember(index) { MutableInteractionSource() }
+                    val reducedMotion = ZenithTheme.motionSpec.isReduced
 
                     val animatedScale by animateFloatAsState(
-                        targetValue = if (isSelected) 1.08f else 1.0f,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioMediumBouncy,
-                            stiffness = Spring.StiffnessMediumLow
-                        ),
+                        targetValue = if (isSelected && !reducedMotion) 1.06f else 1.0f,
+                        animationSpec = if (reducedMotion) {
+                            tween(1)
+                        } else {
+                            spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        },
                         label = "tab_scale"
                     )
 
-                    val selectedTextColor = if (isDark) Color(0xFFE0E7FF) else ZenithTheme.accentIndigo
+                    val selectedTextColor = if (isDark) Color(0xFFF1F5F9) else ZenithTheme.accentIndigo
                     val unselectedTextColor = ZenithTheme.textSecondary
 
                     val activeContentColor by animateColorAsState(
                         targetValue = if (isSelected) selectedTextColor else unselectedTextColor,
+                        animationSpec = tween(ZenithTheme.motionSpec.durationMs(180)),
                         label = "tab_content_color"
+                    )
+                    val indicatorWidth by animateDpAsState(
+                        targetValue = if (isSelected) 16.dp else 0.dp,
+                        animationSpec = if (reducedMotion) tween(1) else spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        ),
+                        label = "tab_indicator_width"
+                    )
+                    val activePillTop by animateColorAsState(
+                        targetValue = if (isSelected) {
+                            ZenithTheme.accentPreset.swatchColor.copy(alpha = if (isDark) 0.28f else 0.16f)
+                        } else {
+                            Color.Transparent
+                        },
+                        animationSpec = tween(ZenithTheme.motionSpec.durationMs(200)),
+                        label = "tab_pill_top"
+                    )
+                    val activePillBottom by animateColorAsState(
+                        targetValue = if (isSelected) {
+                            ZenithTheme.accentIndigo.copy(alpha = if (isDark) 0.12f else 0.06f)
+                        } else {
+                            Color.Transparent
+                        },
+                        animationSpec = tween(ZenithTheme.motionSpec.durationMs(200)),
+                        label = "tab_pill_bottom"
+                    )
+                    val activeBorderColor by animateColorAsState(
+                        targetValue = if (isSelected) {
+                            ZenithTheme.accentIndigo.copy(alpha = if (isDark) 0.42f else 0.30f)
+                        } else {
+                            Color.Transparent
+                        },
+                        animationSpec = tween(ZenithTheme.motionSpec.durationMs(200)),
+                        label = "tab_pill_border"
                     )
 
                     Box(
@@ -138,32 +181,13 @@ fun ZenithFloatingNavigationBar(
                             .defaultMinSize(minHeight = 52.dp)
                             .scale(animatedScale)
                             .clip(RoundedCornerShape(22.dp))
-                            .then(
-                                if (isSelected) {
-                                    Modifier
-                                        .background(
-                                            brush = Brush.verticalGradient(
-                                                if (isDark) {
-                                                    listOf(
-                                                        Color(0xFF6366F1).copy(alpha = 0.26f),
-                                                        Color(0xFF4F46E5).copy(alpha = 0.12f)
-                                                    )
-                                                } else {
-                                                    listOf(
-                                                        ZenithTheme.accentIndigo.copy(alpha = 0.14f),
-                                                        ZenithTheme.accentIndigo.copy(alpha = 0.06f)
-                                                    )
-                                                }
-                                            )
-                                        )
-                                        .border(
-                                            1.dp,
-                                            ZenithTheme.accentIndigo.copy(alpha = if (isDark) 0.40f else 0.30f),
-                                            RoundedCornerShape(22.dp)
-                                        )
-                                } else {
-                                    Modifier
-                                }
+                            .background(
+                                brush = Brush.verticalGradient(listOf(activePillTop, activePillBottom))
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = activeBorderColor,
+                                shape = RoundedCornerShape(22.dp)
                             )
                             .clickable(
                                 interactionSource = interactionSource,
@@ -199,14 +223,14 @@ fun ZenithFloatingNavigationBar(
                             // Glowing micro-indicator bar under active tab
                             AnimatedVisibility(
                                 visible = isSelected,
-                                enter = fadeIn(),
-                                exit = fadeOut()
+                                enter = fadeIn(tween(ZenithTheme.motionSpec.durationMs(150))),
+                                exit = fadeOut(tween(ZenithTheme.motionSpec.durationMs(120)))
                             ) {
                                 Column {
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Box(
                                         modifier = Modifier
-                                            .size(width = 12.dp, height = 2.5.dp)
+                                            .size(width = indicatorWidth, height = 2.5.dp)
                                             .clip(RoundedCornerShape(2.dp))
                                             .background(
                                                 brush = Brush.horizontalGradient(

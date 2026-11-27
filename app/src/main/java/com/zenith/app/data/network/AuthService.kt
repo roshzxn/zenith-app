@@ -26,6 +26,10 @@ interface AuthService {
     suspend fun signUp(email: String, password: String, fullName: String): AuthResult
     suspend fun resetPassword(email: String): AuthResult
     suspend fun signOut()
+    suspend fun deleteAccount(): AuthResult {
+        signOut()
+        return AuthResult(success = true, message = "Local account session removed.", isOffline = true)
+    }
 }
 
 /**
@@ -67,5 +71,10 @@ class LocalAuthService : AuthService {
 
     override suspend fun signOut() {
         _currentUser.value = null
+    }
+
+    override suspend fun deleteAccount(): AuthResult {
+        _currentUser.value = null
+        return AuthResult(success = true, message = "Local account cleared.", isOffline = true)
     }
 }

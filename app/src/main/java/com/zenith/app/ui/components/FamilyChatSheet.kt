@@ -8,7 +8,17 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -61,8 +71,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -86,6 +98,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -97,9 +110,11 @@ import com.zenith.app.data.models.FamilyMessageEntity
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.data.repository.FamilyTxAttribution
+import com.zenith.app.data.util.AmountFormatter
 import com.zenith.app.domain.FamilyInfo
 import com.zenith.app.domain.FamilyMemberInfo
 import com.zenith.app.domain.FamilyRole
+import com.zenith.app.ui.theme.ZenithAccentPreset
 import com.zenith.app.ui.theme.ZenithTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -134,62 +149,80 @@ private data class ChatPalette(
 private fun rememberChatPalette(): ChatPalette {
     val isDark = ZenithTheme.isDark
     val isOled = ZenithTheme.isOled
-    return remember(isDark, isOled) {
+    val accent = ZenithTheme.accentPreset
+    return remember(isDark, isOled, accent) {
+        val outgoingDarkBg = when (accent) {
+            ZenithAccentPreset.INDIGO -> Color(0xFF1D2448)
+            ZenithAccentPreset.EMERALD -> Color(0xFF0B352D)
+            ZenithAccentPreset.ROSHZEN -> Color(0xFF281842)
+            ZenithAccentPreset.CYAN -> Color(0xFF0C2E3D)
+            ZenithAccentPreset.AMBER -> Color(0xFF33230C)
+        }
+        val outgoingDarkBorder = accent.swatchColor.copy(alpha = 0.45f)
+        val outgoingLightBg = when (accent) {
+            ZenithAccentPreset.INDIGO -> Color(0xFFE8EDFF)
+            ZenithAccentPreset.EMERALD -> Color(0xFFE4F8F0)
+            ZenithAccentPreset.ROSHZEN -> Color(0xFFF3E8FF)
+            ZenithAccentPreset.CYAN -> Color(0xFFE3F7FB)
+            ZenithAccentPreset.AMBER -> Color(0xFFFEF3DC)
+        }
+        val outgoingLightBorder = accent.lightAccent.copy(alpha = 0.28f)
+
         when {
             isOled -> ChatPalette(
                 canvasBg = Color(0xFF000000),
-                patternTint = Color.White.copy(alpha = 0.045f),
-                headerBg = Color(0xFF0A0E12),
-                headerBorder = Color(0xFF1F2933),
-                datePillBg = Color(0xFF141B22),
-                incomingBubbleBg = Color(0xFF151C22),
-                incomingBubbleBorder = Color(0xFF25303A),
-                outgoingBubbleBg = Color(0xFF054638),
-                outgoingBubbleBorder = Color(0xFF0A6652),
+                patternTint = Color.White.copy(alpha = 0.032f),
+                headerBg = Color(0xFF07090E),
+                headerBorder = Color(0xFF1E2430),
+                datePillBg = Color(0xFF10141D),
+                incomingBubbleBg = Color(0xFF11151E),
+                incomingBubbleBorder = Color(0xFF222938),
+                outgoingBubbleBg = outgoingDarkBg,
+                outgoingBubbleBorder = outgoingDarkBorder,
                 bubbleTextPrimary = Color(0xFFF8FAFC),
                 bubbleTextSecondary = Color(0xFFA7B4C4),
                 timestampMuted = Color(0xFF94A3B8),
-                syncedTickTint = Color(0xFF53BDEB),
+                syncedTickTint = accent.darkAccent,
                 linkColor = Color(0xFF38BDF8),
-                composerDockBg = Color(0xFF05070A),
-                inputPillBg = Color(0xFF131920),
-                inputPillBorder = Color(0xFF283440)
+                composerDockBg = Color(0xFF090C12),
+                inputPillBg = Color(0xFF121722),
+                inputPillBorder = Color(0xFF283142)
             )
             isDark -> ChatPalette(
-                canvasBg = Color(0xFF0B141A),
-                patternTint = Color.White.copy(alpha = 0.045f),
-                headerBg = Color(0xFF152028),
-                headerBorder = Color(0xFF24323D),
-                datePillBg = Color(0xFF1A2630),
-                incomingBubbleBg = Color(0xFF202C33),
-                incomingBubbleBorder = Color(0xFF2C3A43),
-                outgoingBubbleBg = Color(0xFF005C4B),
-                outgoingBubbleBorder = Color(0xFF0A7561),
+                canvasBg = Color(0xFF090E1A),
+                patternTint = Color.White.copy(alpha = 0.035f),
+                headerBg = Color(0xFF101726),
+                headerBorder = Color(0xFF243045),
+                datePillBg = Color(0xFF151E2E),
+                incomingBubbleBg = Color(0xFF172033),
+                incomingBubbleBorder = Color(0xFF29364F),
+                outgoingBubbleBg = outgoingDarkBg,
+                outgoingBubbleBorder = outgoingDarkBorder,
                 bubbleTextPrimary = Color(0xFFF8FAFC),
                 bubbleTextSecondary = Color(0xFFC2CED9),
-                timestampMuted = Color(0xFFA4B8C4),
-                syncedTickTint = Color(0xFF53BDEB),
-                linkColor = Color(0xFF53BDEB),
-                composerDockBg = Color(0xFF0F181F),
-                inputPillBg = Color(0xFF1F2C34),
-                inputPillBorder = Color(0xFF32444F)
+                timestampMuted = Color(0xFFA2B3C6),
+                syncedTickTint = accent.darkAccent,
+                linkColor = Color(0xFF38BDF8),
+                composerDockBg = Color(0xFF0E1524),
+                inputPillBg = Color(0xFF182235),
+                inputPillBorder = Color(0xFF31415E)
             )
             else -> ChatPalette(
-                canvasBg = Color(0xFFECE5DD),
-                patternTint = Color(0xFF64748B).copy(alpha = 0.06f),
+                canvasBg = Color(0xFFF2F5FA),
+                patternTint = Color(0xFF64748B).copy(alpha = 0.045f),
                 headerBg = Color(0xFFFFFFFF),
                 headerBorder = Color(0xFFD6DFEB),
-                datePillBg = Color(0xFFF6F8FB),
+                datePillBg = Color(0xFFFFFFFF),
                 incomingBubbleBg = Color(0xFFFFFFFF),
                 incomingBubbleBorder = Color(0xFFD6DFEB),
-                outgoingBubbleBg = Color(0xFFD9FDD3),
-                outgoingBubbleBorder = Color(0xFFA9E49E),
+                outgoingBubbleBg = outgoingLightBg,
+                outgoingBubbleBorder = outgoingLightBorder,
                 bubbleTextPrimary = Color(0xFF0F172A),
                 bubbleTextSecondary = Color(0xFF475569),
                 timestampMuted = Color(0xFF526374),
-                syncedTickTint = Color(0xFF0284C7),
-                linkColor = Color(0xFF0369A1),
-                composerDockBg = Color(0xFFF3EFE9),
+                syncedTickTint = accent.lightAccent,
+                linkColor = accent.lightAccent,
+                composerDockBg = Color(0xFFF2F5FA),
                 inputPillBg = Color(0xFFFFFFFF),
                 inputPillBorder = Color(0xFFCBD5E1)
             )
@@ -234,7 +267,8 @@ fun FamilyChatSheet(
     onSendMessage: (body: String, replyToMessageId: String?, relatedTransactionId: String?) -> Unit,
     onDeleteMessage: (FamilyMessageEntity) -> Unit,
     onOpenManageFamily: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onViewSharedTransaction: ((TransactionEntity) -> Unit)? = null
 ) {
     Dialog(
         onDismissRequest = onDismiss,
@@ -263,7 +297,8 @@ fun FamilyChatSheet(
             onSendMessage = onSendMessage,
             onDeleteMessage = onDeleteMessage,
             onOpenManageFamily = onOpenManageFamily,
-            onDismiss = onDismiss
+            onDismiss = onDismiss,
+            onViewSharedTransaction = onViewSharedTransaction
         )
     }
 }
@@ -283,7 +318,8 @@ fun FamilyChatContent(
     onSendMessage: (body: String, replyToMessageId: String?, relatedTransactionId: String?) -> Unit,
     onDeleteMessage: (FamilyMessageEntity) -> Unit,
     onOpenManageFamily: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onViewSharedTransaction: ((TransactionEntity) -> Unit)? = null
 ) {
     val palette = rememberChatPalette()
     val context = LocalContext.current
@@ -531,7 +567,7 @@ fun FamilyChatContent(
                 }
             }
 
-            // --- Message Canvas + Subtle Vector Pattern + Jump-to-Bottom Pill ---
+            // --- Message Canvas + Subtle Vector Pattern + Floating Frosted Capsule Dock ---
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -543,106 +579,133 @@ fun FamilyChatContent(
                     modifier = Modifier.matchParentSize()
                 )
 
-                if (visibleMessages.isEmpty()) {
-                    ChatEmptyState(
-                        family = family,
-                        isSearching = isSearchActive && searchQuery.isNotBlank(),
-                        searchQuery = searchQuery,
-                        palette = palette,
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Box(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 24.dp)
-                    )
-                } else {
-                    FamilyChatFeedList(
-                        listState = listState,
-                        groups = feedProjection.groups,
-                        messagesById = messagesById,
-                        memberLabelsByUserId = memberLabelsByUserId,
-                        txByServerId = txByServerId,
-                        txAttributionByServerId = txAttributionByServerId,
-                        currentUserId = currentUserId,
-                        currentUserRole = currentUserRole,
-                        currencySymbol = currencySymbol,
-                        palette = palette,
-                        selectedContextMessageId = selectedContextMessage?.id,
-                        highlightedMessageId = highlightedMessageId,
-                        onSelectContextMessage = { msg ->
-                            selectedContextMessage = if (selectedContextMessage?.id == msg.id) null else msg
-                        },
-                        onQuoteClick = { quotedId -> scrollToMessageAndFlash(quotedId) },
-                        onReply = { msg ->
-                            replyTarget = msg
-                            selectedContextMessage = null
-                        },
-                        onDelete = { msg ->
-                            onDeleteMessage(msg)
-                            if (selectedContextMessage?.id == msg.id) selectedContextMessage = null
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-
-                // Floating Jump-to-Bottom Pill
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = isFarFromBottom && feedProjection.totalItemCount > 0,
-                    enter = fadeIn() + scaleIn(initialScale = 0.85f),
-                    exit = fadeOut() + scaleOut(targetScale = 0.85f),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 12.dp, bottom = 12.dp)
-                ) {
-                    JumpToBottomButton(
-                        unreadCount = unreadBelowCount,
-                        palette = palette,
-                        onClick = {
-                            coroutineScope.launch {
-                                if (feedProjection.totalItemCount > 0) {
-                                    listState.animateScrollToItem(feedProjection.totalItemCount - 1)
-                                }
-                                unreadBelowCount = 0
-                            }
+                            .weight(1f)
+                            .fillMaxWidth()
+                    ) {
+                        if (visibleMessages.isEmpty()) {
+                            ChatEmptyState(
+                                family = family,
+                                isSearching = isSearchActive && searchQuery.isNotBlank(),
+                                searchQuery = searchQuery,
+                                palette = palette,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(24.dp)
+                            )
+                        } else {
+                            FamilyChatFeedList(
+                                listState = listState,
+                                groups = feedProjection.groups,
+                                messagesById = messagesById,
+                                memberLabelsByUserId = memberLabelsByUserId,
+                                txByServerId = txByServerId,
+                                txAttributionByServerId = txAttributionByServerId,
+                                currentUserId = currentUserId,
+                                currentUserRole = currentUserRole,
+                                currencySymbol = currencySymbol,
+                                palette = palette,
+                                selectedContextMessageId = selectedContextMessage?.id,
+                                highlightedMessageId = highlightedMessageId,
+                                bottomContentPadding = 16.dp,
+                                onSelectContextMessage = { msg ->
+                                    selectedContextMessage = if (selectedContextMessage?.id == msg.id) null else msg
+                                },
+                                onQuoteClick = { quotedId -> scrollToMessageAndFlash(quotedId) },
+                                onReply = { msg ->
+                                    replyTarget = msg
+                                    selectedContextMessage = null
+                                },
+                                onCopy = { msg ->
+                                    clipboard.setText(AnnotatedString(msg.body))
+                                    Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
+                                },
+                                onViewSharedTransaction = onViewSharedTransaction,
+                                onDelete = { msg ->
+                                    onDeleteMessage(msg)
+                                    if (selectedContextMessage?.id == msg.id) selectedContextMessage = null
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
+
+                        // Soft bottom edge vignette right above the floating capsule dock
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(18.dp)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(Color.Transparent, palette.canvasBg.copy(alpha = 0.72f))
+                                    )
+                                )
+                        )
+
+                        // Floating Jump-to-Bottom Pill above the floating dock
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = isFarFromBottom && feedProjection.totalItemCount > 0,
+                            enter = fadeIn(tween(ZenithTheme.motionSpec.durationMs(180))) + scaleIn(initialScale = 0.85f),
+                            exit = fadeOut(tween(ZenithTheme.motionSpec.durationMs(150))) + scaleOut(targetScale = 0.85f),
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 14.dp, bottom = 12.dp)
+                        ) {
+                            JumpToBottomButton(
+                                unreadCount = unreadBelowCount,
+                                palette = palette,
+                                onClick = {
+                                    coroutineScope.launch {
+                                        if (feedProjection.totalItemCount > 0) {
+                                            listState.animateScrollToItem(feedProjection.totalItemCount - 1)
+                                        }
+                                        unreadBelowCount = 0
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    // --- Floating Frosted Capsule Composer Dock ---
+                    FamilyComposerDock(
+                        familyName = family.name,
+                        composerText = composerText,
+                        onComposerTextChange = { composerText = it },
+                        replyTarget = replyTarget,
+                        onCancelReply = { replyTarget = null },
+                        attachedTx = attachedTx,
+                        onRemoveAttachedTx = { attachedTx = null },
+                        showExpensePicker = showExpensePicker,
+                        onToggleExpensePicker = {
+                            showEmojiStrip = false
+                            showExpensePicker = !showExpensePicker
+                        },
+                        showEmojiStrip = showEmojiStrip,
+                        onToggleEmojiStrip = {
+                            showExpensePicker = false
+                            showEmojiStrip = !showEmojiStrip
+                        },
+                        onInsertEmoji = { emoji -> composerText += emoji },
+                        familyTransactions = familyTransactions,
+                        currencySymbol = currencySymbol,
+                        onSelectTransaction = { tx ->
+                            attachedTx = tx
+                            if (composerText.isBlank()) {
+                                composerText = if (tx.type == TransactionType.EXPENSE) {
+                                    "Shared expense: ${tx.title}"
+                                } else {
+                                    "Shared income: ${tx.title}"
+                                }
+                            }
+                            showExpensePicker = false
+                        },
+                        onSend = { sendCurrentMessage() },
+                        palette = palette
                     )
                 }
             }
-
-            // --- Compact Floating Input Pill Composer Dock ---
-            FamilyComposerDock(
-                familyName = family.name,
-                composerText = composerText,
-                onComposerTextChange = { composerText = it },
-                replyTarget = replyTarget,
-                onCancelReply = { replyTarget = null },
-                attachedTx = attachedTx,
-                onRemoveAttachedTx = { attachedTx = null },
-                showExpensePicker = showExpensePicker,
-                onToggleExpensePicker = {
-                    showEmojiStrip = false
-                    showExpensePicker = !showExpensePicker
-                },
-                showEmojiStrip = showEmojiStrip,
-                onToggleEmojiStrip = {
-                    showExpensePicker = false
-                    showEmojiStrip = !showEmojiStrip
-                },
-                onInsertEmoji = { emoji -> composerText += emoji },
-                familyTransactions = familyTransactions,
-                currencySymbol = currencySymbol,
-                onSelectTransaction = { tx ->
-                    attachedTx = tx
-                    if (composerText.isBlank()) {
-                        composerText = if (tx.type == TransactionType.EXPENSE) {
-                            "Shared expense: ${tx.title}"
-                        } else {
-                            "Shared income: ${tx.title}"
-                        }
-                    }
-                    showExpensePicker = false
-                },
-                onSend = { sendCurrentMessage() },
-                palette = palette
-            )
         }
     }
 }
@@ -884,11 +947,27 @@ private fun FamilyChatHeader(
                                     )
                                     Spacer(modifier = Modifier.height(1.dp))
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        val livePulseAlpha = if (isRealtimeConnected && !ZenithTheme.motionSpec.isReduced) {
+                                            val inf = rememberInfiniteTransition(label = "chat_live_pulse")
+                                            val a by inf.animateFloat(
+                                                initialValue = 1f,
+                                                targetValue = 0.35f,
+                                                animationSpec = infiniteRepeatable(
+                                                    animation = tween(1100, easing = LinearEasing),
+                                                    repeatMode = RepeatMode.Reverse
+                                                ),
+                                                label = "pulse_alpha"
+                                            )
+                                            a
+                                        } else 1f
                                         Box(
                                             modifier = Modifier
                                                 .size(6.dp)
                                                 .clip(CircleShape)
-                                                .background(if (isRealtimeConnected) ZenithTheme.accentGreen else ZenithTheme.accentAmber)
+                                                .background(
+                                                    (if (isRealtimeConnected) ZenithTheme.accentGreen else ZenithTheme.accentAmber)
+                                                        .copy(alpha = livePulseAlpha)
+                                                )
                                         )
                                         Spacer(modifier = Modifier.width(5.dp))
                                         val cleanLabel = family.familyLabel
@@ -908,46 +987,46 @@ private fun FamilyChatHeader(
                                 }
                             }
 
-                            // Right Cluster: Search + Manage Family + 3-dot Menu (all >=44dp touch targets)
+                            // Right Cluster: Compact 360dp-safe Search + Manage Family + 3-dot Menu
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(
                                     onClick = onToggleSearch,
                                     modifier = Modifier
-                                        .size(44.dp)
+                                        .size(38.dp)
                                         .testTag("btn_chat_search")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Search,
                                         contentDescription = "Search Messages",
                                         tint = ZenithTheme.textPrimary,
-                                        modifier = Modifier.size(21.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                                 IconButton(
                                     onClick = onOpenManageFamily,
                                     modifier = Modifier
-                                        .size(44.dp)
+                                        .size(38.dp)
                                         .testTag("btn_chat_manage_family")
                                 ) {
                                     Icon(
                                         Icons.Default.Group,
                                         contentDescription = "Manage Family",
                                         tint = ZenithTheme.accentCyan,
-                                        modifier = Modifier.size(21.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                                 Box {
                                     IconButton(
                                         onClick = { overflowExpanded = true },
                                         modifier = Modifier
-                                            .size(44.dp)
+                                            .size(38.dp)
                                             .testTag("btn_chat_more")
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.MoreVert,
                                             contentDescription = "Chat Options",
                                             tint = ZenithTheme.textSecondary,
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier.size(19.dp)
                                         )
                                     }
                                     DropdownMenu(
@@ -1091,16 +1170,24 @@ private fun FamilyChatFeedList(
     palette: ChatPalette,
     selectedContextMessageId: String?,
     highlightedMessageId: String?,
+    bottomContentPadding: androidx.compose.ui.unit.Dp = 96.dp,
     onSelectContextMessage: (FamilyMessageEntity) -> Unit,
     onQuoteClick: (String) -> Unit,
     onReply: (FamilyMessageEntity) -> Unit,
+    onCopy: (FamilyMessageEntity) -> Unit,
+    onViewSharedTransaction: ((TransactionEntity) -> Unit)? = null,
     onDelete: (FamilyMessageEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
         state = listState,
         modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
+        contentPadding = PaddingValues(
+            start = 10.dp,
+            end = 10.dp,
+            top = 10.dp,
+            bottom = bottomContentPadding
+        )
     ) {
         groups.forEach { group ->
             item(key = "day_${group.dayLabel}") {
@@ -1144,6 +1231,7 @@ private fun FamilyChatFeedList(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .animateItem()
                         .clip(RoundedCornerShape(10.dp))
                         .background(rowTint)
                         .padding(top = row.topSpacingDp.dp)
@@ -1191,6 +1279,8 @@ private fun FamilyChatFeedList(
                                 msg.replyToMessageId?.let(onQuoteClick)
                             },
                             onReply = { onReply(msg) },
+                            onCopy = { onCopy(msg) },
+                            onViewSharedTransaction = onViewSharedTransaction,
                             onLongPress = { onSelectContextMessage(msg) },
                             onDelete = { onDelete(msg) }
                         )
@@ -1267,14 +1357,35 @@ private fun FamilyComposerDock(
     palette: ChatPalette
 ) {
     val canSend = composerText.trim().isNotEmpty() || attachedTx != null
+    val sendBtnBg by animateColorAsState(
+        targetValue = if (canSend) ZenithTheme.solidIndigo else palette.inputPillBg,
+        animationSpec = tween(ZenithTheme.motionSpec.durationMs(180)),
+        label = "chat_send_bg"
+    )
+    val sendBtnScale by animateFloatAsState(
+        targetValue = if (canSend || ZenithTheme.motionSpec.isReduced) 1.0f else 0.93f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "chat_send_scale"
+    )
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(palette.composerDockBg)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        palette.canvasBg.copy(alpha = 0.84f),
+                        palette.canvasBg.copy(alpha = 0.96f)
+                    )
+                )
+            )
             .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
-            .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         // Quick Reply Preview Banner
         AnimatedVisibility(
@@ -1503,7 +1614,7 @@ private fun FamilyComposerDock(
             }
         }
 
-        // Main Floating Input Pill + 48dp Circular Send FAB
+        // Main Floating Frosted Capsule Input Pill + 48dp Circular Send FAB
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1512,13 +1623,13 @@ private fun FamilyComposerDock(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = palette.inputPillBg,
+                shape = RoundedCornerShape(28.dp),
+                color = palette.inputPillBg.copy(alpha = if (ZenithTheme.isOled) 0.98f else 0.95f),
                 border = BorderStroke(1.dp, palette.inputPillBorder),
-                shadowElevation = if (ZenithTheme.isOled) 0.dp else 3.dp,
+                shadowElevation = if (ZenithTheme.isOled) 0.dp else 8.dp,
                 modifier = Modifier
                     .weight(1f)
-                    .defaultMinSize(minHeight = 46.dp)
+                    .defaultMinSize(minHeight = 48.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -1599,11 +1710,12 @@ private fun FamilyComposerDock(
 
             Surface(
                 shape = CircleShape,
-                color = if (canSend) ZenithTheme.solidGreen else palette.inputPillBg,
+                color = sendBtnBg,
                 border = if (canSend) null else BorderStroke(1.dp, palette.inputPillBorder),
-                shadowElevation = if (canSend && !ZenithTheme.isOled) 4.dp else 0.dp,
+                shadowElevation = if (canSend && !ZenithTheme.isOled) 6.dp else 0.dp,
                 modifier = Modifier
                     .size(48.dp)
+                    .scale(sendBtnScale)
                     .clip(CircleShape)
                     .clickable(enabled = canSend, onClick = onSend)
                     .testTag("family_chat_send_btn")
@@ -1637,21 +1749,36 @@ private fun SwipeableChatBubbleRow(
     palette: ChatPalette,
     onQuoteClick: () -> Unit,
     onReply: () -> Unit,
+    onCopy: () -> Unit,
+    onViewSharedTransaction: ((TransactionEntity) -> Unit)? = null,
     onLongPress: () -> Unit,
     onDelete: () -> Unit
 ) {
     val density = LocalDensity.current
     val haptic = LocalHapticFeedback.current
-    val scope = rememberCoroutineScope()
     val maxSwipePx = with(density) { 56.dp.toPx() }
     val triggerPx = with(density) { 36.dp.toPx() }
 
-    val offsetX = remember(message.id) { Animatable(0f) }
+    var dragOffsetPx by remember(message.id) { mutableFloatStateOf(0f) }
+    var isDragging by remember(message.id) { mutableStateOf(false) }
     var hapticFired by remember(message.id) { mutableStateOf(false) }
+    val animatedOffsetPx by animateFloatAsState(
+        targetValue = dragOffsetPx,
+        animationSpec = if (isDragging || ZenithTheme.motionSpec.isReduced) {
+            snap()
+        } else {
+            spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMedium
+            )
+        },
+        label = "chat_swipe_offset"
+    )
 
     val dragState = rememberDraggableState { delta ->
-        val next = (offsetX.value + delta * 0.65f).coerceIn(0f, maxSwipePx)
-        scope.launch { offsetX.snapTo(next) }
+        isDragging = true
+        val next = (dragOffsetPx + delta * 0.65f).coerceIn(0f, maxSwipePx)
+        dragOffsetPx = next
         if (next >= triggerPx && !hapticFired) {
             hapticFired = true
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -1667,18 +1794,17 @@ private fun SwipeableChatBubbleRow(
                 state = dragState,
                 orientation = Orientation.Horizontal,
                 onDragStopped = {
-                    val triggered = offsetX.value >= triggerPx
+                    val triggered = dragOffsetPx >= triggerPx
+                    isDragging = false
+                    dragOffsetPx = 0f
                     hapticFired = false
-                    scope.launch {
-                        offsetX.animateTo(0f, animationSpec = tween(180))
-                    }
                     if (triggered) {
                         onReply()
                     }
                 }
             )
     ) {
-        val swipeFraction = (offsetX.value / triggerPx).coerceIn(0f, 1f)
+        val swipeFraction = (animatedOffsetPx / triggerPx).coerceIn(0f, 1f)
         if (swipeFraction > 0.08f) {
             Box(
                 modifier = Modifier
@@ -1701,7 +1827,7 @@ private fun SwipeableChatBubbleRow(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                .offset { IntOffset(animatedOffsetPx.roundToInt(), 0) }
         ) {
             FamilyChatBubble(
                 message = message,
@@ -1717,6 +1843,8 @@ private fun SwipeableChatBubbleRow(
                 palette = palette,
                 onQuoteClick = onQuoteClick,
                 onReply = onReply,
+                onCopy = onCopy,
+                onViewSharedTransaction = onViewSharedTransaction,
                 onLongPress = onLongPress,
                 onDelete = onDelete
             )
@@ -1742,6 +1870,8 @@ private fun FamilyChatBubble(
     palette: ChatPalette,
     onQuoteClick: () -> Unit,
     onReply: () -> Unit,
+    onCopy: () -> Unit,
+    onViewSharedTransaction: ((TransactionEntity) -> Unit)? = null,
     onLongPress: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -1807,7 +1937,11 @@ private fun FamilyChatBubble(
                         .testTag("chat_bubble_${message.id}")
                 ) {
                     Column(
-                        modifier = Modifier.padding(start = 11.dp, end = 10.dp, top = 7.dp, bottom = 6.dp)
+                        modifier = Modifier
+                            .animateContentSize(
+                                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy)
+                            )
+                            .padding(start = 11.dp, end = 10.dp, top = 7.dp, bottom = 6.dp)
                     ) {
                         if (showSenderAndAvatar) {
                             Text(
@@ -1870,6 +2004,14 @@ private fun FamilyChatBubble(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(bottom = 5.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .then(
+                                        if (onViewSharedTransaction != null) {
+                                            Modifier.clickable { onViewSharedTransaction(tx) }
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                             ) {
                                 Row(modifier = Modifier.height(IntrinsicSize.Min)) {
                                     Box(
@@ -1895,7 +2037,7 @@ private fun FamilyChatBubble(
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                text = "${if (isExp) "-" else "+"}$currencySymbol${String.format(Locale.US, "%,.0f", tx.amount)}",
+                                                text = "${if (isExp) "-" else "+"}$currencySymbol${AmountFormatter.formatNumber(tx.amount, 0, ZenithTheme.numberFormat)}",
                                                 fontSize = 12.5.sp,
                                                 fontWeight = FontWeight.ExtraBold,
                                                 color = amtColor
@@ -1960,6 +2102,31 @@ private fun FamilyChatBubble(
                                             fontSize = 11.5.sp,
                                             fontWeight = FontWeight.SemiBold,
                                             color = ZenithTheme.accentCyan
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                showInlineActions = false
+                                                onCopy()
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                            .testTag("chat_copy_${message.id}"),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ContentCopy,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp),
+                                            tint = palette.bubbleTextSecondary
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            "Copy",
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = palette.bubbleTextSecondary
                                         )
                                     }
                                     if (canDelete) {

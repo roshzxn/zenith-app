@@ -305,6 +305,7 @@ ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS sync_version BIGINT NOT
 ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS custom_label TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE public.transactions ALTER COLUMN category SET DEFAULT 'Other';
 ALTER TABLE public.transactions ALTER COLUMN title SET DEFAULT 'Transaction';
@@ -344,6 +345,7 @@ ALTER TABLE public.budgets ADD COLUMN IF NOT EXISTS end_date TIMESTAMPTZ;
 ALTER TABLE public.budgets ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE public.budgets ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE public.budgets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.budgets ADD COLUMN IF NOT EXISTS custom_period_name TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE public.budgets ALTER COLUMN category_name SET DEFAULT 'Other';
 
@@ -502,6 +504,8 @@ CREATE TABLE IF NOT EXISTS public.family_invitations (
     invite_token UUID NOT NULL DEFAULT gen_random_uuid(),
     role VARCHAR(32) NOT NULL DEFAULT 'MEMBER',
     status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    max_uses INTEGER NOT NULL DEFAULT 5,
+    uses_count INTEGER NOT NULL DEFAULT 0,
     invited_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     accepted_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     accepted_at TIMESTAMPTZ,
@@ -516,6 +520,8 @@ ALTER TABLE public.family_invitations ADD COLUMN IF NOT EXISTS invite_code VARCH
 ALTER TABLE public.family_invitations ADD COLUMN IF NOT EXISTS invite_token UUID NOT NULL DEFAULT gen_random_uuid();
 ALTER TABLE public.family_invitations ADD COLUMN IF NOT EXISTS role VARCHAR(32) NOT NULL DEFAULT 'MEMBER';
 ALTER TABLE public.family_invitations ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'PENDING';
+ALTER TABLE public.family_invitations ADD COLUMN IF NOT EXISTS max_uses INTEGER NOT NULL DEFAULT 5;
+ALTER TABLE public.family_invitations ADD COLUMN IF NOT EXISTS uses_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.family_invitations ADD COLUMN IF NOT EXISTS invited_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
 ALTER TABLE public.family_invitations ADD COLUMN IF NOT EXISTS accepted_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
 ALTER TABLE public.family_invitations ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
@@ -611,11 +617,14 @@ CREATE TABLE IF NOT EXISTS public.family_budgets (
     monthly_limit NUMERIC(15, 2) NOT NULL CHECK (monthly_limit > 0),
     month_year VARCHAR(7) NOT NULL DEFAULT to_char(NOW(), 'YYYY-MM'),
     period_type VARCHAR(32) NOT NULL DEFAULT 'MONTHLY',
+    custom_period_name TEXT NOT NULL DEFAULT '',
     updated_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.family_budgets ADD COLUMN IF NOT EXISTS custom_period_name TEXT NOT NULL DEFAULT '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_family_budgets_active
     ON public.family_budgets (family_id, lower(trim(category_name)), month_year, period_type)
@@ -1525,11 +1534,13 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.create_family_invitation(UUID, TEXT, VARCHAR, INT);
 CREATE OR REPLACE FUNCTION public.create_family_invitation(
     p_family_id UUID,
     p_invited_email TEXT DEFAULT '',
     p_role VARCHAR DEFAULT 'MEMBER',
-    p_expires_hours INT DEFAULT 168
+    p_expires_hours INT DEFAULT 168,
+    p_max_uses INT DEFAULT 5
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -1539,6 +1550,11 @@ AS $$
 DECLARE
     v_uid UUID := auth.uid();
     v_clean_role VARCHAR(32) := upper(coalesce(nullif(trim(p_role), ''), 'MEMBER'));
+    v_clean_email TEXT := lower(trim(coalesce(p_invited_email, '')));
+    v_effective_max INT := CASE
+        WHEN length(v_clean_email) > 0 THEN 1
+        ELSE GREATEST(1, LEAST(coalesce(p_max_uses, 5), 25))
+    END;
     v_code VARCHAR(32);
     v_inv public.family_invitations%ROWTYPE;
 BEGIN
@@ -1553,15 +1569,21 @@ BEGIN
     WHERE family_id = p_family_id AND status = 'PENDING' AND expires_at <= NOW();
 
     v_code := 'FAM-' || upper(substring(replace(gen_random_uuid()::text, '-', ''), 1, 6));
-    INSERT INTO public.family_invitations (family_id, invited_email, email, invite_code, role, status, invited_by, expires_at)
+    INSERT INTO public.family_invitations (
+        family_id, invited_email, email, invite_code, role, status, invited_by, expires_at, max_uses, uses_count
+    )
     VALUES (
-        p_family_id, lower(trim(coalesce(p_invited_email, ''))), lower(trim(coalesce(p_invited_email, ''))),
+        p_family_id, v_clean_email, v_clean_email,
         v_code, v_clean_role, 'PENDING', v_uid,
-        NOW() + make_interval(hours => GREATEST(1, LEAST(coalesce(p_expires_hours, 168), 720)))
+        NOW() + make_interval(hours => GREATEST(1, LEAST(coalesce(p_expires_hours, 168), 720))),
+        v_effective_max, 0
     )
     RETURNING * INTO v_inv;
 
-    PERFORM public.log_family_audit(p_family_id, v_uid, 'INVITATION_CREATED', 'family_invitations', v_inv.id, jsonb_build_object('role', v_clean_role));
+    PERFORM public.log_family_audit(
+        p_family_id, v_uid, 'INVITATION_CREATED', 'family_invitations', v_inv.id,
+        jsonb_build_object('role', v_clean_role, 'max_uses', v_effective_max)
+    );
     RETURN to_jsonb(v_inv);
 END;
 $$;
@@ -1589,6 +1611,8 @@ DECLARE
     v_name TEXT;
     v_emoji VARCHAR(32) := coalesce(NULLIF(trim(p_avatar_emoji), ''), '🙂');
     v_label TEXT := trim(coalesce(p_member_label, ''));
+    v_next_uses INT;
+    v_max_uses INT;
 BEGIN
     IF v_uid IS NULL THEN
         RAISE EXCEPTION 'Authentication required to join a family.';
@@ -1609,6 +1633,12 @@ BEGIN
     IF v_inv.expires_at <= NOW() THEN
         UPDATE public.family_invitations SET status = 'EXPIRED', updated_at = NOW() WHERE id = v_inv.id;
         RAISE EXCEPTION 'Invitation has expired.';
+    END IF;
+
+    v_max_uses := GREATEST(1, coalesce(v_inv.max_uses, 5));
+    IF coalesce(v_inv.uses_count, 0) >= v_max_uses THEN
+        UPDATE public.family_invitations SET status = 'ACCEPTED', updated_at = NOW() WHERE id = v_inv.id;
+        RAISE EXCEPTION 'Invitation has reached its maximum usage limit.';
     END IF;
 
     SELECT * INTO v_family FROM public.families WHERE id = v_inv.family_id AND NOT is_deleted LIMIT 1;
@@ -1643,12 +1673,22 @@ BEGIN
         joined_at = NOW(), updated_at = NOW()
     RETURNING * INTO v_member;
 
-    UPDATE public.family_invitations SET status = 'ACCEPTED', accepted_by = v_uid, accepted_at = NOW(), updated_at = NOW() WHERE id = v_inv.id;
+    v_next_uses := coalesce(v_inv.uses_count, 0) + 1;
+    UPDATE public.family_invitations
+    SET uses_count = v_next_uses,
+        status = CASE WHEN v_next_uses >= v_max_uses THEN 'ACCEPTED' ELSE 'PENDING' END,
+        accepted_by = v_uid,
+        accepted_at = NOW(),
+        updated_at = NOW()
+    WHERE id = v_inv.id;
 
     INSERT INTO public.family_messages (family_id, sender_user_id, sender_name, sender_avatar, message_type, body)
     VALUES (v_family.id, v_uid, v_name, v_emoji, 'SYSTEM', format('%s joined the family.', v_name));
 
-    PERFORM public.log_family_audit(v_family.id, v_uid, 'INVITATION_ACCEPTED', 'family_members', v_member.id, jsonb_build_object('invitation_id', v_inv.id, 'role', v_member.role));
+    PERFORM public.log_family_audit(
+        v_family.id, v_uid, 'INVITATION_ACCEPTED', 'family_members', v_member.id,
+        jsonb_build_object('invitation_id', v_inv.id, 'role', v_member.role, 'uses_count', v_next_uses, 'max_uses', v_max_uses)
+    );
     RETURN jsonb_build_object('family', to_jsonb(v_family), 'membership', to_jsonb(v_member));
 END;
 $$;
@@ -1985,6 +2025,60 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.delete_my_account()
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+    v_uid UUID := auth.uid();
+    v_member public.family_members%ROWTYPE;
+    v_active_count INT := 0;
+BEGIN
+    IF v_uid IS NULL THEN
+        RAISE EXCEPTION 'Authentication required to delete your account.';
+    END IF;
+
+    FOR v_member IN
+        SELECT * FROM public.family_members
+        WHERE user_id = v_uid AND status = 'ACTIVE' AND is_active = TRUE
+    LOOP
+        SELECT count(*) INTO v_active_count
+        FROM public.family_members
+        WHERE family_id = v_member.family_id AND status = 'ACTIVE' AND is_active = TRUE;
+
+        IF v_member.role = 'OWNER' AND v_active_count > 1 THEN
+            RAISE EXCEPTION 'Transfer family ownership or close your family group before deleting your account.';
+        ELSIF v_member.role = 'OWNER' THEN
+            PERFORM set_config('app.family_rpc_bypass', 'on', true);
+            UPDATE public.families SET is_deleted = TRUE, updated_at = NOW() WHERE id = v_member.family_id;
+            UPDATE public.family_members SET status = 'LEFT', is_active = FALSE, updated_at = NOW()
+            WHERE family_id = v_member.family_id AND status = 'ACTIVE';
+            UPDATE public.family_invitations SET status = 'REVOKED', updated_at = NOW()
+            WHERE family_id = v_member.family_id AND status = 'PENDING';
+        ELSE
+            UPDATE public.family_members SET status = 'LEFT', is_active = FALSE, updated_at = NOW() WHERE id = v_member.id;
+        END IF;
+    END LOOP;
+
+    DELETE FROM public.transactions WHERE user_id = v_uid AND coalesce(finance_scope, 'PERSONAL') = 'PERSONAL';
+    DELETE FROM public.budgets WHERE user_id = v_uid AND coalesce(finance_scope, 'PERSONAL') = 'PERSONAL';
+    DELETE FROM public.savings_goals WHERE user_id = v_uid AND coalesce(finance_scope, 'PERSONAL') = 'PERSONAL';
+    DELETE FROM public.auto_pay_reminders WHERE user_id = v_uid AND coalesce(finance_scope, 'PERSONAL') = 'PERSONAL';
+    DELETE FROM public.categories WHERE user_id = v_uid AND is_default = FALSE;
+    DELETE FROM public.profiles WHERE id = v_uid;
+
+    BEGIN
+        DELETE FROM auth.users WHERE id = v_uid;
+    EXCEPTION WHEN insufficient_privilege THEN
+        NULL;
+    END;
+
+    RETURN TRUE;
+END;
+$$;
+
 REVOKE ALL ON FUNCTION
     public.is_family_member(UUID),
     public.is_family_admin(UUID),
@@ -1994,7 +2088,7 @@ REVOKE ALL ON FUNCTION
     public.log_family_audit(UUID, UUID, TEXT, TEXT, UUID, JSONB),
     public.seed_family_default_categories(UUID, UUID),
     public.create_family_atomic(TEXT, VARCHAR, TEXT, UUID, NUMERIC, TEXT, TEXT, VARCHAR),
-    public.create_family_invitation(UUID, TEXT, VARCHAR, INT),
+    public.create_family_invitation(UUID, TEXT, VARCHAR, INT, INT),
     public.accept_family_invitation(TEXT, TEXT, VARCHAR, TEXT),
     public.update_family_member_role(UUID, UUID, VARCHAR),
     public.remove_family_member(UUID, UUID),
@@ -2006,7 +2100,8 @@ REVOKE ALL ON FUNCTION
     public.update_family_member_profile(UUID, UUID, TEXT, TEXT, VARCHAR),
     public.delete_my_personal_transaction(UUID),
     public.clear_my_personal_ledger(),
-    public.clear_family_transactions_atomic(UUID)
+    public.clear_family_transactions_atomic(UUID),
+    public.delete_my_account()
 FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION
@@ -2016,7 +2111,7 @@ GRANT EXECUTE ON FUNCTION
     public.is_user_active_member_of(UUID, UUID),
     public.shares_active_family_with(UUID),
     public.create_family_atomic(TEXT, VARCHAR, TEXT, UUID, NUMERIC, TEXT, TEXT, VARCHAR),
-    public.create_family_invitation(UUID, TEXT, VARCHAR, INT),
+    public.create_family_invitation(UUID, TEXT, VARCHAR, INT, INT),
     public.accept_family_invitation(TEXT, TEXT, VARCHAR, TEXT),
     public.update_family_member_role(UUID, UUID, VARCHAR),
     public.remove_family_member(UUID, UUID),
@@ -2028,5 +2123,6 @@ GRANT EXECUTE ON FUNCTION
     public.update_family_member_profile(UUID, UUID, TEXT, TEXT, VARCHAR),
     public.delete_my_personal_transaction(UUID),
     public.clear_my_personal_ledger(),
-    public.clear_family_transactions_atomic(UUID)
+    public.clear_family_transactions_atomic(UUID),
+    public.delete_my_account()
 TO authenticated;

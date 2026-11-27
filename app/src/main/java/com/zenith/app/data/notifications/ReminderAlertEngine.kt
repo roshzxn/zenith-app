@@ -17,6 +17,8 @@ import com.zenith.app.data.models.FinanceScope
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.data.upi.UpiNotificationListenerService
+import com.zenith.app.data.util.AmountFormatter
+import com.zenith.app.data.util.NumberFormatStyle
 import kotlinx.coroutines.flow.first
 import java.util.Calendar
 import java.util.Locale
@@ -79,14 +81,16 @@ object ReminderAlertEngine {
     fun evaluateBudgetThresholds(
         budgets: List<BudgetEntity>,
         expenses: List<TransactionEntity>,
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        thresholdPct: Int = 85
     ): List<BudgetAlertCandidate> {
+        val safeThreshold = thresholdPct.coerceIn(50, 100)
         val expenseTxs = expenses.filter { !it.isDeleted && it.type == TransactionType.EXPENSE }
         return budgets.mapNotNull { budget ->
             if (budget.isDeleted || budget.monthlyLimit <= 0.0) return@mapNotNull null
             val spent = calculateSpentInPeriod(expenseTxs, budget, nowMillis)
             val pct = ((spent / budget.monthlyLimit) * 100.0).toInt()
-            if (pct >= 85) {
+            if (pct >= safeThreshold) {
                 BudgetAlertCandidate(budget = budget, spent = spent, percentUsed = pct)
             } else {
                 null
@@ -125,6 +129,11 @@ object ReminderAlertEngine {
 
         ensureChannel(context)
         val cooldownPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val currencySymbol = appPrefs.getString("currency_symbol", "₹") ?: "₹"
+        val formatStyle = NumberFormatStyle.fromName(
+            appPrefs.getString("number_format_style", NumberFormatStyle.INTERNATIONAL.name)
+        )
+        val thresholdPct = appPrefs.getInt("budget_alert_threshold_pct", 85).coerceIn(50, 100)
         val now = System.currentTimeMillis()
         val db = CashFlowDatabase.getDatabase(context)
 
@@ -139,18 +148,18 @@ object ReminderAlertEngine {
                 val lastNotified = cooldownPrefs.getLong(cooldownKey, 0L)
                 if (respectCooldown && (now - lastNotified) < COOLDOWN_MS) continue
 
-                postBillReminderNotification(context, candidate)
+                postBillReminderNotification(context, candidate, currencySymbol, formatStyle)
                 cooldownPrefs.edit().putLong(cooldownKey, now).apply()
             }
 
-            val alerts = evaluateBudgetThresholds(budgets, txs, now)
+            val alerts = evaluateBudgetThresholds(budgets, txs, now, thresholdPct = thresholdPct)
             for (alert in alerts) {
                 val tier = if (alert.percentUsed >= 100) "over" else "near"
                 val cooldownKey = "budget_${alert.budget.id}_$tier"
                 val lastNotified = cooldownPrefs.getLong(cooldownKey, 0L)
                 if (respectCooldown && (now - lastNotified) < COOLDOWN_MS) continue
 
-                postBudgetAlertNotification(context, alert)
+                postBudgetAlertNotification(context, alert, currencySymbol, formatStyle)
                 cooldownPrefs.edit().putLong(cooldownKey, now).apply()
             }
         } catch (e: SecurityException) {
@@ -194,7 +203,12 @@ object ReminderAlertEngine {
         }
     }
 
-    private fun postBillReminderNotification(context: Context, candidate: BillAlertCandidate) {
+    private fun postBillReminderNotification(
+        context: Context,
+        candidate: BillAlertCandidate,
+        currencySymbol: String = "₹",
+        formatStyle: NumberFormatStyle = NumberFormatStyle.INTERNATIONAL
+    ) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val reminder = candidate.reminder
         val notifId = 1_000_000 + ((reminder.id.toInt() and 0x0FFFFFFF) * 2)
@@ -205,7 +219,7 @@ object ReminderAlertEngine {
             candidate.daysUntilDue == 1 -> "Due tomorrow"
             else -> "Due in ${candidate.daysUntilDue} days"
         }
-        val formattedAmt = String.format(Locale.US, "%,.0f", reminder.amount)
+        val formattedAmt = AmountFormatter.formatNumber(reminder.amount, 0, formatStyle)
 
         val openAppIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -235,7 +249,7 @@ object ReminderAlertEngine {
         val modeText = if (reminder.isAutoDebit) "Auto-debit via ${reminder.paymentMethod}" else "Manual pay via ${reminder.paymentMethod}"
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_zenith)
-            .setContentTitle("📅 ${reminder.title} • ₹$formattedAmt ($dueLabel)")
+            .setContentTitle("📅 ${reminder.title} • $currencySymbol$formattedAmt ($dueLabel)")
             .setContentText(modeText)
             .setStyle(NotificationCompat.BigTextStyle().bigText("$dueLabel • $modeText"))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
@@ -246,18 +260,23 @@ object ReminderAlertEngine {
         nm.notify(notifId, builder.build())
     }
 
-    private fun postBudgetAlertNotification(context: Context, alert: BudgetAlertCandidate) {
+    private fun postBudgetAlertNotification(
+        context: Context,
+        alert: BudgetAlertCandidate,
+        currencySymbol: String = "₹",
+        formatStyle: NumberFormatStyle = NumberFormatStyle.INTERNATIONAL
+    ) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notifId = 2_000_000 + (alert.budget.id.toInt() and 0x0FFFFFFF)
-        val limitFormatted = String.format(Locale.US, "%,.0f", alert.budget.monthlyLimit)
-        val spentFormatted = String.format(Locale.US, "%,.0f", alert.spent)
+        val limitFormatted = AmountFormatter.formatNumber(alert.budget.monthlyLimit, 0, formatStyle)
+        val spentFormatted = AmountFormatter.formatNumber(alert.spent, 0, formatStyle)
 
         val title = if (alert.percentUsed >= 100) {
             "⚠️ ${alert.budget.categoryName} Budget Exceeded (${alert.percentUsed}%)"
         } else {
             "📊 ${alert.budget.categoryName} Budget at ${alert.percentUsed}%"
         }
-        val body = "Spent ₹$spentFormatted of ₹$limitFormatted ${alert.budget.periodType.lowercase()} limit."
+        val body = "Spent $currencySymbol$spentFormatted of $currencySymbol$limitFormatted ${alert.budget.periodType.lowercase()} limit."
 
         val openAppIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP

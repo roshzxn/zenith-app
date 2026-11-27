@@ -1,6 +1,14 @@
 package com.zenith.app.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,10 +43,12 @@ import androidx.compose.ui.unit.sp
 import com.zenith.app.data.models.TransactionEntity
 import com.zenith.app.data.models.TransactionType
 import com.zenith.app.data.upi.ExtractedUpiPayment
+import com.zenith.app.data.util.AmountFormatter
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.RollingCounterText
 import com.zenith.app.ui.components.TransactionDetailModal
 import com.zenith.app.ui.components.TransactionItemCard
+import com.zenith.app.ui.components.pressScaleClickable
 import com.zenith.app.ui.theme.ZenithTheme
 import com.zenith.app.ui.viewmodel.CashFlowUiState
 import com.zenith.app.ui.viewmodel.SyncUiState
@@ -76,6 +86,7 @@ fun HomeScreen(
     onOpenFamilyChat: () -> Unit = {},
     onOpenScanFamilyQr: () -> Unit = {},
     onOpenFamilyInviteQr: () -> Unit = {},
+    onOpenFamilyManage: () -> Unit = onNavigateToProfile,
     canModifyTransaction: (TransactionEntity) -> Boolean = { true },
     onUpdateFamilyTransaction: ((TransactionEntity, String?) -> Unit)? = null,
     bottomContentPadding: Dp = 116.dp
@@ -333,169 +344,334 @@ fun HomeScreen(
             item {
                 val isFamilyMode = financialContext.isFamilyModeActive
                 val activeFamily = financialContext.activeFamily
-                Row(
+                val motionDuration = ZenithTheme.motionSpec.durationMs(220)
+
+                val personalPillBg by animateColorAsState(
+                    targetValue = if (!isFamilyMode) ZenithTheme.solidIndigo else Color.Transparent,
+                    animationSpec = tween(motionDuration),
+                    label = "mode_personal_bg"
+                )
+                val personalPillText by animateColorAsState(
+                    targetValue = if (!isFamilyMode) Color.White else ZenithTheme.textSecondary,
+                    animationSpec = tween(motionDuration),
+                    label = "mode_personal_txt"
+                )
+                val familyPillBg by animateColorAsState(
+                    targetValue = if (isFamilyMode) ZenithTheme.solidGreen else Color.Transparent,
+                    animationSpec = tween(motionDuration),
+                    label = "mode_family_bg"
+                )
+                val familyPillText by animateColorAsState(
+                    targetValue = if (isFamilyMode) Color.White else ZenithTheme.textSecondary,
+                    animationSpec = tween(motionDuration),
+                    label = "mode_family_txt"
+                )
+
+                // Tier 1: Full-width symmetric segmented toggle (360dp-safe)
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = ZenithTheme.cardGlassBackground,
+                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 12.dp)
-                        .testTag("home_mode_switcher"),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(bottom = 10.dp)
+                        .testTag("home_mode_switcher")
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = if (!isFamilyMode) ZenithTheme.accentIndigo else ZenithTheme.cardGlassBackground,
-                        border = BorderStroke(
-                            1.dp,
-                            if (!isFamilyMode) ZenithTheme.accentIndigo else ZenithTheme.borderColor
-                        ),
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(20.dp))
-                            .clickable { onSelectFinancialMode(com.zenith.app.domain.FinancialMode.PERSONAL) }
-                            .testTag("mode_chip_personal")
+                            .fillMaxWidth()
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Person,
-                                contentDescription = null,
-                                tint = if (!isFamilyMode) Color.White else ZenithTheme.textSecondary,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Personal",
-                                fontSize = 12.sp,
-                                fontWeight = if (!isFamilyMode) FontWeight.Bold else FontWeight.Medium,
-                                color = if (!isFamilyMode) Color.White else ZenithTheme.textPrimary
-                            )
-                        }
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = if (isFamilyMode) ZenithTheme.solidGreen else ZenithTheme.cardGlassBackground,
-                        border = BorderStroke(
-                            1.dp,
-                            if (isFamilyMode) ZenithTheme.solidGreen else ZenithTheme.borderColor
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(20.dp))
-                            .clickable {
-                                if (financialContext.familyMembershipStatus == com.zenith.app.domain.FamilyMembershipStatus.ACTIVE) {
-                                    onSelectFinancialMode(com.zenith.app.domain.FinancialMode.FAMILY)
-                                } else {
-                                    onOpenFamilySetup()
-                                }
-                            }
-                            .testTag("mode_chip_family")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = activeFamily?.avatarEmoji ?: "🏠",
-                                fontSize = 13.sp
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = activeFamily?.name ?: "Family Setup",
-                                fontSize = 12.sp,
-                                fontWeight = if (isFamilyMode) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isFamilyMode) Color.White else ZenithTheme.textPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-                    if (isFamilyMode) {
-                        if (financialContext.membershipRole?.canAdmin() == true) {
-                            Surface(
-                                shape = RoundedCornerShape(20.dp),
-                                color = ZenithTheme.cardSurface,
-                                border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.45f)),
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .clickable { onOpenFamilyInviteQr() }
-                                    .testTag("btn_home_family_invite_qr")
-                            ) {
-                                Box(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.QrCode2,
-                                        contentDescription = "Family Invite QR",
-                                        tint = ZenithTheme.accentGreen,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = ZenithTheme.cardSurface,
-                            border = BorderStroke(1.dp, ZenithTheme.accentCyan.copy(alpha = 0.4f)),
+                        Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .clickable { onOpenFamilyChat() }
-                                .testTag("btn_home_family_chat")
+                                .weight(1f)
+                                .height(36.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(personalPillBg)
+                                .pressScaleClickable {
+                                    onSelectFinancialMode(com.zenith.app.domain.FinancialMode.PERSONAL)
+                                }
+                                .testTag("mode_chip_personal"),
+                            contentAlignment = Alignment.Center
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.ChatBubbleOutline,
-                                    contentDescription = "Family Chat",
-                                    tint = ZenithTheme.accentCyan,
-                                    modifier = Modifier.size(16.dp)
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = personalPillText,
+                                    modifier = Modifier.size(15.dp)
                                 )
-                                if (state.familyMessages.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.width(5.dp))
-                                    Text(
-                                        text = state.familyMessages.size.coerceAtMost(99).toString(),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = ZenithTheme.accentCyan
-                                    )
-                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Personal",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = if (!isFamilyMode) FontWeight.Bold else FontWeight.Medium,
+                                    color = personalPillText,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
-                    } else if (financialContext.familyMembershipStatus != com.zenith.app.domain.FamilyMembershipStatus.ACTIVE) {
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = ZenithTheme.cardSurface,
-                            border = BorderStroke(1.dp, ZenithTheme.accentCyan.copy(alpha = 0.45f)),
+
+                        Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .clickable { onOpenScanFamilyQr() }
-                                .testTag("btn_home_scan_family_qr")
+                                .weight(1f)
+                                .height(36.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(familyPillBg)
+                                .pressScaleClickable {
+                                    if (financialContext.familyMembershipStatus == com.zenith.app.domain.FamilyMembershipStatus.ACTIVE) {
+                                        onSelectFinancialMode(com.zenith.app.domain.FinancialMode.FAMILY)
+                                    } else {
+                                        onOpenFamilySetup()
+                                    }
+                                }
+                                .testTag("mode_chip_family"),
+                            contentAlignment = Alignment.Center
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.QrCodeScanner,
-                                    contentDescription = "Scan Family QR",
-                                    tint = ZenithTheme.accentCyan,
-                                    modifier = Modifier.size(16.dp)
+                                Text(
+                                    text = activeFamily?.avatarEmoji ?: "🏠",
+                                    fontSize = 13.sp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = activeFamily?.name ?: "Family Setup",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = if (isFamilyMode) FontWeight.Bold else FontWeight.Medium,
+                                    color = familyPillText,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
                     }
                 }
 
-                if (isFamilyMode && financialContext.activeMembers.isNotEmpty()) {
+                // Tier 2: Dedicated uniform labeled Family Action Bar (no orphan icon-only QR boxes)
+                AnimatedVisibility(
+                    visible = isFamilyMode || financialContext.familyMembershipStatus != com.zenith.app.domain.FamilyMembershipStatus.ACTIVE,
+                    enter = expandVertically(tween(motionDuration)) + fadeIn(tween(motionDuration)),
+                    exit = shrinkVertically(tween(motionDuration)) + fadeOut(tween(motionDuration))
+                ) {
+                    if (isFamilyMode) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 10.dp)
+                                .testTag("home_family_action_strip"),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = ZenithTheme.cardSurface,
+                                border = BorderStroke(1.dp, ZenithTheme.accentCyan.copy(alpha = 0.35f)),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .pressScaleClickable { onOpenFamilyChat() }
+                                    .testTag("btn_home_family_chat")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ChatBubbleOutline,
+                                        contentDescription = "Family Chat",
+                                        tint = ZenithTheme.accentCyan,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = "Chat",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = ZenithTheme.textPrimary,
+                                        maxLines = 1
+                                    )
+                                    if (state.familyMessages.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = ZenithTheme.accentCyan.copy(alpha = 0.18f)
+                                        ) {
+                                            Text(
+                                                text = state.familyMessages.size.coerceAtMost(99).toString(),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = ZenithTheme.accentCyan,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (financialContext.membershipRole?.canAdmin() == true) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = ZenithTheme.cardSurface,
+                                    border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.35f)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(36.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .pressScaleClickable { onOpenFamilyInviteQr() }
+                                        .testTag("btn_home_family_invite_qr")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.QrCode2,
+                                            contentDescription = "Family Invite QR",
+                                            tint = ZenithTheme.accentGreen,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Text(
+                                            text = "Invite QR",
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = ZenithTheme.textPrimary,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = ZenithTheme.cardSurface,
+                                border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .pressScaleClickable { onOpenFamilyManage() }
+                                    .testTag("btn_home_family_manage")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Group,
+                                        contentDescription = "Manage Family",
+                                        tint = ZenithTheme.accentIndigo,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = "Manage",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = ZenithTheme.textPrimary,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 10.dp)
+                                .testTag("home_family_action_strip"),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = ZenithTheme.cardSurface,
+                                border = BorderStroke(1.dp, ZenithTheme.accentGreen.copy(alpha = 0.35f)),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .pressScaleClickable { onOpenFamilySetup() }
+                                    .testTag("btn_home_family_setup")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.GroupAdd,
+                                        contentDescription = "Create or Join Family",
+                                        tint = ZenithTheme.accentGreen,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = "Create / Join",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = ZenithTheme.textPrimary,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = ZenithTheme.cardSurface,
+                                border = BorderStroke(1.dp, ZenithTheme.accentCyan.copy(alpha = 0.35f)),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .pressScaleClickable { onOpenScanFamilyQr() }
+                                    .testTag("btn_home_scan_family_qr")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.QrCode2,
+                                        contentDescription = "Scan Family QR",
+                                        tint = ZenithTheme.accentCyan,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = "Join via QR",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = ZenithTheme.textPrimary,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = isFamilyMode && financialContext.activeMembers.isNotEmpty(),
+                    enter = expandVertically(tween(motionDuration)) + fadeIn(tween(motionDuration)),
+                    exit = shrinkVertically(tween(motionDuration)) + fadeOut(tween(motionDuration))
+                ) {
                     LazyRow(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -507,18 +683,19 @@ fun HomeScreen(
                         items(financialContext.activeMembers, key = { it.userId }) { member ->
                             val isSelf = member.userId == financialContext.currentUserId
                             Surface(
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(12.dp),
                                 color = if (isSelf) ZenithTheme.accentGreen.copy(alpha = 0.14f) else ZenithTheme.cardGlassBackground,
                                 border = BorderStroke(
                                     1.dp,
                                     if (isSelf) ZenithTheme.accentGreen.copy(alpha = 0.35f) else ZenithTheme.borderColor
                                 ),
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .clickable { onNavigateToProfile() }
+                                    .height(32.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .pressScaleClickable { onOpenFamilyManage() }
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(text = member.avatarEmoji, fontSize = 13.sp)
@@ -785,12 +962,13 @@ fun HomeScreen(
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = ZenithTheme.textSecondary
                                             )
+                                            val numStyle = ZenithTheme.numberFormat
                                             val remainingLabel = if (state.isBalanceHidden) {
                                                 "${state.currencySymbol}•••• left"
                                             } else if (remaining >= 0) {
-                                                "${state.currencySymbol}${String.format(Locale.US, "%,.0f", remaining)} left"
+                                                "${state.currencySymbol}${AmountFormatter.formatNumber(remaining, 0, numStyle)} left"
                                             } else {
-                                                "Over by ${state.currencySymbol}${String.format(Locale.US, "%,.0f", -remaining)}"
+                                                "Over by ${state.currencySymbol}${AmountFormatter.formatNumber(-remaining, 0, numStyle)}"
                                             }
                                             Text(
                                                 text = remainingLabel,
@@ -800,9 +978,14 @@ fun HomeScreen(
                                             )
                                         }
                                         Spacer(modifier = Modifier.height(6.dp))
-                                        val progress = (totalExpense / sharedLimit).toFloat().coerceIn(0f, 1f)
+                                        val rawProgress = (totalExpense / sharedLimit).toFloat().coerceIn(0f, 1f)
+                                        val animatedBudgetProgress by animateFloatAsState(
+                                            targetValue = rawProgress,
+                                            animationSpec = tween(ZenithTheme.motionSpec.durationMs(450)),
+                                            label = "home_family_budget_progress"
+                                        )
                                         LinearProgressIndicator(
-                                            progress = { progress },
+                                            progress = { animatedBudgetProgress },
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(5.dp)
@@ -936,7 +1119,7 @@ fun HomeScreen(
                                 val amtLabel = if (state.isBalanceHidden) {
                                     "${state.currencySymbol}••••"
                                 } else {
-                                    "${state.currencySymbol}${String.format(Locale.US, "%,.0f", latest.amount)}"
+                                    "${state.currencySymbol}${AmountFormatter.formatNumber(latest.amount, 0, ZenithTheme.numberFormat)}"
                                 }
                                 Text(
                                     text = "$amtLabel ${if (latest.isDebit) "at" else "from"} ${latest.payeeName} (${latest.sourceApp})",
@@ -1071,7 +1254,7 @@ fun HomeScreen(
 
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
-                                text = if (state.isBalanceHidden) "${state.currencySymbol}••••" else "${state.currencySymbol}${String.format(Locale.US, "%,.0f", totalUpcomingAmt)}",
+                                text = if (state.isBalanceHidden) "${state.currencySymbol}••••" else "${state.currencySymbol}${AmountFormatter.formatNumber(totalUpcomingAmt, 0, ZenithTheme.numberFormat)}",
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = ZenithTheme.accentPurple
@@ -1334,7 +1517,7 @@ fun QuickActionCard(
         modifier = modifier
             .fillMaxHeight()
             .clip(RoundedCornerShape(16.dp))
-            .clickable {
+            .pressScaleClickable {
                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                 onClick()
             }

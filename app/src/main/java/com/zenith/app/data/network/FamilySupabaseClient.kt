@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -93,7 +94,8 @@ object FamilySupabaseClient {
         familyId: String,
         invitedEmail: String = "",
         role: FamilyRole = FamilyRole.MEMBER,
-        expiresHours: Int = 168
+        expiresHours: Int = 168,
+        maxUses: Int = 5
     ): Result<FamilyInvitationInfo> = withContext(Dispatchers.IO) {
         if (!SupabaseClientConfig.isConfigured) {
             return@withContext Result.failure(IllegalStateException("Cloud configuration missing."))
@@ -106,6 +108,7 @@ object FamilySupabaseClient {
                     put("p_invited_email", invitedEmail.trim())
                     put("p_role", role.name)
                     put("p_expires_hours", expiresHours)
+                    put("p_max_uses", maxUses.coerceIn(1, 25))
                 }
             )
             Result.success(parseInvitation(res.data))
@@ -204,6 +207,9 @@ object FamilySupabaseClient {
         executeBooleanRpc("close_family", buildJsonObject {
             put("p_family_id", familyId)
         })
+
+    suspend fun deleteMyAccount(): Result<Boolean> =
+        executeBooleanRpc("delete_my_account", buildJsonObject { })
 
     suspend fun updateFamilyMonthlyBudgetLimit(familyId: String, limit: Double): Result<Boolean> = withContext(Dispatchers.IO) {
         if (!SupabaseClientConfig.isConfigured) {
@@ -544,7 +550,9 @@ object FamilySupabaseClient {
             invitedEmail = obj.str("invited_email"),
             role = FamilyRole.fromString(obj.str("role", "MEMBER")),
             status = obj.str("status", "PENDING"),
-            expiresAt = obj["expires_at"]?.let { if (it is JsonNull) null else it.jsonPrimitive.contentOrNull }
+            expiresAt = obj["expires_at"]?.let { if (it is JsonNull) null else it.jsonPrimitive.contentOrNull },
+            maxUses = obj["max_uses"]?.let { if (it is JsonNull) null else it.jsonPrimitive.intOrNull } ?: 5,
+            usesCount = obj["uses_count"]?.let { if (it is JsonNull) null else it.jsonPrimitive.intOrNull } ?: 0
         )
     }
 

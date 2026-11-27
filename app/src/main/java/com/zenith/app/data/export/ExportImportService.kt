@@ -72,7 +72,7 @@ data class BackupMetadata(
     val budgetCount: Int,
     val goalCount: Int,
     val categoryCount: Int,
-    val appVersion: String = "2.0.0 (Zenith)"
+    val appVersion: String = "${com.zenith.app.BuildConfig.VERSION_NAME} (Zenith)"
 )
 
 object ExportImportService {

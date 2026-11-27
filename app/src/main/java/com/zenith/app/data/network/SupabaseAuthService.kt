@@ -296,6 +296,29 @@ class SupabaseAuthService(
         _currentUser.value = null
     }
 
+    override suspend fun deleteAccount(): AuthResult = withContext(Dispatchers.IO) {
+        if (SupabaseClientConfig.isConfigured) {
+            val remoteDelete = FamilySupabaseClient.deleteMyAccount()
+            if (remoteDelete.isFailure) {
+                return@withContext AuthResult(
+                    success = false,
+                    message = remoteDelete.exceptionOrNull()?.message
+                        ?: "Unable to delete cloud account right now. Please try again."
+                )
+            }
+            try {
+                SupabaseClientConfig.supabase.auth.signOut()
+            } catch (_: Exception) {
+            }
+        }
+        clearUserCache()
+        _currentUser.value = null
+        AuthResult(
+            success = true,
+            message = "Your Zenith account and personal cloud records have been deleted."
+        )
+    }
+
     private fun saveUserToCache(user: AuthUser) {
         try {
             prefs?.edit()

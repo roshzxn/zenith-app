@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -36,19 +37,33 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.zenith.app.BuildConfig
 import com.zenith.app.data.upi.UpiNotificationListenerService
+import com.zenith.app.data.upi.UpiService
+import com.zenith.app.data.util.NumberFormatStyle
 import com.zenith.app.ui.components.BackupRestoreModal
 import com.zenith.app.ui.components.CleanCard
 import com.zenith.app.ui.components.ExportDataModal
 import com.zenith.app.ui.components.ImportDataModal
 import com.zenith.app.ui.components.PaymentMethodDropdown
 import com.zenith.app.ui.components.ZenithLogo
+import com.zenith.app.ui.theme.ZenithAccentPreset
+import com.zenith.app.ui.theme.ZenithCardDensity
+import com.zenith.app.ui.theme.ZenithMotionSpec
 import com.zenith.app.ui.theme.ZenithTheme
 import com.zenith.app.ui.theme.ZenithThemeMode
 import com.zenith.app.ui.viewmodel.CashFlowUiState
 import com.zenith.app.ui.viewmodel.CashFlowViewModel
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProfileScreen(
     state: CashFlowUiState,
@@ -80,6 +95,15 @@ fun ProfileScreen(
     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
     val isUpiAutoDetectionEnabled by viewModel.isUpiAutoDetectionEnabled.collectAsStateWithLifecycle()
     val isUpiInstantAutoSaveEnabled by viewModel.isUpiInstantAutoSaveEnabled.collectAsStateWithLifecycle()
+    val accentPreset by viewModel.accentPreset.collectAsStateWithLifecycle()
+    val motionSpec by viewModel.motionSpec.collectAsStateWithLifecycle()
+    val cardDensity by viewModel.cardDensity.collectAsStateWithLifecycle()
+    val numberFormatStyle by viewModel.numberFormatStyle.collectAsStateWithLifecycle()
+    val defaultStartTab by viewModel.defaultStartTab.collectAsStateWithLifecycle()
+    val maskBalancesOnLaunch by viewModel.maskBalancesOnLaunch.collectAsStateWithLifecycle()
+    val recentsPrivacyEnabled by viewModel.recentsPrivacyEnabled.collectAsStateWithLifecycle()
+    val budgetAlertThresholdPct by viewModel.budgetAlertThresholdPct.collectAsStateWithLifecycle()
+    val defaultUpiAppPackage by viewModel.defaultUpiAppPackage.collectAsStateWithLifecycle()
 
     val syncState by viewModel.syncUiState.collectAsStateWithLifecycle()
     val financialContext by viewModel.financialContext.collectAsStateWithLifecycle()
@@ -89,6 +113,9 @@ fun ProfileScreen(
     var showEditNameDialog by remember { mutableStateOf(false) }
     var showUpiSettingsDialog by remember { mutableStateOf(false) }
     var showClearDataDialog by remember { mutableStateOf(false) }
+    var showPrivacyDialog by remember { mutableStateOf(false) }
+    var showDeleteAccountDialog by remember { mutableStateOf(false) }
+    var isDeletingAccount by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
     var showExportModal by remember { mutableStateOf(false) }
@@ -105,6 +132,7 @@ fun ProfileScreen(
     var isPostNotificationsGranted by remember {
         mutableStateOf(UpiNotificationListenerService.hasPostNotificationPermission(context))
     }
+    var installedUpiApps by remember { mutableStateOf(UpiService.installedUpiApps(context)) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -125,6 +153,7 @@ fun ProfileScreen(
                 }
                 isUpiListenerBound = granted && UpiNotificationListenerService.isListenerActivelyBound(context)
                 isPostNotificationsGranted = UpiNotificationListenerService.hasPostNotificationPermission(context)
+                installedUpiApps = UpiService.installedUpiApps(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -234,6 +263,200 @@ fun ProfileScreen(
                     },
                     label = "Default Payment Method"
                 )
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Number Grouping",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ZenithTheme.textPrimary
+                )
+                Text(
+                    text = "Format totals in Indian Lakhs/Crores or International thousands",
+                    fontSize = 11.sp,
+                    color = ZenithTheme.textSecondary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ZenithTheme.cardVariantSurface)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf(
+                        NumberFormatStyle.INDIAN to "Indian • 1,00,000",
+                        NumberFormatStyle.INTERNATIONAL to "Global • 100,000"
+                    ).forEach { (style, shortLabel) ->
+                        val isSelected = numberFormatStyle == style
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(36.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(if (isSelected) ZenithTheme.solidIndigo else Color.Transparent)
+                                .clickable { viewModel.setNumberFormatStyle(style) }
+                                .testTag("number_format_${style.name.lowercase()}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = shortLabel,
+                                fontSize = 11.5.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else ZenithTheme.textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Default Start Screen",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ZenithTheme.textPrimary
+                )
+                Text(
+                    text = "Choose which tab opens first when you launch Zenith",
+                    fontSize = 11.sp,
+                    color = ZenithTheme.textSecondary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ZenithTheme.cardVariantSurface)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf(
+                        0 to "Home",
+                        1 to "Activity",
+                        2 to "Budgets",
+                        3 to "Analytics"
+                    ).forEach { (tabIdx, tabLabel) ->
+                        val isSelected = defaultStartTab == tabIdx
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) ZenithTheme.solidIndigo else Color.Transparent)
+                                .clickable { viewModel.setDefaultStartTab(tabIdx) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = tabLabel,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else ZenithTheme.textSecondary,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Budget Alert Threshold",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ZenithTheme.textPrimary
+                )
+                Text(
+                    text = "Trigger spending warnings at $budgetAlertThresholdPct% of your budget limit",
+                    fontSize = 11.sp,
+                    color = ZenithTheme.textSecondary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(75, 80, 85, 90).forEach { pct ->
+                        val isSelected = budgetAlertThresholdPct == pct
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { viewModel.setBudgetAlertThresholdPct(pct) },
+                            label = {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "$pct%",
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Preferred UPI App",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ZenithTheme.textPrimary
+                )
+                Text(
+                    text = "Used by quick Scan & Pay and Bill Pay actions",
+                    fontSize = 11.sp,
+                    color = ZenithTheme.textSecondary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = defaultUpiAppPackage == null,
+                        onClick = { viewModel.setDefaultUpiAppPackage(null) },
+                        label = {
+                            Text(
+                                text = "System Chooser",
+                                fontSize = 11.5.sp,
+                                fontWeight = if (defaultUpiAppPackage == null) FontWeight.Bold else FontWeight.Medium
+                            )
+                        }
+                    )
+                    installedUpiApps.forEach { app ->
+                        val isSelected = defaultUpiAppPackage == app.packageName
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { viewModel.setDefaultUpiAppPackage(app.packageName) },
+                            label = {
+                                Text(
+                                    text = app.label,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(18.dp))
@@ -372,32 +595,52 @@ fun ProfileScreen(
                                 OutlinedButton(
                                     onClick = onOpenFamilyManage,
                                     shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(1f)
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                        .testTag("btn_profile_manage_family")
                                 ) {
-                                    Text("Manage Family", fontSize = 12.sp, maxLines = 1)
+                                    Text("Manage", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                                 }
                                 if (financialContext.membershipRole?.canAdmin() == true) {
                                     OutlinedButton(
                                         onClick = onOpenFamilyInviteQr,
                                         shape = RoundedCornerShape(12.dp),
-                                        contentPadding = PaddingValues(horizontal = 10.dp),
-                                        modifier = Modifier.testTag("btn_profile_family_invite_qr")
+                                        contentPadding = PaddingValues(horizontal = 8.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(38.dp)
+                                            .testTag("btn_profile_family_invite_qr")
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.QrCode2,
                                             contentDescription = "Invite QR",
                                             tint = ZenithTheme.accentCyan,
-                                            modifier = Modifier.size(16.dp)
+                                            modifier = Modifier.size(14.dp)
                                         )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Invite QR", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                                     }
                                 }
                                 Button(
                                     onClick = onOpenFamilyChat,
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidIndigo),
-                                    modifier = Modifier.weight(1f)
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                        .testTag("btn_profile_family_chat")
                                 ) {
-                                    Text("Family Chat", fontSize = 12.sp, color = Color.White, maxLines = 1)
+                                    Icon(
+                                        imageVector = Icons.Default.Forum,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Chat", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
                                 }
                             }
                         }
@@ -424,33 +667,42 @@ fun ProfileScreen(
                                     onClick = onOpenCreateFamily,
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidGreen),
+                                    contentPadding = PaddingValues(horizontal = 6.dp),
                                     modifier = Modifier
                                         .weight(1f)
+                                        .height(38.dp)
                                         .testTag("btn_profile_create_family")
                                 ) {
-                                    Text("Create", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                    Text("Create", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
                                 }
                                 OutlinedButton(
                                     onClick = onOpenJoinFamily,
                                     shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 6.dp),
                                     modifier = Modifier
                                         .weight(1f)
+                                        .height(38.dp)
                                         .testTag("btn_profile_join_family")
                                 ) {
-                                    Text("Join Code", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("Join Code", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                                 }
                                 OutlinedButton(
                                     onClick = onOpenScanFamilyQr,
                                     shape = RoundedCornerShape(12.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp),
-                                    modifier = Modifier.testTag("btn_profile_scan_family_qr")
+                                    contentPadding = PaddingValues(horizontal = 6.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                        .testTag("btn_profile_scan_family_qr")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.QrCodeScanner,
                                         contentDescription = "Scan Family QR",
                                         tint = ZenithTheme.accentCyan,
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(14.dp)
                                     )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Join QR", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                                 }
                             }
                         }
@@ -538,6 +790,188 @@ fun ProfileScreen(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Accent Palette",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ZenithTheme.textPrimary
+                )
+                Text(
+                    text = "Personalize buttons, navigation pills & chat highlights",
+                    fontSize = 11.sp,
+                    color = ZenithTheme.textSecondary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ZenithAccentPreset.entries.forEach { preset ->
+                        val isSelected = accentPreset == preset
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) preset.solidFill.copy(alpha = 0.22f) else ZenithTheme.cardVariantSurface,
+                            border = BorderStroke(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) preset.swatchColor else ZenithTheme.borderColor
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { viewModel.setAccentPreset(preset) }
+                                .testTag("accent_preset_${preset.name.lowercase()}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(preset.swatchColor)
+                                )
+                                Text(
+                                    text = preset.displayName,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) ZenithTheme.textPrimary else ZenithTheme.textSecondary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Animation & Motion",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ZenithTheme.textPrimary
+                )
+                Text(
+                    text = "Tune springs across tab transitions, lists & odometer counters",
+                    fontSize = 11.sp,
+                    color = ZenithTheme.textSecondary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ZenithTheme.cardVariantSurface)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    ZenithMotionSpec.entries.forEach { spec ->
+                        val isSelected = motionSpec == spec
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) ZenithTheme.solidIndigo else Color.Transparent)
+                                .clickable { viewModel.setMotionSpec(spec) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = spec.label,
+                                fontSize = 11.5.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else ZenithTheme.textSecondary,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Card Density",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ZenithTheme.textPrimary
+                )
+                Text(
+                    text = "Switch between roomy Cozy rows or information-dense Compact rows",
+                    fontSize = 11.sp,
+                    color = ZenithTheme.textSecondary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ZenithTheme.cardVariantSurface)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    ZenithCardDensity.entries.forEach { density ->
+                        val isSelected = cardDensity == density
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) ZenithTheme.solidIndigo else Color.Transparent)
+                                .clickable { viewModel.setCardDensity(density) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = density.label,
+                                fontSize = 11.5.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else ZenithTheme.textSecondary,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                PreferenceSwitchRow(
+                    icon = Icons.Default.VisibilityOff,
+                    title = "Mask Balances on Launch",
+                    subtitle = "Hide financial totals until you tap the eye toggle",
+                    checked = maskBalancesOnLaunch,
+                    onCheckedChange = { enabled -> viewModel.setMaskBalancesOnLaunch(enabled) }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                PreferenceSwitchRow(
+                    icon = Icons.Default.Security,
+                    title = "Hide Screen in Recents",
+                    subtitle = "Blocks screenshots & blurs previews in the app switcher",
+                    checked = recentsPrivacyEnabled,
+                    onCheckedChange = { enabled ->
+                        viewModel.setRecentsPrivacyEnabled(enabled)
+                        Toast.makeText(
+                            context,
+                            if (enabled) "Screen privacy protection enabled." else "Screen privacy protection disabled.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
                 HorizontalDivider(color = ZenithTheme.borderColor)
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -739,6 +1173,18 @@ fun ProfileScreen(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 PreferenceActionRow(
+                    icon = Icons.Default.PrivacyTip,
+                    title = "Privacy Policy & Data Safety",
+                    subtitle = "How on-device UPI scanning & cloud sync handle data",
+                    actionLabel = "View",
+                    onClick = { showPrivacyDialog = true }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(color = ZenithTheme.borderColor)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                PreferenceActionRow(
                     icon = Icons.Default.DeleteOutline,
                     title = if (financialContext.isFamilyModeActive) "Clear Family Transactions" else "Clear Transactions & Ledger",
                     subtitle = if (financialContext.isFamilyModeActive) {
@@ -782,7 +1228,7 @@ fun ProfileScreen(
                 PreferenceActionRow(
                     icon = Icons.Default.Info,
                     title = "About Zenith",
-                    subtitle = "v2.0.0 • Your money. Your clarity.",
+                    subtitle = "v${BuildConfig.VERSION_NAME} • Crafted by Arun Roshan (RoshZen)",
                     actionLabel = "Info",
                     onClick = { showAboutDialog = true }
                 )
@@ -801,15 +1247,28 @@ fun ProfileScreen(
             ) {
                 if (isAuthenticated && !isGuestMode) {
                     PreferenceActionRow(
-                        icon = Icons.Default.DeleteForever,
+                        icon = Icons.AutoMirrored.Filled.Logout,
                         title = "Reset Device Account",
-                        subtitle = "Clear account session and local ledger records",
+                        subtitle = "Sign out and clear cached records on this device",
                         actionLabel = "Reset",
-                        accentColor = ZenithTheme.accentRed,
+                        accentColor = ZenithTheme.accentAmber,
                         onClick = {
                             viewModel.signOut()
                             Toast.makeText(context, "Signed out and local device cache cleared.", Toast.LENGTH_SHORT).show()
                         }
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = ZenithTheme.borderColor)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    PreferenceActionRow(
+                        icon = Icons.Default.DeleteForever,
+                        title = "Delete Account & Cloud Data",
+                        subtitle = "Permanently remove your Zenith account & synced records",
+                        actionLabel = "Delete",
+                        accentColor = ZenithTheme.accentRed,
+                        onClick = { showDeleteAccountDialog = true }
                     )
                 } else {
                     PreferenceActionRow(
@@ -954,6 +1413,13 @@ fun ProfileScreen(
     }
 
     if (showAboutDialog) {
+        fun openExternalLink(url: String) {
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            } catch (_: Exception) {
+                Toast.makeText(context, "Unable to open link on this device.", Toast.LENGTH_SHORT).show()
+            }
+        }
         Dialog(onDismissRequest = { showAboutDialog = false }) {
             Surface(
                 shape = RoundedCornerShape(24.dp),
@@ -964,21 +1430,104 @@ fun ProfileScreen(
                     .padding(horizontal = 8.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(24.dp),
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(22.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    ZenithLogo(size = 48.dp)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("ZENITH", fontSize = 20.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp, color = ZenithTheme.textPrimary)
-                    Text("Your money. Your clarity.", fontSize = 12.sp, color = ZenithTheme.accentAmber, fontWeight = FontWeight.SemiBold)
-                    Spacer(modifier = Modifier.height(16.dp))
+                    ZenithLogo(size = 50.dp)
+                    Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "Zenith is a high-performance offline-first personal finance manager powered by on-device OCR, Gemini voice intelligence, UPI automation, and encrypted cloud sync.",
-                        fontSize = 13.sp,
-                        color = ZenithTheme.textSecondary,
-                        lineHeight = 18.sp
+                        "ZENITH",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 2.sp,
+                        color = ZenithTheme.textPrimary
                     )
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Text(
+                        "v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE}) • Your money. Your clarity.",
+                        fontSize = 11.5.sp,
+                        color = ZenithTheme.accentAmber,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Zenith is an offline-first personal & family finance manager with on-device OCR receipt scanning, Gemini voice capture, auto UPI tracking, and encrypted Supabase sync.",
+                        fontSize = 12.5.sp,
+                        color = ZenithTheme.textSecondary,
+                        lineHeight = 18.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = ZenithTheme.cardVariantSurface,
+                        border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "CRAFTED BY ROSHZEN",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.1.sp,
+                                color = ZenithTheme.accentIndigo
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Arun Roshan",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZenithTheme.textPrimary
+                            )
+                            Text(
+                                text = "Software Engineer & UI/UX Developer",
+                                fontSize = 11.5.sp,
+                                color = ZenithTheme.textSecondary
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                listOf(
+                                    "roshzen.in" to "https://roshzen.in",
+                                    "GitHub" to "https://github.com/roshzxn",
+                                    "LinkedIn" to "https://linkedin.com/in/arun-roshan",
+                                    "Instagram" to "https://instagram.com/roshzxn",
+                                    "Email" to "mailto:arunroshan1003@gmail.com"
+                                ).forEach { (label, url) ->
+                                    AssistChip(
+                                        onClick = { openExternalLink(url) },
+                                        label = {
+                                            Text(
+                                                text = label,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = ZenithTheme.textPrimary
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = if (label == "Email") Icons.Default.Email else Icons.AutoMirrored.Filled.OpenInNew,
+                                                contentDescription = label,
+                                                tint = ZenithTheme.accentIndigo,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(18.dp))
                     Button(
                         onClick = { showAboutDialog = false },
                         modifier = Modifier
@@ -992,6 +1541,109 @@ fun ProfileScreen(
                 }
             }
         }
+    }
+
+    if (showPrivacyDialog) {
+        Dialog(onDismissRequest = { showPrivacyDialog = false }) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = ZenithTheme.cardSurface,
+                border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(22.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.PrivacyTip, contentDescription = null, tint = ZenithTheme.accentGreen)
+                        Text(
+                            "Privacy & Data Safety",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ZenithTheme.textPrimary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    listOf(
+                        "On-Device Financial Storage" to "Your ledger records live in a local Room SQLite database on your device so Zenith works 100% offline.",
+                        "Notification Listener Disclosure" to "When enabled, Zenith inspects incoming UPI & bank payment notifications on-device to extract merchant, amount, and account mode. Personal chats, OTPs, and unrelated alerts are ignored and never uploaded or sold.",
+                        "Receipt OCR & Voice Parsing" to "Receipt text extraction uses ML Kit on-device. Voice text or image hints sent to Gemini API (when triggered) are used strictly to structure your transaction.",
+                        "Cloud Sync & Account Deletion" to "When signed in, ledgers sync via HTTPS/TLS to Supabase with Row-Level Security. You can export your data anytime or permanently erase your account from Account Actions."
+                    ).forEach { (heading, body) ->
+                        Text(heading, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = ZenithTheme.textPrimary)
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(body, fontSize = 11.5.sp, color = ZenithTheme.textSecondary, lineHeight = 16.sp)
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+                    Button(
+                        onClick = { showPrivacyDialog = false },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidIndigo)
+                    ) {
+                        Text("Understood", fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDeleteAccountDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isDeletingAccount) showDeleteAccountDialog = false },
+            title = { Text("Delete Account Permanently?", color = ZenithTheme.textPrimary) },
+            text = {
+                Text(
+                    "This permanently deletes your Zenith user account and synced personal cloud data on Supabase as well as local records on this device. This action cannot be undone.",
+                    color = ZenithTheme.textSecondary,
+                    fontSize = 12.5.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = !isDeletingAccount,
+                    onClick = {
+                        isDeletingAccount = true
+                        viewModel.deleteAccount { result ->
+                            isDeletingAccount = false
+                            if (result.success) {
+                                showDeleteAccountDialog = false
+                                Toast.makeText(context, "Account permanently deleted.", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(
+                                    context,
+                                    result.message ?: "Unable to delete account right now.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ZenithTheme.solidRed)
+                ) {
+                    if (isDeletingAccount) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                    } else {
+                        Text("Delete Forever", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !isDeletingAccount,
+                    onClick = { showDeleteAccountDialog = false }
+                ) {
+                    Text("Cancel", color = ZenithTheme.textSecondary)
+                }
+            },
+            containerColor = ZenithTheme.cardSurface,
+            shape = RoundedCornerShape(20.dp)
+        )
     }
 
     if (showHelpDialog) {
@@ -1665,7 +2317,24 @@ fun UpiNotificationSettingsDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = ZenithTheme.cardVariantSurface,
+                    border = BorderStroke(1.dp, ZenithTheme.borderColor),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Data Disclosure: Zenith reads UPI and banking transaction notifications strictly on-device to prefill amount, merchant, and mode. Personal chats, OTPs, and non-financial alerts are ignored and never uploaded.",
+                        fontSize = 10.5.sp,
+                        color = ZenithTheme.textSecondary,
+                        lineHeight = 14.sp,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
 
                 val statusAccent = when {
                     !isPermissionGranted -> ZenithTheme.accentAmber

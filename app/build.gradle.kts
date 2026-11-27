@@ -14,8 +14,8 @@ android {
     applicationId = "com.zenith.app"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "2.0"
+    versionCode = 3
+    versionName = "2.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -46,6 +46,10 @@ android {
         storePassword = "android"
         keyAlias = "androiddebugkey"
         keyPassword = "android"
+      } else if (gradle.startParameter.taskNames.any { it.contains("bundleRelease", ignoreCase = true) }) {
+        throw org.gradle.api.GradleException(
+          "Missing release upload keystore ($keystorePath). Configure KEYSTORE_PATH/STORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD for Play Store bundleRelease, or pass -Pzenith.allowDebugReleaseSigning=true for local verification."
+        )
       }
     }
   }
@@ -140,4 +144,8 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
 
   "ksp"(libs.androidx.room.compiler)
+}
+
+ksp {
+  arg("room.schemaLocation", "$projectDir/schemas")
 }

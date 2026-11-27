@@ -303,12 +303,12 @@ fun ExportDataModal(
                                         workspaceName = workspaceName
                                     )
                                     ExportFormat.CSV -> ExportImportService.exportCsv(
-                                        context, transactions, if (currencySymbol == "₹") "INR" else "USD", options,
+                                        context, transactions, com.zenith.app.data.util.AmountFormatter.currencyCodeForSymbol(currencySymbol), options,
                                         txAttributionByServerId = txAttributionByServerId,
                                         workspaceName = workspaceName
                                     )
                                     ExportFormat.EXCEL -> ExportImportService.exportExcel(
-                                        context, transactions, if (currencySymbol == "₹") "INR" else "USD", options,
+                                        context, transactions, com.zenith.app.data.util.AmountFormatter.currencyCodeForSymbol(currencySymbol), options,
                                         txAttributionByServerId = txAttributionByServerId,
                                         workspaceName = workspaceName
                                     )

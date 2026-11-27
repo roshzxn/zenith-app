@@ -125,4 +125,22 @@ class SupabaseMigrationContractTest {
             )
         }
     }
+
+    @Test
+    fun testMigration004PublishReadinessContractsPresent() {
+        val root = resolveProjectRoot()
+        val m004File = File(root, "supabase/migrations/004_publish_readiness.sql")
+        val master = File(root, "supabase/schema.sql").readText()
+        assertTrue("Expected upgrade migration 004_publish_readiness.sql", m004File.exists())
+
+        val m004 = m004File.readText()
+        listOf(m004, master).forEach { sql ->
+            assertTrue("Missing multi-use max_uses column on family_invitations", sql.contains("max_uses"))
+            assertTrue("Missing multi-use uses_count column on family_invitations", sql.contains("uses_count"))
+            assertTrue("Missing custom_period_name on budgets/family_budgets", sql.contains("custom_period_name"))
+            assertTrue("Missing custom_label on transactions", sql.contains("custom_label"))
+            assertTrue("Missing delete_my_account RPC", sql.contains("CREATE OR REPLACE FUNCTION public.delete_my_account()"))
+            assertFalse("service_role must never appear in 004 or schema.sql", sql.contains("service_role", ignoreCase = true))
+        }
+    }
 }

@@ -104,6 +104,7 @@ class SyncEngine(
                 categoryId = localTx.category.takeIf { isValidUuid(it) } ?: "Other",
                 category = localTx.category.ifBlank { "Other" },
                 description = localTx.note.ifBlank { localTx.title.ifBlank { "Transaction" } },
+                customLabel = localTx.customLabel,
                 paymentMethod = localTx.paymentMethod,
                 upiId = localTx.upiId,
                 upiTransactionId = localTx.upiTransactionId,
@@ -144,6 +145,7 @@ class SyncEngine(
                 categoryId = localTx.category.takeIf { isValidUuid(it) } ?: "Other",
                 category = localTx.category.ifBlank { "Other" },
                 description = localTx.note.ifBlank { localTx.title.ifBlank { "Transaction" } },
+                customLabel = localTx.customLabel,
                 paymentMethod = localTx.paymentMethod,
                 upiId = localTx.upiId,
                 upiTransactionId = localTx.upiTransactionId,
@@ -290,7 +292,8 @@ class SyncEngine(
                             serverId = dto.id,
                             syncStatus = "SYNCED",
                             updatedAt = txUpdatedMillis,
-                            isDeleted = false
+                            isDeleted = false,
+                            customLabel = dto.customLabel
                         )
                         transactionDao.insertTransaction(newEntity)
                     } else if (existing.syncStatus == "SYNCED" && txUpdatedMillis > existing.updatedAt) {
@@ -306,7 +309,8 @@ class SyncEngine(
                             upiTransactionId = dto.upiTransactionId,
                             syncStatus = "SYNCED",
                             updatedAt = txUpdatedMillis,
-                            isDeleted = false
+                            isDeleted = false,
+                            customLabel = dto.customLabel
                         )
                         transactionDao.updateTransaction(updatedEntity)
                     }
@@ -341,6 +345,7 @@ class SyncEngine(
                 monthlyLimit = localBudget.monthlyLimit,
                 monthYear = localBudget.monthYear,
                 periodType = localBudget.periodType,
+                customPeriodName = localBudget.customPeriodName,
                 updatedAt = IsoDateUtils.toIsoString(localBudget.updatedAt),
                 isDeleted = false
             )
@@ -370,6 +375,7 @@ class SyncEngine(
                 monthlyLimit = localBudget.monthlyLimit,
                 monthYear = localBudget.monthYear,
                 periodType = localBudget.periodType,
+                customPeriodName = localBudget.customPeriodName,
                 updatedAt = IsoDateUtils.toIsoString(localBudget.updatedAt),
                 isDeleted = false
             )
@@ -445,6 +451,7 @@ class SyncEngine(
                             monthlyLimit = limit,
                             monthYear = mYear,
                             periodType = dto.periodType ?: "MONTHLY",
+                            customPeriodName = dto.customPeriodName,
                             financeScope = FinanceScope.PERSONAL,
                             familyId = null,
                             serverId = dto.id,
@@ -459,6 +466,7 @@ class SyncEngine(
                             monthlyLimit = limit,
                             monthYear = mYear,
                             periodType = dto.periodType ?: existing.periodType,
+                            customPeriodName = dto.customPeriodName,
                             syncStatus = "SYNCED",
                             updatedAt = updatedMillis
                         )

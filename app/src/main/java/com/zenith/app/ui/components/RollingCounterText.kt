@@ -14,8 +14,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import com.zenith.app.data.util.AmountFormatter
 import com.zenith.app.ui.theme.ZenithTheme
-import java.util.Locale
 
 /**
  * 120 FPS Rolling Number Odometer / Ticker for Jetpack Compose.
@@ -54,11 +54,13 @@ fun RollingCounterText(
 
     val isNegative = amount < 0
     val absAmount = Math.abs(amount)
-    val formattedNumber = if (decimalPlaces > 0) {
-        String.format(Locale.US, "%,.${decimalPlaces}f", absAmount)
-    } else {
-        String.format(Locale.US, "%,.0f", absAmount)
-    }
+    val formatStyle = ZenithTheme.numberFormat
+    val motionSpec = ZenithTheme.motionSpec
+    val formattedNumber = AmountFormatter.formatNumber(
+        amount = absAmount,
+        decimalPlaces = decimalPlaces,
+        style = formatStyle
+    )
 
     val signStr = if (isNegative) "-" else prefix
     val fullText = "$signStr$currencySymbol$formattedNumber"
@@ -73,26 +75,39 @@ fun RollingCounterText(
             fontSize
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            fullText.forEach { char ->
-                if (char.isDigit()) {
-                    val digit = char.digitToInt()
-                    RollingDigit(
-                        digit = digit,
-                        fontSize = effectiveFontSize,
-                        fontWeight = fontWeight,
-                        color = color,
-                        letterSpacing = letterSpacing
-                    )
-                } else {
-                    Text(
-                        text = char.toString(),
-                        fontSize = effectiveFontSize,
-                        fontWeight = fontWeight,
-                        color = color,
-                        letterSpacing = letterSpacing,
-                        maxLines = 1
-                    )
+        if (motionSpec.isReduced) {
+            Text(
+                text = fullText,
+                fontSize = effectiveFontSize,
+                fontWeight = fontWeight,
+                color = color,
+                letterSpacing = letterSpacing,
+                style = TextStyle(fontFeatureSettings = "tnum"),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                fullText.forEach { char ->
+                    if (char.isDigit()) {
+                        val digit = char.digitToInt()
+                        RollingDigit(
+                            digit = digit,
+                            fontSize = effectiveFontSize,
+                            fontWeight = fontWeight,
+                            color = color,
+                            letterSpacing = letterSpacing
+                        )
+                    } else {
+                        Text(
+                            text = char.toString(),
+                            fontSize = effectiveFontSize,
+                            fontWeight = fontWeight,
+                            color = color,
+                            letterSpacing = letterSpacing,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
         }
